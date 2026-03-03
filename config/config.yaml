@@ -1,0 +1,347 @@
+# ============================================================
+# Liquidity-Aware ML — Master Configuration
+# ============================================================
+
+project:
+  name: "liquidity_ml"
+  seed: 42
+  output_dir: "outputs"
+  data_dir: "data"
+
+# ----------------------------------------------------------
+# Data
+# ----------------------------------------------------------
+data:
+  # Input files (in data/ directory)
+  signed_predictors_csv: "signed_predictors_all_wide.csv"
+  ff_factors_csv: "FFResearch_Data_Factors.csv"
+
+  start_yyyymm: 197201
+  end_yyyymm: 202412
+
+  id_cols: ["permno", "yyyymm"]
+  target_col: "excess_ret"
+  return_col: "ret"
+
+  # Feature groups for mechanism analysis (Hypothesis 2)
+  # Core groups: narrow, cleanest exemplars for the main test
+  illiquidity_features:
+    - IdioVol3F
+    - IdioVolAHT
+    - zerotrade1M
+    - zerotrade6M
+    - zerotrade12M
+    - MaxRet
+    - VolSD
+    - BetaLiquidityPS
+
+  tradable_features:
+    - Mom12m
+    - Mom6m
+    - BMdec
+    - GP
+    - AssetGrowth
+    - RoE
+    - CF
+    - CBOperProf
+
+  # Extended groups: broader sets for robustness checks
+  # Report both narrow (above) and extended results
+  illiquidity_features_extended:
+    # Core 8
+    - IdioVol3F
+    - IdioVolAHT
+    - zerotrade1M
+    - zerotrade6M
+    - zerotrade12M
+    - MaxRet
+    - VolSD
+    - BetaLiquidityPS
+    # Additional microstructure / liquidity-related
+    - BidAskSpread # direct trading cost
+    - DolVol # dollar volume (inverse liquidity)
+    - Size # small-cap illiquidity premium
+    - Price # low-price stocks are less liquid
+
+  tradable_features_extended:
+    # Core 8
+    - Mom12m
+    - Mom6m
+    - BMdec
+    - GP
+    - AssetGrowth
+    - RoE
+    - CF
+    - CBOperProf
+    # Momentum variants
+    - Mom12mOffSeason
+    - MomOffSeason
+    - MomSeason
+    - MomSeasonShort
+    - IndMom
+    - IntMom
+    - ResidualMomentum
+    - LRreversal
+    - STreversal
+    # Value
+    - BPEBM
+    - EBM
+    - cfp
+    - BookLeverage
+    - EquityDuration
+    # Investment
+    - Investment
+    - InvestPPEInv
+    - grcapx
+    - ChInv
+    - ChInvIA
+    # Earnings / announcements
+    - EarningsSurprise
+    - RevenueSurprise
+    - AnnouncementReturn
+    # Profitability
+    - CashProd
+    - OPLeverage
+    # Accruals
+    - Accruals
+    - TotalAccruals
+    - NOA
+    - dNoa
+    # Issuance / corporate actions
+    - ShareIss1Y
+    - hire
+
+  # Curated features with coverage from 1972 onward (~75 predictors).
+  # Using a hand-picked subset avoids massive row loss from dropna()
+  # on sparse early-period features (many CZ predictors start post-1985).
+  selected_features:
+    - AM
+    - Accruals
+    - AnnouncementReturn
+    - AssetGrowth
+    - BetaLiquidityPS
+    - BidAskSpread
+    - BMdec
+    - BookLeverage
+    - BPEBM
+    - CBOperProf
+    - CF
+    - cfp
+    - CashProd
+    - ChAssetTurnover
+    - ChEQ
+    - ChInv
+    - ChInvIA
+    - ChNWC
+    - ChNNCOA
+    - ChTax
+    - ConvDebt
+    - CoskewACX
+    - DelCOA
+    - DelCOL
+    - DelEqu
+    - DelFINL
+    - DelLTI
+    - DelNetFin
+    - DivInit
+    - DivOmit
+    - DolVol
+    - EBM
+    - EarningsSurprise
+    - EquityDuration
+    - GP
+    - grcapx
+    - Herf
+    - IdioVol3F
+    - IdioVolAHT
+    - IndIPO
+    - IndMom
+    - IntMom
+    - InvestPPEInv
+    - Investment
+    - LRreversal
+    - Leverage
+    - MaxRet
+    - Mom12m
+    - Mom12mOffSeason
+    - Mom6m
+    - MomOffSeason
+    - MomSeason
+    - MomSeasonShort
+    - NOA
+    - OPLeverage
+    - PctAcc
+    - Price
+    - RDIPO
+    - ResidualMomentum
+    - ReturnSkew
+    - ReturnSkew3F
+    - RevenueSurprise
+    - RoE
+    - STreversal
+    - ShareIss1Y
+    - Size
+    - Tax
+    - TotalAccruals
+    - VolSD
+    - dNoa
+    - hire
+    - zerotrade1M
+    - zerotrade6M
+    - zerotrade12M
+
+# ----------------------------------------------------------
+# Liquidity (raw columns from 00_fetch_data.py)
+# ----------------------------------------------------------
+liquidity:
+  primary: "dvol_21d" # 21-day trailing avg dollar volume (Eq. 14)
+  measures:
+    - dvol_21d # PRIMARY: 21-day trailing avg dollar volume (from daily CRSP)
+    - dvol_6m # 6-month rolling avg monthly dollar volume
+    # - dvol_monthly # monthly dollar volume
+    - me_raw # market equity
+    - lambda_tc # price impact (Frazzini-style)
+    - BidAskSpread # bid-ask spread (from CZ predictors)
+    - liu_lm # Liu (2006) composite illiquidity LM_12 (from daily CRSP)
+    # - DolVol # dollar volume (from CZ predictors)
+
+# ----------------------------------------------------------
+# Weighting Schemes (Equations 8–11)
+# ----------------------------------------------------------
+weighting:
+  primary: "softmax_rank"
+
+  softmax_rank: # Eq. 8
+    lambda: 2.0
+
+  linear_dolvol: {} # Eq. 9
+
+  transaction_cost: # Eq. 10
+    spread_col: "BidAskSpread" # from CZ predictors
+
+  quintile_discrete: # Eq. 11
+    weights:
+      Q1: 0.1
+      Q2: 0.3
+      Q3: 1.0
+      Q4: 3.0
+      Q5: 5.0
+
+# ----------------------------------------------------------
+# ML Models (3 models, each run with standard + weighted)
+# ----------------------------------------------------------
+models:
+  # All 3 models are run in the 2×2 framework independently.
+  # Results are reported per-model + ensemble average.
+  run_models:
+    - xgboost
+    - random_forest
+    - neural_network
+
+  xgboost:
+    n_estimators: 300
+    max_depth: 4
+    learning_rate: 0.05
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_weight: 100
+    reg_alpha: 0.1
+    reg_lambda: 1.0
+    early_stopping_rounds: 20
+    search_space:
+      max_depth: [3, 4, 5, 6]
+      learning_rate: [0.01, 0.05, 0.1]
+      n_estimators: [100, 300, 500]
+      min_child_weight: [50, 100, 200]
+
+  random_forest:
+    n_estimators: 300
+    max_depth: 6
+    max_features: "sqrt"
+    min_samples_leaf: 100
+    n_jobs: -1
+    search_space:
+      n_estimators: [100, 300, 500]
+      max_depth: [4, 6, 8]
+      min_samples_leaf: [50, 100, 200]
+
+  neural_network:
+    hidden_layers: [64, 32, 16]
+    activation: "relu"
+    dropout: 0.5
+    learning_rate: 0.001
+    batch_size: 256
+    epochs: 100
+    patience: 10
+    weight_decay: 0.0001
+    search_space:
+      hidden_layers:
+        - [64, 32]
+        - [64, 32, 16]
+        - [128, 64, 32]
+      dropout: [0.3, 0.5]
+      learning_rate: [0.001, 0.0005]
+
+# ----------------------------------------------------------
+# Training Protocol
+# ----------------------------------------------------------
+training:
+  train_window: 120 # months (10 years, rolling)
+  validation_window: 12 # months (1 year, for hyperparameter selection)
+  test_window: 1 # month (out-of-sample prediction)
+  retune_frequency: 24 # months
+  oos_start: 200001 # January 2000
+  oos_end: 202412   # December 2024
+
+  preprocessing:
+    normalization: "rank_quantile" # rank → [-0.5, 0.5]
+    missing_fill: "drop"
+
+# ----------------------------------------------------------
+# Portfolio Construction
+# ----------------------------------------------------------
+portfolio:
+  n_quantiles: 10
+  long_quantile: 10
+  short_quantile: 1
+  position_cap: 0.05
+  min_liquidity_pctile: 0.40
+  rebalance_frequency: "monthly"
+
+# ----------------------------------------------------------
+# Transaction Cost Model
+# ----------------------------------------------------------
+transaction_costs:
+  spread_col: "BidAskSpread"
+  lambda_market_impact: 0.1       # Frazzini et al. (2018) Eq. 12
+  sigma_col: "daily_sigma"        # 21-day rolling daily return volatility
+  adv_col: "dvol_21d"            # average daily dollar volume
+  aum_scenarios:
+    - 100_000_000
+    - 500_000_000
+    - 1_000_000_000
+    - 5_000_000_000
+
+# ----------------------------------------------------------
+# Statistical Inference
+# ----------------------------------------------------------
+inference:
+  newey_west_lags: 6
+  bootstrap_samples: 5000
+  significance_level: 0.05
+  one_sided_test: true
+  calibrate_block_length: false   # LW (2008) Algorithm 3.1 — true is very expensive
+  block_grid: [2, 4, 6, 8, 10]   # block sizes for bootstrap Sharpe test
+  factor_models:
+    capm: ["Mkt-RF"]
+    ff3: ["Mkt-RF", "SMB", "HML"]
+    ff5: ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
+
+# ----------------------------------------------------------
+# SHAP Analysis (Hypothesis 2)
+# ----------------------------------------------------------
+shap:
+  compute_shap: true              # Master switch (set false for fast runs)
+  background_samples: 100         # Background data size for NN explainer
+  max_test_samples: null          # null = all test stocks; set e.g. 500 to cap NN cost
+  tree_check_additivity: false    # Skip slow consistency check for TreeExplainer
