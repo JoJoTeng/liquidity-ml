@@ -99,10 +99,17 @@ def _load_model_results(
     for cell in ["1A", "1B", "2A", "2B"]:
         net[cell] = pd.read_csv(model_dir / f"net_returns_{cell}.csv")
 
+    # Monthly OOS R²
+    r2_monthly_path = model_dir / "oos_r2_monthly.csv"
+    oos_r2_monthly = (
+        pd.read_csv(r2_monthly_path) if r2_monthly_path.exists() else None
+    )
+
     return {
         "model": model_name,
         "effect_decomposition": decomp,
         "oos_r2": oos_r2,
+        "oos_r2_monthly": oos_r2_monthly,
         "gross_returns": gross,
         "net_returns": net,
     }
@@ -760,6 +767,37 @@ def plot_capacity_curve(
     logger.info("  Saved %s", save_path.name)
 
 
+def plot_oos_r2_monthly(
+    all_results: dict[str, dict],
+    save_path: Path,
+):
+    """Plot monthly OOS R² time series for all models (std vs wt)."""
+    plt = _setup_matplotlib()
+    n_models = len(all_results)
+    fig, axes = plt.subplots(n_models, 1, figsize=(10, 4 * n_models), squeeze=False)
+
+    for idx, (model_name, res) in enumerate(all_results.items()):
+        ax = axes[idx, 0]
+        r2m = res.get("oos_r2_monthly")
+        if r2m is None or r2m.empty:
+            ax.set_title(f"OOS R² — {model_name} (no data)")
+            continue
+
+        r2m = r2m.sort_values("yyyymm")
+        ax.plot(r2m["yyyymm"], r2m["R2_std"], label="Standard", alpha=0.7)
+        ax.plot(r2m["yyyymm"], r2m["R2_wt"], label="Weighted", alpha=0.7)
+        ax.axhline(y=0, color="black", linewidth=0.5, linestyle="--")
+        ax.set_xlabel("Date (yyyymm)")
+        ax.set_ylabel("OOS R²")
+        ax.set_title(f"Monthly OOS R² — {model_name}")
+        ax.legend(fontsize=9)
+
+    fig.tight_layout()
+    fig.savefig(save_path)
+    plt.close(fig)
+    logger.info("  Saved %s", save_path.name)
+
+
 # ── LaTeX helpers ────────────────────────────────────────────────
 
 
@@ -883,6 +921,13 @@ def main():
     r2_df = build_oos_r2_table(all_results)
     r2_df.to_csv(tables_dir / "oos_r2.csv", index=False)
     logger.info("  Saved oos_r2.csv")
+
+    # Monthly OOS R² CSVs
+    for model_name, res in all_results.items():
+        r2m = res.get("oos_r2_monthly")
+        if r2m is not None and not r2m.empty:
+            r2m.to_csv(tables_dir / f"oos_r2_monthly_{model_name}.csv", index=False)
+            logger.info("  Saved oos_r2_monthly_%s.csv", model_name)
 
     # ── 8. H2 analysis (feature importance) ──
     logger.info("Running H2 analysis (feature importance)...")
@@ -1008,6 +1053,12 @@ def main():
                 capacity_df, config,
                 save_path=figures_dir / "capacity_curve.png",
             )
+
+        # Monthly OOS R² time series
+        plot_oos_r2_monthly(
+            all_results,
+            save_path=figures_dir / "oos_r2_monthly.png",
+        )
     else:
         logger.info("Skipping figure generation (--no-figures).")
 

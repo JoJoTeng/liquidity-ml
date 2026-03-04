@@ -867,6 +867,49 @@ def oos_r_squared(
     return float(1.0 - ss_pred / ss_hist)
 
 
+def oos_r_squared_monthly(
+    predictions: pd.DataFrame,
+    pred_col: str = "pred_std",
+) -> pd.DataFrame:
+    """Monthly OOS R² (cross-sectional, per yyyymm).
+
+    R²_t = 1 - Σ_i(y_it - ŷ_it)² / Σ_i(y_it - ȳ_expanding_t)²
+
+    Parameters
+    ----------
+    predictions : DataFrame with columns [yyyymm, y_true, <pred_col>, expanding_mean].
+    pred_col : Prediction column name ('pred_std' or 'pred_wt').
+
+    Returns
+    -------
+    pd.DataFrame with columns [yyyymm, oos_r2], one row per month.
+    """
+    required = {"yyyymm", "y_true", pred_col, "expanding_mean"}
+    missing = required - set(predictions.columns)
+    if missing:
+        raise ValueError(f"Missing columns: {missing}")
+
+    rows = []
+    for yyyymm, grp in predictions.groupby("yyyymm"):
+        y_t = grp["y_true"].values
+        y_p = grp[pred_col].values
+        y_h = grp["expanding_mean"].values
+
+        mask = ~(np.isnan(y_t) | np.isnan(y_p) | np.isnan(y_h))
+        if mask.sum() < 2:
+            rows.append({"yyyymm": yyyymm, "oos_r2": np.nan})
+            continue
+
+        y_t, y_p, y_h = y_t[mask], y_p[mask], y_h[mask]
+        ss_pred = np.sum((y_t - y_p) ** 2)
+        ss_hist = np.sum((y_t - y_h) ** 2)
+
+        r2 = float(1.0 - ss_pred / ss_hist) if ss_hist > 1e-16 else np.nan
+        rows.append({"yyyymm": yyyymm, "oos_r2": r2})
+
+    return pd.DataFrame(rows)
+
+
 # ══════════════════════════════════════════════════════════════
 # 7. Paired t-test
 # ══════════════════════════════════════════════════════════════

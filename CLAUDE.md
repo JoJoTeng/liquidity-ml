@@ -45,6 +45,7 @@ liquidity_ml/
 │   ├── evaluation/
 │   │   ├── statistics.py      ← sharpe_ratio(), bootstrap_sharpe_test() [Ledoit-Wolf],
 │   │   │                        newey_west_tstat(), factor_alpha(), oos_r_squared(),
+│   │   │                        oos_r_squared_monthly(),
 │   │   │                        paired_ttest(), compute_effect_decomposition()
 │   │   └── two_by_two.py      ← _rolling_predict(), run_two_by_two(), run_all_models(),
 │   │                            save_results()
@@ -201,6 +202,7 @@ Per model in `outputs/experiment/{model_name}/`:
 - `shap_importance_{std,wt}.csv` — rows=yyyymm, cols=features (mean|SHAP|)
 - `effect_decomposition.json` — sharpe_ratios, effects, lw_* tests, factor_alphas
 - `oos_r2.json` — {standard, weighted}
+- `oos_r2_monthly.csv` — yyyymm, R2_std, R2_wt (monthly cross-sectional OOS R²)
 
 Cross-model: `outputs/experiment/summary.csv`, `ensemble.json`
 
@@ -210,7 +212,8 @@ Tables in `outputs/analysis/tables/`:
 - `net_results.csv/.tex` — net SR per AUM, net effects, net H1/H3 p-values per AUM
 - `capacity.csv` — break-even AUM per cell (H4)
 - `factor_alphas.csv/.tex` — CAPM/FF3/FF5 alphas
-- `oos_r2.csv` — OOS R² standard vs weighted
+- `oos_r2.csv` — OOS R² standard vs weighted (aggregate)
+- `oos_r2_monthly_{model}.csv` — monthly OOS R² time series per model
 - `h2_summary.csv` — tradable ratio shift per model
 - `h2_per_feature.csv` — per-feature importance shift
 - `hypothesis_tests.json` — consolidated H1–H4
@@ -223,6 +226,7 @@ Figures in `outputs/analysis/figures/`:
 - `importance_comparison_{model}.png` — SHAP bars std vs wt
 - `importance_ratio_{model}.png` — tradable ratio time series
 - `importance_group_{model}.png` — group importance time series
+- `oos_r2_monthly.png` — monthly OOS R² time series (std vs wt, all models)
 
 ## Common Commands
 ```bash

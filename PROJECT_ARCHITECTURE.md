@@ -186,7 +186,8 @@ Net return columns saved: `ret_ls_net_{100M,500M,1B,5B}`
 - **factor_alpha():** r_t = alpha + sum(beta_k * F_k,t) + epsilon_t with NW SEs (CAPM, FF3, FF5)
 - **grs_test():** H0 = all portfolio alphas jointly zero (Gibbons, Ross, Shanken 1989)
 - **bootstrap_sharpe_test():** Ledoit-Wolf (2008) studentized circular-block bootstrap for Sharpe ratio difference, with prewhitened VAR(1) residuals and Parzen kernel HAC
-- **oos_r_squared():** Campbell-Thompson (2008): 1 - SS_pred/SS_hist (benchmark = expanding mean)
+- **oos_r_squared():** Campbell-Thompson (2008): 1 - SS_pred/SS_hist (benchmark = expanding mean), aggregate scalar
+- **oos_r_squared_monthly():** Cross-sectional OOS R² per month: R²_t = 1 - Σ_i(y_it - ŷ_it)² / Σ_i(y_it - ȳ_expanding_t)², returns time series DataFrame
 - **paired_ttest():** for feature importance differences across rolling windows (H2)
 - **compute_effect_decomposition():** full 2x2 with Sharpe ratios, effects, LW tests, factor alphas (gross returns)
 - **compute_net_effect_tests():** (in `03_analyze_results.py`) Ledoit-Wolf bootstrap tests on net return series per AUM level for H1/H3 robustness
@@ -226,7 +227,7 @@ For each OOS month:
 6. Collect: Feature importances (gain) + SHAP values (mean|SHAP| per feature)
 
 ### run_two_by_two(model_name)
-Build 4 portfolio time series -> compute TC at all AUM -> align months -> effect decomposition -> OOS R-squared -> save
+Build 4 portfolio time series -> compute TC at all AUM -> align months -> effect decomposition -> OOS R-squared (aggregate + monthly) -> save
 
 ### run_all_models()
 Runs all 3 models sharing one panel load. Produces per-model results + ensemble summary.
@@ -263,7 +264,8 @@ python scripts/02_run_experiment.py --model xgboost  # Single model
 | net_results.csv/.tex | Net SR for 4 AUM scenarios, net effects, net H1/H3 p-values per AUM per model |
 | capacity.csv | Break-even AUM per cell per model, H4 uplift ratio |
 | factor_alphas.csv/.tex | CAPM/FF3/FF5 alphas per cell per model |
-| oos_r2.csv | OOS R-squared standard vs weighted per model |
+| oos_r2.csv | OOS R-squared standard vs weighted per model (aggregate) |
+| oos_r2_monthly_{model}.csv | Monthly cross-sectional OOS R² time series per model |
 | h2_summary.csv | Tradable ratio shift: t-stat, p-value per model |
 | h2_per_feature.csv | Per-feature importance shift (all models) |
 | hypothesis_tests.json | Consolidated H1-H4 results |
@@ -280,6 +282,7 @@ python scripts/02_run_experiment.py --model xgboost  # Single model
 | importance_comparison_{model}.png | Top-20 SHAP bars: standard vs weighted |
 | importance_ratio_{model}.png | Tradable/(tradable+illiquidity) ratio over time |
 | importance_group_{model}.png | Group importance time series |
+| oos_r2_monthly.png | Monthly OOS R² time series: standard vs weighted (all models) |
 
 ### 11.3 H4 Capacity Analysis
 For each model and each cell:
@@ -374,7 +377,8 @@ liquidity_ml/
 │   │   ├── feature_importance_{std,wt}.csv
 │   │   ├── shap_importance_{std,wt}.csv
 │   │   ├── effect_decomposition.json
-│   │   └── oos_r2.json
+│   │   ├── oos_r2.json
+│   │   └── oos_r2_monthly.csv
 │   ├── experiment/summary.csv              -- cross-model summary
 │   ├── experiment/ensemble.json            -- ensemble averages
 │   └── analysis/                           -- from 03_analyze_results.py

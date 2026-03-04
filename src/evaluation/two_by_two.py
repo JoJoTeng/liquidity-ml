@@ -36,6 +36,7 @@ from src.evaluation.statistics import (
     compute_effect_decomposition,
     load_ff_factors,
     oos_r_squared,
+    oos_r_squared_monthly,
     sharpe_ratio,
 )
 from src.models import create_model
@@ -596,6 +597,14 @@ def run_two_by_two(
         predictions["expanding_mean"].values,
     )
 
+    # Monthly OOS R²
+    oos_r2_monthly_std = oos_r_squared_monthly(predictions, pred_col="pred_std")
+    oos_r2_monthly_wt = oos_r_squared_monthly(predictions, pred_col="pred_wt")
+    oos_r2_monthly = oos_r2_monthly_std.rename(columns={"oos_r2": "R2_std"}).merge(
+        oos_r2_monthly_wt.rename(columns={"oos_r2": "R2_wt"}),
+        on="yyyymm",
+    )
+
     # ── Summary log ──
     total_time = time.time() - t0
     logger.info("-" * 60)
@@ -620,6 +629,7 @@ def run_two_by_two(
             "weighted": rolling["feature_importance_wt"],
         },
         "oos_r2": {"standard": oos_r2_std, "weighted": oos_r2_wt},
+        "oos_r2_monthly": oos_r2_monthly,
         "effect_decomposition": effect_decomp,
         "oos_months": rolling["oos_months"],
         "timing": rolling["timing"],
@@ -788,6 +798,10 @@ def _save_single_model(result: dict[str, Any], model_dir: Path) -> None:
     # OOS R²
     with open(model_dir / "oos_r2.json", "w") as f:
         json.dump(result["oos_r2"], f, indent=2)
+
+    # Monthly OOS R²
+    if "oos_r2_monthly" in result:
+        result["oos_r2_monthly"].to_csv(model_dir / "oos_r2_monthly.csv", index=False)
 
 
 def _make_json_serializable(obj: Any) -> Any:
