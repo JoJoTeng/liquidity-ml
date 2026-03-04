@@ -53,6 +53,11 @@ Results are reported per-model and as an ensemble average.
 - H3 -> `lw_total` (tests SR(2B) > SR(1A)), plus `total_effect` value
 - H4 -> computed from `net_returns_{cell}.csv` across AUM scenarios via log-scale interpolation
 
+**Gross vs Net testing:**
+- H1 and H3 are tested on both gross returns (primary, computed during experiment) and net returns (robustness, computed during analysis via `compute_net_effect_tests()` in `03_analyze_results.py`)
+- Net tests use Ledoit-Wolf bootstrap on `ret_ls_net_{AUM}` columns at each AUM level
+- Net p-values saved in `net_results.csv` (`h1_pval_{AUM}`, `h3_pval_{AUM}`) and `hypothesis_tests.json` (`net_results` sub-dict under H1/H3)
+
 ---
 
 ## 4. Data Pipeline
@@ -183,7 +188,8 @@ Net return columns saved: `ret_ls_net_{100M,500M,1B,5B}`
 - **bootstrap_sharpe_test():** Ledoit-Wolf (2008) studentized circular-block bootstrap for Sharpe ratio difference, with prewhitened VAR(1) residuals and Parzen kernel HAC
 - **oos_r_squared():** Campbell-Thompson (2008): 1 - SS_pred/SS_hist (benchmark = expanding mean)
 - **paired_ttest():** for feature importance differences across rolling windows (H2)
-- **compute_effect_decomposition():** full 2x2 with Sharpe ratios, effects, LW tests, factor alphas
+- **compute_effect_decomposition():** full 2x2 with Sharpe ratios, effects, LW tests, factor alphas (gross returns)
+- **compute_net_effect_tests():** (in `03_analyze_results.py`) Ledoit-Wolf bootstrap tests on net return series per AUM level for H1/H3 robustness
 
 ---
 
@@ -236,12 +242,25 @@ python scripts/02_run_experiment.py --model xgboost  # Single model
 
 ## 11. Analysis & Outputs (scripts/03_analyze_results.py)
 
+### 11.0 Analysis Pipeline (main() execution order)
+1. Load experiment results
+2. Main results table (gross SR, effects, gross H1/H3 p-values)
+3. Net return statistical tests (`compute_net_effect_tests()` — LW bootstrap on net returns per AUM)
+4. Net results table (net SR, net effects, net H1/H3 p-values)
+5. Capacity analysis (H4 break-even AUM)
+6. Factor alpha table
+7. OOS R² table
+8. H2 analysis (feature importance)
+9. Hypothesis test summary (consolidated H1–H4, gross + net)
+10. Figures
+11. Console summary
+
 ### 11.1 Tables (outputs/analysis/tables/)
 
 | File | Contents |
 |------|----------|
 | main_results.csv/.tex | Gross SR per cell, effects, training share (H1), total effect (H3), LW p-values |
-| net_results.csv/.tex | Net SR for 4 AUM scenarios, net effects per model |
+| net_results.csv/.tex | Net SR for 4 AUM scenarios, net effects, net H1/H3 p-values per AUM per model |
 | capacity.csv | Break-even AUM per cell per model, H4 uplift ratio |
 | factor_alphas.csv/.tex | CAPM/FF3/FF5 alphas per cell per model |
 | oos_r2.csv | OOS R-squared standard vs weighted per model |

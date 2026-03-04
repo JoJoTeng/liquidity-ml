@@ -126,6 +126,12 @@ Code label mapping in `effect_decomposition.json`:
 - H3 → `lw_total` (tests SR(2B) > SR(1A))
 - H4 → computed from `net_returns_{cell}.csv` across AUM scenarios
 
+H1 and H3 are tested on both gross and net returns:
+- Gross: primary test (from `effect_decomposition.json`, computed during experiment)
+- Net: robustness test per AUM level (computed during analysis by `compute_net_effect_tests()`
+  in `03_analyze_results.py`). Results in `net_results.csv` (`h1_pval_{aum}`, `h3_pval_{aum}`)
+  and `hypothesis_tests.json` (under `net_results` sub-dict in H1/H3 entries)
+
 ## Feature Groups (for H2)
 - **Illiquidity (8):** IdioVol3F, IdioVolAHT, zerotrade1M/6M/12M, MaxRet, VolSD, BetaLiquidityPS
 - **Tradable (8):** Mom12m, Mom6m, BMdec, GP, AssetGrowth, RoE, CF, CBOperProf
@@ -201,7 +207,7 @@ Cross-model: `outputs/experiment/summary.csv`, `ensemble.json`
 ## Analysis Outputs (03_analyze_results.py)
 Tables in `outputs/analysis/tables/`:
 - `main_results.csv/.tex` — gross SR, effects, H1/H3 p-values
-- `net_results.csv/.tex` — net SR per AUM, net effects
+- `net_results.csv/.tex` — net SR per AUM, net effects, net H1/H3 p-values per AUM
 - `capacity.csv` — break-even AUM per cell (H4)
 - `factor_alphas.csv/.tex` — CAPM/FF3/FF5 alphas
 - `oos_r2.csv` — OOS R² standard vs weighted

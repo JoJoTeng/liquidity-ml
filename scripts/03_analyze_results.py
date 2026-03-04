@@ -35,7 +35,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_config, get_output_dir
-from src.evaluation.statistics import sharpe_ratio
+from src.evaluation.statistics import bootstrap_sharpe_test, sharpe_ratio
 from src.analysis.feature_importance import (
     load_importance,
     cross_model_h2_summary,
@@ -188,8 +188,9 @@ def _get_aum_labels(config: dict) -> list[str]:
 def build_net_results_table(
     all_results: dict[str, dict],
     config: dict,
+    net_tests: dict[str, dict] | None = None,
 ) -> pd.DataFrame:
-    """Build net results table: net SR per AUM scenario + net effects."""
+    """Build net results table: net SR per AUM scenario + net effects + p-values."""
     aum_labels = _get_aum_labels(config)
     cells = ["1A", "1B", "2A", "2B"]
     rows = []
@@ -215,6 +216,16 @@ def build_net_results_table(
             row[f"net_training_{aum_label}"] = sr_2a - sr_1a
             row[f"net_portfolio_{aum_label}"] = sr_1b - sr_1a
             row[f"net_total_{aum_label}"] = sr_2b - sr_1a
+
+            # P-values from bootstrap tests (if available)
+            if net_tests and model_name in net_tests:
+                aum_tests = net_tests[model_name].get(aum_label, {})
+                row[f"h1_pval_{aum_label}"] = (
+                    aum_tests["lw_h3"]["p_value"] if aum_tests else np.nan
+                )
+                row[f"h3_pval_{aum_label}"] = (
+                    aum_tests["lw_total"]["p_value"] if aum_tests else np.nan
+                )
 
         rows.append(row)
 
@@ -353,6 +364,95 @@ def build_oos_r2_table(
     return pd.DataFrame(rows)
 
 
+# ── Net Return Statistical Tests ─────────────────────────────────
+
+
+def compute_net_effect_tests(
+    all_results: dict[str, dict],
+    config: dict,
+) -> dict[str, dict]:
+    """Run Ledoit-Wolf bootstrap tests on net return series.
+
+    For each model and AUM level, tests:
+      - lw_portfolio: net SR(1B) vs net SR(1A)
+      - lw_training:  net SR(2A) vs net SR(1A)
+      - lw_total:     net SR(2B) vs net SR(1A)  (H3 net)
+      - lw_h3:        net SR(2A) vs net SR(1B), one-sided  (H1 net)
+
+    Returns
+    -------
+    dict : {model_name: {aum_label: {lw_portfolio, lw_training, lw_total, lw_h3}}}
+    """
+    aum_labels = _get_aum_labels(config)
+    results: dict[str, dict] = {}
+
+    for model_name, res in all_results.items():
+        model_tests: dict[str, dict] = {}
+
+        for aum_label in aum_labels:
+            col = f"ret_ls_net_{aum_label}"
+
+            # Load net return series for all 4 cells
+            net_series = {}
+            for cell in ["1A", "1B", "2A", "2B"]:
+                net_df = res["net_returns"][cell]
+                if col not in net_df.columns:
+                    break
+                net_series[cell] = net_df[["yyyymm", col]].dropna()
+            else:
+                # Align to common months
+                common_months = sorted(
+                    set(net_series["1A"]["yyyymm"])
+                    & set(net_series["1B"]["yyyymm"])
+                    & set(net_series["2A"]["yyyymm"])
+                    & set(net_series["2B"]["yyyymm"])
+                )
+                if len(common_months) < 12:
+                    logger.warning(
+                        "%s / %s: only %d common months — skipping net tests.",
+                        model_name, aum_label, len(common_months),
+                    )
+                    continue
+
+                def _aligned(df: pd.DataFrame) -> np.ndarray:
+                    return (
+                        df[df["yyyymm"].isin(common_months)]
+                        .sort_values("yyyymm")[col]
+                        .values
+                    )
+
+                r_1a = _aligned(net_series["1A"])
+                r_1b = _aligned(net_series["1B"])
+                r_2a = _aligned(net_series["2A"])
+                r_2b = _aligned(net_series["2B"])
+
+                model_tests[aum_label] = {
+                    "lw_portfolio": bootstrap_sharpe_test(
+                        r_1b, r_1a, config=config
+                    ),
+                    "lw_training": bootstrap_sharpe_test(
+                        r_2a, r_1a, config=config
+                    ),
+                    "lw_total": bootstrap_sharpe_test(
+                        r_2b, r_1a, config=config
+                    ),
+                    "lw_h3": bootstrap_sharpe_test(
+                        r_2a, r_1b, one_sided=True, config=config
+                    ),
+                }
+
+                logger.info(
+                    "  %s / %s: net H1 p=%.4f, net H3 p=%.4f",
+                    model_name, aum_label,
+                    model_tests[aum_label]["lw_h3"]["p_value"],
+                    model_tests[aum_label]["lw_total"]["p_value"],
+                )
+
+        results[model_name] = model_tests
+
+    return results
+
+
 # ── Hypothesis Test Summary ──────────────────────────────────────
 
 
@@ -360,6 +460,7 @@ def build_hypothesis_summary(
     all_results: dict[str, dict],
     h2_summary: pd.DataFrame | None,
     capacity_df: pd.DataFrame | None,
+    net_tests: dict[str, dict] | None = None,
 ) -> dict:
     """Consolidate H1–H4 results into a single JSON-serializable dict."""
 
@@ -370,13 +471,23 @@ def build_hypothesis_summary(
         training = decomp["training_effect"]
         portfolio = decomp["portfolio_effect"]
         total = decomp["total_effect"]
-        h1_per_model[model_name] = {
+        h1_entry = {
             "training_effect": training,
             "portfolio_effect": portfolio,
             "total_effect": total,
             "training_share": training / total if total != 0 else None,
             "p_value": decomp["lw_h3"]["p_value"],
         }
+        # Add net-based p-values per AUM level
+        if net_tests and model_name in net_tests:
+            net_h1 = {}
+            for aum_label, tests in net_tests[model_name].items():
+                net_h1[aum_label] = {
+                    "p_value": tests["lw_h3"]["p_value"],
+                    "difference": tests["lw_h3"]["difference"],
+                }
+            h1_entry["net_results"] = net_h1
+        h1_per_model[model_name] = h1_entry
 
     # H2: Feature Reallocation
     h2_per_model = {}
@@ -395,11 +506,21 @@ def build_hypothesis_summary(
     for model_name, res in all_results.items():
         decomp = res["effect_decomposition"]
         total = decomp["total_effect"]
-        h3_per_model[model_name] = {
+        h3_entry = {
             "total_effect": total,
             "p_value": decomp["lw_total"]["p_value"],
             "meets_target": total >= 0.20,
         }
+        # Add net-based p-values per AUM level
+        if net_tests and model_name in net_tests:
+            net_h3 = {}
+            for aum_label, tests in net_tests[model_name].items():
+                net_h3[aum_label] = {
+                    "p_value": tests["lw_total"]["p_value"],
+                    "difference": tests["lw_total"]["difference"],
+                }
+            h3_entry["net_results"] = net_h3
+        h3_per_model[model_name] = h3_entry
 
     # H4: Capacity Improvement
     h4_per_model = {}
@@ -715,14 +836,18 @@ def main():
     _save_latex(main_df, tables_dir / "main_results.tex")
     logger.info("  Saved main_results.csv / .tex")
 
-    # ── 3. Net results table ──
+    # ── 3. Net return statistical tests (Ledoit-Wolf bootstrap) ──
+    logger.info("Running Ledoit-Wolf bootstrap tests on net returns...")
+    net_tests = compute_net_effect_tests(all_results, config)
+
+    # ── 4. Net results table ──
     logger.info("Building net results table...")
-    net_df = build_net_results_table(all_results, config)
+    net_df = build_net_results_table(all_results, config, net_tests=net_tests)
     net_df.to_csv(tables_dir / "net_results.csv", index=False)
     _save_latex(net_df, tables_dir / "net_results.tex")
     logger.info("  Saved net_results.csv / .tex")
 
-    # ── 4. Capacity analysis (H4) ──
+    # ── 5. Capacity analysis (H4) ──
     logger.info("Computing capacity / break-even AUM (H4)...")
     capacity_df = build_capacity_table(all_results, config)
     capacity_df.to_csv(tables_dir / "capacity.csv", index=False)
@@ -743,7 +868,7 @@ def main():
                 uplift if pd.notna(uplift) else 0,
             )
 
-    # ── 5. Factor alpha table ──
+    # ── 6. Factor alpha table ──
     logger.info("Building factor alpha table...")
     alpha_df = build_factor_alpha_table(all_results)
     if len(alpha_df) > 0:
@@ -753,13 +878,13 @@ def main():
     else:
         logger.info("  No factor alpha data found (yyyymm may not have been provided).")
 
-    # ── 6. OOS R² table ──
+    # ── 7. OOS R² table ──
     logger.info("Building OOS R² table...")
     r2_df = build_oos_r2_table(all_results)
     r2_df.to_csv(tables_dir / "oos_r2.csv", index=False)
     logger.info("  Saved oos_r2.csv")
 
-    # ── 7. H2 analysis (feature importance) ──
+    # ── 8. H2 analysis (feature importance) ──
     logger.info("Running H2 analysis (feature importance)...")
     importance_type = args.importance_type
     h2_summary = None
@@ -811,14 +936,16 @@ def main():
         h2_per_feature_df.to_csv(tables_dir / "h2_per_feature.csv", index=False)
         logger.info("  Saved h2_per_feature.csv")
 
-    # ── 8. Hypothesis test summary (H1–H4) ──
+    # ── 9. Hypothesis test summary (H1–H4) ──
     logger.info("Building hypothesis test summary...")
-    hyp_summary = build_hypothesis_summary(all_results, h2_summary, capacity_df)
+    hyp_summary = build_hypothesis_summary(
+        all_results, h2_summary, capacity_df, net_tests=net_tests
+    )
     with open(tables_dir / "hypothesis_tests.json", "w") as f:
         json.dump(hyp_summary, f, indent=2, default=str)
     logger.info("  Saved hypothesis_tests.json")
 
-    # ── 9. Figures ──
+    # ── 10. Figures ──
     if not args.no_figures:
         logger.info("Generating figures...")
 
@@ -884,7 +1011,7 @@ def main():
     else:
         logger.info("Skipping figure generation (--no-figures).")
 
-    # ── 10. Console summary ──
+    # ── 11. Console summary ──
     logger.info("=" * 60)
     logger.info("ANALYSIS COMPLETE")
     logger.info("=" * 60)
@@ -893,6 +1020,7 @@ def main():
 
     # Print hypothesis verdicts
     logger.info("\n--- Hypothesis Summary ---")
+    aum_labels = _get_aum_labels(config)
     for model_name, res in all_results.items():
         decomp = res["effect_decomposition"]
         training = decomp["training_effect"]
@@ -901,9 +1029,17 @@ def main():
 
         logger.info("\n%s:", model_name)
         logger.info(
-            "  H1 (Training Dominance): share=%.1f%% (target: 60-70%%), p=%.4f",
+            "  H1 (Training Dominance): share=%.1f%% (target: 60-70%%), p=%.4f [gross]",
             share * 100, decomp["lw_h3"]["p_value"],
         )
+        # Net H1 p-values
+        if model_name in net_tests:
+            for aum_label in aum_labels:
+                if aum_label in net_tests[model_name]:
+                    p = net_tests[model_name][aum_label]["lw_h3"]["p_value"]
+                    logger.info(
+                        "    H1 (net %s): p=%.4f", aum_label, p,
+                    )
         if h2_summary is not None and len(h2_summary) > 0:
             h2_row = h2_summary[h2_summary["model"] == model_name]
             if len(h2_row) > 0:
@@ -912,9 +1048,18 @@ def main():
                     h2_row["ratio_diff"].iloc[0], h2_row["p_value"].iloc[0],
                 )
         logger.info(
-            "  H3 (Sharpe Improvement): total_effect=%.3f (target: >=0.20), p=%.4f",
+            "  H3 (Sharpe Improvement): total_effect=%.3f (target: >=0.20), p=%.4f [gross]",
             total, decomp["lw_total"]["p_value"],
         )
+        # Net H3 p-values
+        if model_name in net_tests:
+            for aum_label in aum_labels:
+                if aum_label in net_tests[model_name]:
+                    p = net_tests[model_name][aum_label]["lw_total"]["p_value"]
+                    diff = net_tests[model_name][aum_label]["lw_total"]["difference"]
+                    logger.info(
+                        "    H3 (net %s): diff=%.3f, p=%.4f", aum_label, diff, p,
+                    )
         model_cap = capacity_df[capacity_df["model"] == model_name]
         be_2b_row = model_cap[model_cap["cell"] == "2B"]
         if not be_2b_row.empty and "h4_uplift" in be_2b_row.columns:
