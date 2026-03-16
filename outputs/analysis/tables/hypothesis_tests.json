@@ -1,0 +1,355 @@
+{
+  "H1_training_dominance": {
+    "description": "Training effect exceeds portfolio effect: [SR(2A)-SR(1A)] > [SR(1B)-SR(1A)]",
+    "target": "Training effect = 60-70% of total improvement",
+    "per_model": {
+      "xgboost": {
+        "training_effect": -0.9258086627838416,
+        "portfolio_effect": 0.10034390130430093,
+        "total_effect": -0.8320988690711584,
+        "training_share": 1.112618580791112,
+        "p_value": 0.0001999600079984003,
+        "net_results": {
+          "100M": {
+            "training_effect": -1.0660201079536988,
+            "portfolio_effect": 0.10879383497347707,
+            "total_effect": -0.9338635331809407,
+            "interaction": 0.02336273979928105,
+            "training_share": 1.1415159389751566,
+            "p_value": 0.0003999200159968006,
+            "difference": -0.34057357346100253
+          },
+          "500M": {
+            "training_effect": -1.0728310188970536,
+            "portfolio_effect": 0.1332801935289458,
+            "total_effect": -0.9129270282364486,
+            "interaction": 0.026623797131659188,
+            "training_share": 1.1751552815447917,
+            "p_value": 0.0005998800239952009,
+            "difference": -0.34964651899161836
+          },
+          "1B": {
+            "training_effect": -1.0761601885984071,
+            "portfolio_effect": 0.15158395836916755,
+            "total_effect": -0.8963457409536264,
+            "interaction": 0.028230489275613113,
+            "training_share": 1.2006083583924605,
+            "p_value": 0.0005998800239952009,
+            "difference": -0.35591781485563845
+          },
+          "5B": {
+            "training_effect": -1.0739975712533756,
+            "portfolio_effect": 0.22770268996940718,
+            "total_effect": -0.8187088712772332,
+            "interaction": 0.027586010006735107,
+            "training_share": 1.3118186560967358,
+            "p_value": 0.0007998400319936012,
+            "difference": -0.37735737833956273
+          }
+        }
+      },
+      "random_forest": {
+        "training_effect": -0.01284296865287865,
+        "portfolio_effect": 0.024734899413058314,
+        "total_effect": 0.004537897716611228,
+        "training_share": -2.8301582483594214,
+        "p_value": 0.45930813837232554,
+        "net_results": {
+          "100M": {
+            "training_effect": 0.11849795783497102,
+            "portfolio_effect": 0.05735539545680307,
+            "total_effect": 0.1410884937064772,
+            "interaction": -0.0347648595852969,
+            "training_share": 0.8398839247762905,
+            "p_value": 0.6462707458508299,
+            "difference": 0.017724969204749808
+          },
+          "500M": {
+            "training_effect": 0.13698070931568695,
+            "portfolio_effect": 0.08294125316244183,
+            "total_effect": 0.17818192528323284,
+            "interaction": -0.04174003719489594,
+            "training_share": 0.7687688248847148,
+            "p_value": 0.6310737852429514,
+            "difference": 0.0156658088719506
+          },
+          "1B": {
+            "training_effect": 0.15097834146875178,
+            "portfolio_effect": 0.10225082507113037,
+            "total_effect": 0.2061887499219751,
+            "interaction": -0.04704041661790703,
+            "training_share": 0.7322336525435273,
+            "p_value": 0.621875624875025,
+            "difference": 0.01412590009279982
+          },
+          "5B": {
+            "training_effect": 0.21124777090421043,
+            "portfolio_effect": 0.18474477151747437,
+            "total_effect": 0.3260145532548713,
+            "interaction": -0.06997798916681353,
+            "training_share": 0.6479703706326919,
+            "p_value": 0.5844831033793242,
+            "difference": 0.007683106982953963
+          }
+        }
+      },
+      "neural_network": {
+        "training_effect": -0.21126125936189533,
+        "portfolio_effect": -0.05487428697015795,
+        "total_effect": -0.27596341521765666,
+        "training_share": 0.7655408206746183,
+        "p_value": 0.2523495300939812,
+        "net_results": {
+          "100M": {
+            "training_effect": -0.15932915160027605,
+            "portfolio_effect": 0.07661351600921718,
+            "total_effect": -0.10161897235538075,
+            "interaction": -0.018903336764321876,
+            "training_share": 1.567907526589345,
+            "p_value": 0.17456508698260348,
+            "difference": -0.06822496545145268
+          },
+          "500M": {
+            "training_effect": -0.14126292105672644,
+            "portfolio_effect": 0.17384191762764978,
+            "total_effect": 0.0067910520791178985,
+            "interaction": -0.025787944491805437,
+            "training_share": -20.801330841078652,
+            "p_value": 0.11537692461507698,
+            "difference": -0.09111542626282565
+          },
+          "1B": {
+            "training_effect": -0.12762200238480292,
+            "portfolio_effect": 0.24337865791177693,
+            "total_effect": 0.08522717763540344,
+            "interaction": -0.030529477891570567,
+            "training_share": -1.497433165401322,
+            "p_value": 0.08898220355928814,
+            "difference": -0.10727821079438338
+          },
+          "5B": {
+            "training_effect": -0.08485689037229438,
+            "portfolio_effect": 0.46955396770432567,
+            "total_effect": 0.3477036886736107,
+            "interaction": -0.03699338865842061,
+            "training_share": -0.24404943961336434,
+            "p_value": 0.04079184163167367,
+            "difference": -0.16031293543222536
+          }
+        }
+      }
+    }
+  },
+  "H2_feature_reallocation": {
+    "description": "Weighted training shifts feature importance from illiquidity to tradable features",
+    "target": "Illiquidity total 43% -> 12%, Mom12m 10% -> 24%",
+    "per_model": {
+      "xgboost": {
+        "ratio_std_mean": 0.6189159112686401,
+        "ratio_wt_mean": 0.6551620008014679,
+        "ratio_diff": 0.036246089532828034,
+        "t_stat": 2.0155854659562635,
+        "p_value": 0.023057702419010076
+      },
+      "random_forest": {
+        "ratio_std_mean": 0.5082589960485183,
+        "ratio_wt_mean": 0.5066156178687051,
+        "ratio_diff": -0.001643378179813206,
+        "t_stat": -0.2085523095235966,
+        "p_value": 0.5824213453023273
+      }
+    }
+  },
+  "H3_sharpe_improvement": {
+    "description": "SR(2B) - SR(1A) >= 0.20 annualized",
+    "target": "Total effect >= 0.20",
+    "per_model": {
+      "xgboost": {
+        "total_effect": -0.8320988690711584,
+        "p_value": 0.001999600079984003,
+        "meets_target": false,
+        "net_results": {
+          "100M": {
+            "sharpe_ratios": {
+              "1A": -0.1236827287015082,
+              "1B": -0.01488889372803113,
+              "2A": -1.1897028366552072,
+              "2B": -1.057546261882449
+            },
+            "total_effect": -0.9338635331809407,
+            "meets_target": false,
+            "p_value": 0.008598280343931213,
+            "difference": -0.2707230728194257
+          },
+          "500M": {
+            "sharpe_ratios": {
+              "1A": -0.22361027324935595,
+              "1B": -0.09033007972041016,
+              "2A": -1.2964412921464095,
+              "2B": -1.1365373014858045
+            },
+            "total_effect": -0.9129270282364486,
+            "meets_target": false,
+            "p_value": 0.010997800439912017,
+            "difference": -0.26465366893836234
+          },
+          "1B": {
+            "sharpe_ratios": {
+              "1A": -0.29850292566454245,
+              "1B": -0.1469189672953749,
+              "2A": -1.3746631142629495,
+              "2B": -1.1948486666181688
+            },
+            "total_effect": -0.8963457409536264,
+            "meets_target": false,
+            "p_value": 0.01279744051189762,
+            "difference": -0.2598468241639261
+          },
+          "5B": {
+            "sharpe_ratios": {
+              "1A": -0.6133159562456281,
+              "1B": -0.3856132662762209,
+              "2A": -1.6873135274990037,
+              "2B": -1.4320248275228613
+            },
+            "total_effect": -0.8187088712772332,
+            "meets_target": false,
+            "p_value": 0.028994201159768047,
+            "difference": -0.23734022531293308
+          }
+        }
+      },
+      "random_forest": {
+        "total_effect": 0.004537897716611228,
+        "p_value": 0.5380923815236952,
+        "meets_target": false,
+        "net_results": {
+          "100M": {
+            "sharpe_ratios": {
+              "1A": -0.48909002376958444,
+              "1B": -0.43173462831278137,
+              "2A": -0.3705920659346134,
+              "2B": -0.34800153006310725
+            },
+            "total_effect": 0.1410884937064772,
+            "meets_target": false,
+            "p_value": 0.7938412317536493,
+            "difference": 0.04090095522370188
+          },
+          "500M": {
+            "sharpe_ratios": {
+              "1A": -0.587089787314723,
+              "1B": -0.5041485341522812,
+              "2A": -0.4501090779990361,
+              "2B": -0.4089078620314902
+            },
+            "total_effect": 0.17818192528323284,
+            "meets_target": false,
+            "p_value": 0.8480303939212157,
+            "difference": 0.05165418352856031
+          },
+          "1B": {
+            "sharpe_ratios": {
+              "1A": -0.6608334020810028,
+              "1B": -0.5585825770098725,
+              "2A": -0.509855060612251,
+              "2B": -0.4546446521590277
+            },
+            "total_effect": 0.2061887499219751,
+            "meets_target": true,
+            "p_value": 0.8798240351929614,
+            "difference": 0.05977324306640189
+          },
+          "5B": {
+            "sharpe_ratios": {
+              "1A": -0.9744535195304453,
+              "1B": -0.789708748012971,
+              "2A": -0.7632057486262349,
+              "2B": -0.6484389662755741
+            },
+            "total_effect": 0.3260145532548713,
+            "meets_target": true,
+            "p_value": 0.9538092381523695,
+            "difference": 0.09451023463822339
+          }
+        }
+      },
+      "neural_network": {
+        "total_effect": -0.27596341521765666,
+        "p_value": 0.11197760447910418,
+        "meets_target": false,
+        "net_results": {
+          "100M": {
+            "sharpe_ratios": {
+              "1A": -0.9606585813518803,
+              "1B": -0.8840450653426631,
+              "2A": -1.1199877329521564,
+              "2B": -1.062277553707261
+            },
+            "total_effect": -0.10161897235538075,
+            "meets_target": false,
+            "p_value": 0.35032993401319734,
+            "difference": -0.029384048881030134
+          },
+          "500M": {
+            "sharpe_ratios": {
+              "1A": -1.2903169190361305,
+              "1B": -1.1164750014084808,
+              "2A": -1.431579840092857,
+              "2B": -1.2835258669570127
+            },
+            "total_effect": 0.0067910520791178985,
+            "meets_target": false,
+            "p_value": 0.5220955808838232,
+            "difference": 0.0019636943930958495
+          },
+          "1B": {
+            "sharpe_ratios": {
+              "1A": -1.5328137191787408,
+              "1B": -1.2894350612669638,
+              "2A": -1.6604357215635437,
+              "2B": -1.4475865415433373
+            },
+            "total_effect": 0.08522717763540344,
+            "meets_target": false,
+            "p_value": 0.6352729454109178,
+            "difference": 0.02464421254795668
+          },
+          "5B": {
+            "sharpe_ratios": {
+              "1A": -2.4597663560044865,
+              "1B": -1.9902123883001608,
+              "2A": -2.544623246376781,
+              "2B": -2.1120626673308758
+            },
+            "total_effect": 0.3477036886736107,
+            "meets_target": true,
+            "p_value": 0.8828234353129374,
+            "difference": 0.10054167983877327
+          }
+        }
+      }
+    }
+  },
+  "H4_capacity_improvement": {
+    "description": "Break-even AUM of combined approach (2B) vs baseline (1A)",
+    "target": "25x increase (~$200M to ~$5B)",
+    "per_model": {
+      "xgboost": {
+        "breakeven_1A": 0.0,
+        "breakeven_2B": 0.0,
+        "uplift_ratio": NaN
+      },
+      "random_forest": {
+        "breakeven_1A": 0.0,
+        "breakeven_2B": 0.0,
+        "uplift_ratio": NaN
+      },
+      "neural_network": {
+        "breakeven_1A": 0.0,
+        "breakeven_2B": 0.0,
+        "uplift_ratio": NaN
+      }
+    }
+  }
+}

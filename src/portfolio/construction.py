@@ -84,19 +84,16 @@ def _apply_position_cap(weights: pd.Series, cap: float) -> pd.Series:
 def _assign_quantiles(
     predictions: pd.Series, n_quantiles: int
 ) -> pd.Series:
-    """Assign stocks to quantile bins (1 = lowest, n = highest)."""
-    try:
-        quantiles = pd.qcut(
-            predictions, q=n_quantiles, labels=False, duplicates="drop"
-        ) + 1  # 1-indexed
-    except ValueError:
-        # Fallback if too few unique values for qcut
-        quantiles = pd.cut(
-            predictions.rank(method="first"),
-            bins=n_quantiles,
-            labels=False,
-            include_lowest=True,
-        ) + 1
+    """Assign stocks to quantile bins (1 = lowest, n = highest).
+
+    Always uses rank-based assignment to handle tied predictions
+    (common with tree models producing near-constant outputs).
+    """
+    quantiles = pd.qcut(
+        predictions.rank(method="first"),
+        q=n_quantiles,
+        labels=False,
+    ) + 1  # 1-indexed
     return quantiles
 
 

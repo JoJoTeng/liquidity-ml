@@ -174,9 +174,15 @@ def _prepare_xy(
     train_norm = train_val_norm.loc[train_df.index]
     val_norm = train_val_norm.loc[val_df.index]
 
-    # ── Fill NaN features with 0.0 (neutral rank) ──
-    for df in [train_norm, val_norm, test_norm]:
-        df[features] = df[features].fillna(0.0)
+    # ── Handle missing features ──
+    missing_strategy = config.get("training", {}).get("preprocessing", {}).get("missing_fill", "zero")
+    if missing_strategy == "drop":
+        train_norm = train_norm.dropna(subset=features)
+        val_norm = val_norm.dropna(subset=features)
+        test_norm = test_norm.dropna(subset=features)
+    else:
+        for df in [train_norm, val_norm, test_norm]:
+            df[features] = df[features].fillna(0.0)
 
     # ── Drop rows with NaN target ──
     train_norm = train_norm.dropna(subset=[target_col])
@@ -186,6 +192,10 @@ def _prepare_xy(
     # ── Compute liquidity weights (uses raw liq_* columns, not features) ──
     weights_train = compute_weights(train_norm, scheme=PRIMARY_SCHEME)
     weights_val = compute_weights(val_norm, scheme=PRIMARY_SCHEME)
+
+    assert len(weights_train) == len(train_norm), (
+        f"Weight/train mismatch: {len(weights_train)} vs {len(train_norm)}"
+    )
 
     # ── Extract numpy arrays ──
     X_train = train_norm[features].values
@@ -366,8 +376,8 @@ def _rolling_predict(
         fi_std_list.append(fi_std)
         fi_wt_list.append(fi_wt)
 
-        # ── 8. SHAP values (optional) ──
-        if compute_shap:
+        # ── 8. SHAP values (optional, skip for neural_network) ──
+        if compute_shap and model_name != "neural_network":
             try:
                 sv_std = model_std.get_shap_values(
                     data["X_test"],

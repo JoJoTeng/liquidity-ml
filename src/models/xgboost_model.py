@@ -64,8 +64,9 @@ class XGBoostPredictor(BaseReturnPredictor):
             "verbosity": 0,
         }
 
-        # Early stopping setup
+        # Early stopping setup (with minimum rounds floor)
         early_stopping = self.config.get("early_stopping_rounds", 20)
+        min_rounds = self.config.get("min_rounds", 10)
         eval_set = None
         if X_val is not None and y_val is not None:
             eval_set = [(X_val, y_val)]
@@ -90,6 +91,17 @@ class XGBoostPredictor(BaseReturnPredictor):
             if hasattr(self.model, "best_iteration") and self.model.best_iteration
             else params["n_estimators"]
         )
+
+        # Enforce minimum rounds: retrain with n_estimators=min_rounds if too few
+        if n_trees < min_rounds and eval_set is not None:
+            params_min = {**params, "n_estimators": min_rounds}
+            params_min.pop("early_stopping_rounds", None)
+            self.model = xgb.XGBRegressor(**params_min)
+            self.model.fit(X_train, y_train, **{
+                k: v for k, v in fit_kwargs.items()
+                if k not in ("eval_set", "sample_weight_eval_set")
+            })
+            n_trees = min_rounds
         weighted_str = "weighted" if sample_weight is not None else "standard"
         logger.info(
             "XGBoost %s training: %d trees, train shape %s",

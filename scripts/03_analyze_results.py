@@ -215,14 +215,22 @@ def build_net_results_table(
                     sr = np.nan
                 row[f"net_SR_{cell}_{aum_label}"] = sr
 
-            # Net effects at this AUM
+            # Net effect decomposition at this AUM
             sr_1a = row.get(f"net_SR_1A_{aum_label}", np.nan)
             sr_1b = row.get(f"net_SR_1B_{aum_label}", np.nan)
             sr_2a = row.get(f"net_SR_2A_{aum_label}", np.nan)
             sr_2b = row.get(f"net_SR_2B_{aum_label}", np.nan)
-            row[f"net_training_{aum_label}"] = sr_2a - sr_1a
-            row[f"net_portfolio_{aum_label}"] = sr_1b - sr_1a
-            row[f"net_total_{aum_label}"] = sr_2b - sr_1a
+            net_training = sr_2a - sr_1a
+            net_portfolio = sr_1b - sr_1a
+            net_total = sr_2b - sr_1a
+            net_interaction = net_total - net_training - net_portfolio
+            row[f"net_training_{aum_label}"] = net_training
+            row[f"net_portfolio_{aum_label}"] = net_portfolio
+            row[f"net_total_{aum_label}"] = net_total
+            row[f"net_interaction_{aum_label}"] = net_interaction
+            row[f"net_training_share_{aum_label}"] = (
+                net_training / net_total if net_total != 0 else np.nan
+            )
 
             # P-values from bootstrap tests (if available)
             if net_tests and model_name in net_tests:
@@ -433,7 +441,32 @@ def compute_net_effect_tests(
                 r_2a = _aligned(net_series["2A"])
                 r_2b = _aligned(net_series["2B"])
 
+                # Net Sharpe ratios
+                net_sharpes = {
+                    "1A": sharpe_ratio(r_1a),
+                    "1B": sharpe_ratio(r_1b),
+                    "2A": sharpe_ratio(r_2a),
+                    "2B": sharpe_ratio(r_2b),
+                }
+
+                # Net effect decomposition
+                net_portfolio_effect = net_sharpes["1B"] - net_sharpes["1A"]
+                net_training_effect = net_sharpes["2A"] - net_sharpes["1A"]
+                net_total_effect = net_sharpes["2B"] - net_sharpes["1A"]
+                net_interaction = (
+                    net_total_effect - net_portfolio_effect - net_training_effect
+                )
+
                 model_tests[aum_label] = {
+                    "sharpe_ratios": net_sharpes,
+                    "portfolio_effect": net_portfolio_effect,
+                    "training_effect": net_training_effect,
+                    "total_effect": net_total_effect,
+                    "interaction": net_interaction,
+                    "training_share": (
+                        net_training_effect / net_total_effect
+                        if net_total_effect != 0 else None
+                    ),
                     "lw_portfolio": bootstrap_sharpe_test(
                         r_1b, r_1a, config=config
                     ),
@@ -449,8 +482,12 @@ def compute_net_effect_tests(
                 }
 
                 logger.info(
-                    "  %s / %s: net H1 p=%.4f, net H3 p=%.4f",
+                    "  %s / %s: net SR(1A)=%.3f, SR(2B)=%.3f, "
+                    "training=%.3f, portfolio=%.3f, total=%.3f, "
+                    "H1 p=%.4f, H3 p=%.4f",
                     model_name, aum_label,
+                    net_sharpes["1A"], net_sharpes["2B"],
+                    net_training_effect, net_portfolio_effect, net_total_effect,
                     model_tests[aum_label]["lw_h3"]["p_value"],
                     model_tests[aum_label]["lw_total"]["p_value"],
                 )
@@ -485,11 +522,16 @@ def build_hypothesis_summary(
             "training_share": training / total if total != 0 else None,
             "p_value": decomp["lw_h3"]["p_value"],
         }
-        # Add net-based p-values per AUM level
+        # Add net-based decomposition per AUM level
         if net_tests and model_name in net_tests:
             net_h1 = {}
             for aum_label, tests in net_tests[model_name].items():
                 net_h1[aum_label] = {
+                    "training_effect": tests["training_effect"],
+                    "portfolio_effect": tests["portfolio_effect"],
+                    "total_effect": tests["total_effect"],
+                    "interaction": tests["interaction"],
+                    "training_share": tests["training_share"],
                     "p_value": tests["lw_h3"]["p_value"],
                     "difference": tests["lw_h3"]["difference"],
                 }
@@ -518,11 +560,14 @@ def build_hypothesis_summary(
             "p_value": decomp["lw_total"]["p_value"],
             "meets_target": total >= 0.20,
         }
-        # Add net-based p-values per AUM level
+        # Add net-based decomposition per AUM level
         if net_tests and model_name in net_tests:
             net_h3 = {}
             for aum_label, tests in net_tests[model_name].items():
                 net_h3[aum_label] = {
+                    "sharpe_ratios": tests["sharpe_ratios"],
+                    "total_effect": tests["total_effect"],
+                    "meets_target": tests["total_effect"] >= 0.20,
                     "p_value": tests["lw_total"]["p_value"],
                     "difference": tests["lw_total"]["difference"],
                 }
@@ -1083,13 +1128,21 @@ def main():
             "  H1 (Training Dominance): share=%.1f%% (target: 60-70%%), p=%.4f [gross]",
             share * 100, decomp["lw_h3"]["p_value"],
         )
-        # Net H1 p-values
+        # Net H1 decomposition
         if model_name in net_tests:
             for aum_label in aum_labels:
                 if aum_label in net_tests[model_name]:
-                    p = net_tests[model_name][aum_label]["lw_h3"]["p_value"]
+                    nt = net_tests[model_name][aum_label]
+                    net_share = (
+                        nt["training_share"] * 100
+                        if nt["training_share"] is not None else 0
+                    )
                     logger.info(
-                        "    H1 (net %s): p=%.4f", aum_label, p,
+                        "    H1 (net %s): share=%.1f%%, training=%.3f, "
+                        "portfolio=%.3f, total=%.3f, p=%.4f",
+                        aum_label, net_share,
+                        nt["training_effect"], nt["portfolio_effect"],
+                        nt["total_effect"], nt["lw_h3"]["p_value"],
                     )
         if h2_summary is not None and len(h2_summary) > 0:
             h2_row = h2_summary[h2_summary["model"] == model_name]
@@ -1102,14 +1155,17 @@ def main():
             "  H3 (Sharpe Improvement): total_effect=%.3f (target: >=0.20), p=%.4f [gross]",
             total, decomp["lw_total"]["p_value"],
         )
-        # Net H3 p-values
+        # Net H3 decomposition
         if model_name in net_tests:
             for aum_label in aum_labels:
                 if aum_label in net_tests[model_name]:
-                    p = net_tests[model_name][aum_label]["lw_total"]["p_value"]
-                    diff = net_tests[model_name][aum_label]["lw_total"]["difference"]
+                    nt = net_tests[model_name][aum_label]
                     logger.info(
-                        "    H3 (net %s): diff=%.3f, p=%.4f", aum_label, diff, p,
+                        "    H3 (net %s): total_effect=%.3f, p=%.4f, "
+                        "SR(1A)=%.3f, SR(2B)=%.3f",
+                        aum_label, nt["total_effect"],
+                        nt["lw_total"]["p_value"],
+                        nt["sharpe_ratios"]["1A"], nt["sharpe_ratios"]["2B"],
                     )
         model_cap = capacity_df[capacity_df["model"] == model_name]
         be_2b_row = model_cap[model_cap["cell"] == "2B"]

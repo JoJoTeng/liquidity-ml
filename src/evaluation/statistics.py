@@ -281,6 +281,17 @@ def factor_alpha(
         logger.warning("factor_alpha: only %d observations after merge", len(merged))
         return _empty_alpha_result(factor_cols)
 
+    # Filter to factors actually available (handles FF5 download failure gracefully)
+    available_cols = [c for c in factor_cols if c in merged.columns]
+    if len(available_cols) < len(factor_cols):
+        missing = set(factor_cols) - set(available_cols)
+        logger.warning("factor_alpha: missing factors %s, using %s only", missing, available_cols)
+        factor_cols = available_cols
+
+    if not factor_cols:
+        logger.warning("factor_alpha: no factor columns available")
+        return _empty_alpha_result(FACTOR_MODELS.get(model, []))
+
     y = merged["ret"].values
     X = merged[factor_cols].values
     Xc = sm.add_constant(X)
@@ -742,8 +753,9 @@ def bootstrap_sharpe_test(
     if not isinstance(r_n, pd.Series):
         r_n = pd.Series(np.asarray(r_n, dtype=np.float64))
 
-    r_i = r_i.dropna()
-    r_n = r_n.dropna()
+    mask = r_i.notna() & r_n.notna()
+    r_i = r_i[mask]
+    r_n = r_n[mask]
 
     if len(r_i) < 12 or len(r_n) < 12:
         logger.warning("bootstrap_sharpe_test: too few observations (%d, %d)",

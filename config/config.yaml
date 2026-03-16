@@ -20,7 +20,7 @@ data:
   end_yyyymm: 202412
 
   id_cols: ["permno", "yyyymm"]
-  target_col: "excess_ret"
+  target_col: "ret"
   return_col: "ret"
 
   # Feature groups for mechanism analysis (Hypothesis 2)
@@ -239,19 +239,20 @@ models:
     - neural_network
 
   xgboost:
-    n_estimators: 300
+    n_estimators: 500
     max_depth: 4
-    learning_rate: 0.05
+    learning_rate: 0.01
     subsample: 0.8
     colsample_bytree: 0.8
     min_child_weight: 100
     reg_alpha: 0.1
     reg_lambda: 1.0
     early_stopping_rounds: 20
+    min_rounds: 10
     search_space:
       max_depth: [3, 4, 5, 6]
-      learning_rate: [0.01, 0.05, 0.1]
-      n_estimators: [100, 300, 500]
+      learning_rate: [0.005, 0.01, 0.05]
+      n_estimators: [300, 500, 800]
       min_child_weight: [50, 100, 200]
 
   random_forest:
@@ -272,7 +273,7 @@ models:
     learning_rate: 0.001
     batch_size: 256
     epochs: 100
-    patience: 10
+    patience: 20
     weight_decay: 0.0001
     search_space:
       hidden_layers:
@@ -343,5 +344,5 @@ inference:
 shap:
   compute_shap: true              # Master switch (set false for fast runs)
   background_samples: 100         # Background data size for NN explainer
-  max_test_samples: null          # null = all test stocks; set e.g. 500 to cap NN cost
+  max_test_samples: 500           # Cap test stocks for NN KernelExplainer speed
   tree_check_additivity: false    # Skip slow consistency check for TreeExplainer

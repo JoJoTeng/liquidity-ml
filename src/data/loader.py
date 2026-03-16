@@ -125,9 +125,10 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
             logger.warning("Liquidity measure '%s' not found in panel", col)
 
     # ── 6. Forward-shift target ─────────────────────────────
-    #   Month t features predict month t+1 excess return
+    #   Month t features predict month t+1 return
     panel = panel.sort_values(["permno", "yyyymm"])
     panel["excess_ret"] = panel.groupby("permno")["excess_ret"].shift(-1)
+    panel["ret"] = panel.groupby("permno")["ret"].shift(-1)
 
     # ── 7. Filter date range ────────────────────────────────
     start = config["data"]["start_yyyymm"]
@@ -137,7 +138,7 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
 
     # ── 8. Drop NaN targets ─────────────────────────────────
     n_before = len(panel)
-    panel = panel.dropna(subset=["excess_ret"])
+    panel = panel.dropna(subset=["excess_ret", "ret"])
     logger.info("Dropped %d rows with NaN target", n_before - len(panel))
 
     # ── Summary ─────────────────────────────────────────────
