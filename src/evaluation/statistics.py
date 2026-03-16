@@ -51,11 +51,14 @@ ONE_SIDED_TEST: bool = _inf_cfg["one_sided_test"]
 CALIBRATE_BLOCK_LENGTH: bool = _inf_cfg.get("calibrate_block_length", False)
 BLOCK_GRID: list[int] = _inf_cfg.get("block_grid", [2, 4, 6, 8, 10])
 
-FACTOR_MODELS: dict[str, list[str]] = _inf_cfg.get("factor_models", {
-    "capm": ["Mkt-RF"],
-    "ff3": ["Mkt-RF", "SMB", "HML"],
-    "ff5": ["Mkt-RF", "SMB", "HML", "RMW", "CMA"],
-})
+FACTOR_MODELS: dict[str, list[str]] = _inf_cfg.get(
+    "factor_models",
+    {
+        "capm": ["Mkt-RF"],
+        "ff3": ["Mkt-RF", "SMB", "HML"],
+        "ff5": ["Mkt-RF", "SMB", "HML", "RMW", "CMA"],
+    },
+)
 
 ANNUALIZE_FACTOR: int = 12  # monthly → annual
 
@@ -65,9 +68,7 @@ ANNUALIZE_FACTOR: int = 12  # monthly → annual
 # ══════════════════════════════════════════════════════════════
 
 
-def load_ff_factors(
-    n_factors: int = 5, config: dict | None = None
-) -> pd.DataFrame:
+def load_ff_factors(n_factors: int = 5, config: dict | None = None) -> pd.DataFrame:
     """Load Fama-French factor data.
 
     Parameters
@@ -138,9 +139,7 @@ def load_ff_factors(
 # ══════════════════════════════════════════════════════════════
 
 
-def sharpe_ratio(
-    returns: np.ndarray | pd.Series, annualize: bool = True
-) -> float:
+def sharpe_ratio(returns: np.ndarray | pd.Series, annualize: bool = True) -> float:
     """Annualized Sharpe ratio.
 
     Parameters
@@ -189,8 +188,13 @@ def newey_west_tstat(
     r = r[~np.isnan(r)]
 
     if len(r) < 3:
-        return {"mean": np.nan, "std_err": np.nan, "t_stat": np.nan,
-                "p_value": np.nan, "n_obs": len(r)}
+        return {
+            "mean": np.nan,
+            "std_err": np.nan,
+            "t_stat": np.nan,
+            "p_value": np.nan,
+            "n_obs": len(r),
+        }
 
     X = np.ones((len(r), 1))
     result = OLS(r, X).fit(cov_type="HAC", cov_kwds={"maxlags": lags})
@@ -274,8 +278,11 @@ def factor_alpha(
 
     n_lost = len(ret_df) - len(merged)
     if n_lost > 0:
-        logger.debug("factor_alpha: %d rows lost in merge (%.1f%%)",
-                      n_lost, 100 * n_lost / len(ret_df))
+        logger.debug(
+            "factor_alpha: %d rows lost in merge (%.1f%%)",
+            n_lost,
+            100 * n_lost / len(ret_df),
+        )
 
     if len(merged) < 10:
         logger.warning("factor_alpha: only %d observations after merge", len(merged))
@@ -285,7 +292,9 @@ def factor_alpha(
     available_cols = [c for c in factor_cols if c in merged.columns]
     if len(available_cols) < len(factor_cols):
         missing = set(factor_cols) - set(available_cols)
-        logger.warning("factor_alpha: missing factors %s, using %s only", missing, available_cols)
+        logger.warning(
+            "factor_alpha: missing factors %s, using %s only", missing, available_cols
+        )
         factor_cols = available_cols
 
     if not factor_cols:
@@ -301,8 +310,12 @@ def factor_alpha(
     # Extract results
     alpha = float(result.params[0])
     betas = {col: float(result.params[i + 1]) for i, col in enumerate(factor_cols)}
-    beta_tstats = {col: float(result.tvalues[i + 1]) for i, col in enumerate(factor_cols)}
-    beta_pvalues = {col: float(result.pvalues[i + 1]) for i, col in enumerate(factor_cols)}
+    beta_tstats = {
+        col: float(result.tvalues[i + 1]) for i, col in enumerate(factor_cols)
+    }
+    beta_pvalues = {
+        col: float(result.pvalues[i + 1]) for i, col in enumerate(factor_cols)
+    }
 
     return {
         "alpha": alpha,
@@ -322,12 +335,16 @@ def factor_alpha(
 def _empty_alpha_result(factor_cols: list[str]) -> dict[str, Any]:
     """Return NaN result when there's insufficient data."""
     return {
-        "alpha": np.nan, "alpha_annual": np.nan,
-        "alpha_se": np.nan, "alpha_tstat": np.nan, "alpha_pvalue": np.nan,
+        "alpha": np.nan,
+        "alpha_annual": np.nan,
+        "alpha_se": np.nan,
+        "alpha_tstat": np.nan,
+        "alpha_pvalue": np.nan,
         "betas": {c: np.nan for c in factor_cols},
         "beta_tstats": {c: np.nan for c in factor_cols},
         "beta_pvalues": {c: np.nan for c in factor_cols},
-        "r_squared": np.nan, "n_obs": 0,
+        "r_squared": np.nan,
+        "n_obs": 0,
         "residuals": np.array([]),
     }
 
@@ -365,12 +382,11 @@ def grs_test(
 
     if T <= N + K:
         logger.warning("GRS: T=%d ≤ N+K=%d, test undefined", T, N + K)
-        return {"f_stat": np.nan, "p_value": np.nan,
-                "n_portfolios": N, "n_factors": K}
+        return {"f_stat": np.nan, "p_value": np.nan, "n_portfolios": N, "n_factors": K}
 
     resid_cov = np.cov(resid_matrix, rowvar=False)  # (N, N)
-    fbar = factor_data.mean(axis=0)                   # (K,)
-    sigma_f = np.cov(factor_data, rowvar=False)        # (K, K)
+    fbar = factor_data.mean(axis=0)  # (K,)
+    sigma_f = np.cov(factor_data, rowvar=False)  # (K, K)
 
     # Handle scalar case for CAPM (K=1)
     if sigma_f.ndim == 0:
@@ -383,8 +399,7 @@ def grs_test(
         inv_sigma_f = np.linalg.inv(sigma_f)
     except np.linalg.LinAlgError:
         logger.warning("GRS: singular matrix, cannot compute test")
-        return {"f_stat": np.nan, "p_value": np.nan,
-                "n_portfolios": N, "n_factors": K}
+        return {"f_stat": np.nan, "p_value": np.nan, "n_portfolios": N, "n_factors": K}
 
     f_num = ((T - N - K) / N) * float(alpha_vec @ inv_resid @ alpha_vec)
     f_den = 1.0 + float(fbar @ inv_sigma_f @ fbar)
@@ -505,9 +520,7 @@ def _compute_se_parzen_pw(r_i: pd.Series, r_n: pd.Series) -> float:
         gradient[3] = 0.5 * mu_n / (gamma_n - mu_n**2) ** 1.5
 
     # Data matrix: [r_i, r_n, r_i², r_n²]
-    y = np.column_stack([
-        r_i.values, r_n.values, r_i.values**2, r_n.values**2
-    ])
+    y = np.column_stack([r_i.values, r_n.values, r_i.values**2, r_n.values**2])
     y_centered = y - y.mean(axis=0)
     T = len(r_i)
 
@@ -553,8 +566,12 @@ def _delta_hat(r_i: pd.Series, r_n: pd.Series) -> float:
 
 
 def _bootstrap_statistic(
-    r_i: pd.Series, r_n: pd.Series, delta_obs: float,
-    b: int, rng: np.random.Generator, one_sided: bool = False,
+    r_i: pd.Series,
+    r_n: pd.Series,
+    delta_obs: float,
+    b: int,
+    rng: np.random.Generator,
+    one_sided: bool = False,
 ) -> float:
     """Single studentized bootstrap statistic."""
     data = np.column_stack([r_i.values, r_n.values])
@@ -572,9 +589,8 @@ def _bootstrap_statistic(
     gamma_i_star = (r_i_star**2).mean()
     gamma_n_star = (r_n_star**2).mean()
 
-    delta_star = (
-        _sharpe_from_moments(mu_i_star, gamma_i_star)
-        - _sharpe_from_moments(mu_n_star, gamma_n_star)
+    delta_star = _sharpe_from_moments(mu_i_star, gamma_i_star) - _sharpe_from_moments(
+        mu_n_star, gamma_n_star
     )
 
     # Gradient at bootstrap estimates
@@ -588,12 +604,14 @@ def _bootstrap_statistic(
         gradient[1] = -gamma_n_star / var_n**1.5
         gradient[3] = 0.5 * mu_n_star / var_n**1.5
 
-    y_star = np.column_stack([
-        r_i_star - mu_i_star,
-        r_n_star - mu_n_star,
-        r_i_star**2 - gamma_i_star,
-        r_n_star**2 - gamma_n_star,
-    ])
+    y_star = np.column_stack(
+        [
+            r_i_star - mu_i_star,
+            r_n_star - mu_n_star,
+            r_i_star**2 - gamma_i_star,
+            r_n_star**2 - gamma_n_star,
+        ]
+    )
 
     T = len(r_i_star)
     n_blocks = T // b
@@ -618,10 +636,16 @@ def _bootstrap_statistic(
 
 
 def _choose_block_length(
-    r_i: pd.Series, r_n: pd.Series, alpha: float = 0.05,
-    grid: tuple = (2, 4, 6, 8, 10), K: int = 1000,
-    M_inner: int = 199, b_av: int = 5, T_start: int = 50,
-    seed: int | None = None, one_sided: bool = False,
+    r_i: pd.Series,
+    r_n: pd.Series,
+    alpha: float = 0.05,
+    grid: tuple = (2, 4, 6, 8, 10),
+    K: int = 1000,
+    M_inner: int = 199,
+    b_av: int = 5,
+    T_start: int = 50,
+    seed: int | None = None,
+    one_sided: bool = False,
 ) -> int:
     """Block length calibration — Ledoit-Wolf (2008) Algorithm 3.1."""
     rng = np.random.default_rng(seed)
@@ -654,10 +678,18 @@ def _choose_block_length(
             t += 1
 
         for t in range(1, T_start + T):
-            var_data[t, 0] = (coef1[0] + coef1[1] * var_data[t - 1, 0]
-                              + coef1[2] * var_data[t - 1, 1] + resid_star[t, 0])
-            var_data[t, 1] = (coef2[0] + coef2[1] * var_data[t - 1, 0]
-                              + coef2[2] * var_data[t - 1, 1] + resid_star[t, 1])
+            var_data[t, 0] = (
+                coef1[0]
+                + coef1[1] * var_data[t - 1, 0]
+                + coef1[2] * var_data[t - 1, 1]
+                + resid_star[t, 0]
+            )
+            var_data[t, 1] = (
+                coef2[0]
+                + coef2[1] * var_data[t - 1, 0]
+                + coef2[2] * var_data[t - 1, 1]
+                + resid_star[t, 1]
+            )
 
         var_trunc = var_data[T_start : T_start + T]
         r_i_k = pd.Series(var_trunc[:, 0])
@@ -674,12 +706,19 @@ def _choose_block_length(
             else:
                 d_k = abs(delta_k - delta_obs) / se_k
 
-            d_star = np.array([
-                _bootstrap_statistic(r_i_k, r_n_k, delta_k, b,
-                                     np.random.default_rng(rng.integers(2**32)),
-                                     one_sided)
-                for _ in range(M_inner)
-            ])
+            d_star = np.array(
+                [
+                    _bootstrap_statistic(
+                        r_i_k,
+                        r_n_k,
+                        delta_k,
+                        b,
+                        np.random.default_rng(rng.integers(2**32)),
+                        one_sided,
+                    )
+                    for _ in range(M_inner)
+                ]
+            )
 
             if one_sided:
                 reject = np.sum(d_star >= d_k) / len(d_star) < alpha
@@ -722,7 +761,7 @@ def bootstrap_sharpe_test(
     calibrate_block_length : Whether to calibrate block length
         (default from config: False — very expensive if True).
     one_sided : One-sided test (default from config: True).
-        If True, tests H₀: SR(n) ≤ SR(i) vs H₁: SR(n) > SR(i).
+        If True, tests H₀: SR(i) ≤ SR(n) vs H₁: SR(i) > SR(n).
     config : Override config.
 
     Returns
@@ -758,11 +797,18 @@ def bootstrap_sharpe_test(
     r_n = r_n[mask]
 
     if len(r_i) < 12 or len(r_n) < 12:
-        logger.warning("bootstrap_sharpe_test: too few observations (%d, %d)",
-                        len(r_i), len(r_n))
-        return {"difference": np.nan, "p_value": np.nan, "se": np.nan,
-                "block_length": 0, "test_stat": np.nan, "reject": False,
-                "one_sided": one_sided}
+        logger.warning(
+            "bootstrap_sharpe_test: too few observations (%d, %d)", len(r_i), len(r_n)
+        )
+        return {
+            "difference": np.nan,
+            "p_value": np.nan,
+            "se": np.nan,
+            "block_length": 0,
+            "test_stat": np.nan,
+            "reject": False,
+            "one_sided": one_sided,
+        }
 
     rng = np.random.default_rng(seed)
 
@@ -772,9 +818,15 @@ def bootstrap_sharpe_test(
 
     if se <= 1e-10:
         logger.warning("bootstrap_sharpe_test: SE ≈ 0")
-        return {"difference": float(delta_hat), "p_value": 1.0, "se": 0.0,
-                "block_length": 0, "test_stat": 0.0, "reject": False,
-                "one_sided": one_sided}
+        return {
+            "difference": float(delta_hat),
+            "p_value": 1.0,
+            "se": 0.0,
+            "block_length": 0,
+            "test_stat": 0.0,
+            "reject": False,
+            "one_sided": one_sided,
+        }
 
     if one_sided:
         d_obs = delta_hat / se
@@ -784,8 +836,14 @@ def bootstrap_sharpe_test(
     # Choose block length
     if calibrate_block_length:
         b = _choose_block_length(
-            r_i, r_n, alpha, block_grid, K, 199,
-            seed=rng.integers(2**32), one_sided=one_sided,
+            r_i,
+            r_n,
+            alpha,
+            block_grid,
+            K,
+            199,
+            seed=rng.integers(2**32),
+            one_sided=one_sided,
         )
     else:
         b = block_grid[len(block_grid) // 2]
@@ -801,11 +859,19 @@ def bootstrap_sharpe_test(
 
     if len(d_star) == 0:
         logger.warning("bootstrap_sharpe_test: all bootstrap statistics invalid")
-        return {"difference": float(delta_hat), "p_value": np.nan, "se": float(se),
-                "block_length": b, "test_stat": float(d_obs), "reject": False,
-                "one_sided": one_sided}
+        return {
+            "difference": float(delta_hat),
+            "p_value": np.nan,
+            "se": float(se),
+            "block_length": b,
+            "test_stat": float(d_obs),
+            "reject": False,
+            "one_sided": one_sided,
+        }
 
     # P-value
+    # One-sided: H₁: SR(i) > SR(n). Reject when d_obs is large positive.
+    # p = fraction of bootstrap replicates at least as extreme as observed.
     if one_sided:
         p_value = (np.sum(d_star >= d_obs) + 1) / (M + 1)
     else:
@@ -824,8 +890,7 @@ def bootstrap_sharpe_test(
     # CI for two-sided test
     if not one_sided and len(d_star) > 0:
         crit = float(np.quantile(d_star, 1 - alpha / 2))
-        result["ci"] = (float(delta_hat - crit * se),
-                        float(delta_hat + crit * se))
+        result["ci"] = (float(delta_hat - crit * se), float(delta_hat + crit * se))
 
     return result
 
@@ -953,16 +1018,28 @@ def paired_ttest(
 
     n = len(diff)
     if n < 2:
-        return {"mean_diff": np.nan, "t_stat": np.nan, "p_value": np.nan,
-                "n_pairs": n, "ci_lower": np.nan, "ci_upper": np.nan}
+        return {
+            "mean_diff": np.nan,
+            "t_stat": np.nan,
+            "p_value": np.nan,
+            "n_pairs": n,
+            "ci_lower": np.nan,
+            "ci_upper": np.nan,
+        }
 
     mean_diff = float(np.mean(diff))
     se = float(np.std(diff, ddof=1) / np.sqrt(n))
 
     if se < 1e-15:
         # All differences identical (e.g. zero) → no evidence of difference
-        return {"mean_diff": mean_diff, "t_stat": 0.0, "p_value": 1.0,
-                "n_pairs": n, "ci_lower": mean_diff, "ci_upper": mean_diff}
+        return {
+            "mean_diff": mean_diff,
+            "t_stat": 0.0,
+            "p_value": 1.0,
+            "n_pairs": n,
+            "ci_lower": mean_diff,
+            "ci_upper": mean_diff,
+        }
 
     t_result = stats.ttest_1samp(diff, popmean=0.0, alternative=alternative)
 
@@ -1013,8 +1090,7 @@ def compute_effect_decomposition(
     -------
     dict with nested results for Sharpe ratios, LW tests, factor alphas.
     """
-    cells = {"1A": returns_1a, "1B": returns_1b,
-             "2A": returns_2a, "2B": returns_2b}
+    cells = {"1A": returns_1a, "1B": returns_1b, "2A": returns_2a, "2B": returns_2b}
 
     # Sharpe ratios
     sharpes = {k: sharpe_ratio(v) for k, v in cells.items()}
@@ -1038,12 +1114,17 @@ def compute_effect_decomposition(
         for model_name in FACTOR_MODELS:
             alphas[model_name] = {}
             for cell_name, cell_ret in cells.items():
-                ret_df = pd.DataFrame({
-                    "yyyymm": np.asarray(yyyymm),
-                    "ret_long_short": np.asarray(cell_ret),
-                })
+                ret_df = pd.DataFrame(
+                    {
+                        "yyyymm": np.asarray(yyyymm),
+                        "ret_long_short": np.asarray(cell_ret),
+                    }
+                )
                 alphas[model_name][cell_name] = factor_alpha(
-                    ret_df, model=model_name, ff_factors=ff_factors, config=config,
+                    ret_df,
+                    model=model_name,
+                    ff_factors=ff_factors,
+                    config=config,
                 )
 
     return {
