@@ -203,6 +203,7 @@ liquidity:
     - lambda_tc # price impact (Frazzini-style)
     - BidAskSpread # bid-ask spread (from CZ predictors)
     - liu_lm # Liu (2006) composite illiquidity LM_12 (from daily CRSP)
+    - daily_sigma # 21-day rolling daily return volatility (for TC model)
     # - DolVol # dollar volume (from CZ predictors)
 
 # ----------------------------------------------------------
@@ -247,8 +248,6 @@ models:
     min_child_weight: 100
     reg_alpha: 0.1
     reg_lambda: 1.0
-    early_stopping_rounds: 20
-    min_rounds: 10
     search_space:
       max_depth: [3, 4, 5, 6]
       learning_rate: [0.005, 0.01, 0.05]
@@ -296,7 +295,7 @@ training:
 
   preprocessing:
     normalization: "rank_quantile" # rank → [-0.5, 0.5]
-    missing_fill: "drop"
+    missing_fill: "zero"
 
 # ----------------------------------------------------------
 # Portfolio Construction
@@ -308,12 +307,20 @@ portfolio:
   position_cap: 0.05
   min_liquidity_pctile: 0.40
   rebalance_frequency: "monthly"
+  buffer_quantiles: 1             # No-trade buffer: keep stocks that move ±1 decile
+                                  # from target. A stock in the long decile (10) stays
+                                  # if it only drops to decile 9. Reduces turnover ~30-50%.
 
 # ----------------------------------------------------------
 # Transaction Cost Model
 # ----------------------------------------------------------
 transaction_costs:
   spread_col: "BidAskSpread"
+  spread_scale: 0.30              # Corwin-Schultz → effective spread calibration
+                                  # CZ BidAskSpread uses high-low estimator (~94bps avg),
+                                  # institutional effective spreads are ~20-30bps (3-5× lower).
+                                  # 0.30 maps ~94bps → ~28bps, consistent with TAQ evidence.
+  spread_cap: 0.05               # Cap spread at 5% (clip outliers)
   lambda_market_impact: 0.1       # Frazzini et al. (2018) Eq. 12
   sigma_col: "daily_sigma"        # 21-day rolling daily return volatility
   adv_col: "dvol_21d"            # average daily dollar volume

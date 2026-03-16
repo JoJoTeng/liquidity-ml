@@ -64,44 +64,20 @@ class XGBoostPredictor(BaseReturnPredictor):
             "verbosity": 0,
         }
 
-        # Early stopping setup (with minimum rounds floor)
-        early_stopping = self.config.get("early_stopping_rounds", 20)
-        min_rounds = self.config.get("min_rounds", 10)
-        eval_set = None
-        if X_val is not None and y_val is not None:
-            eval_set = [(X_val, y_val)]
-            params["early_stopping_rounds"] = early_stopping
-
+        # No early stopping: stock return signals are too noisy for
+        # validation-based stopping — it triggers prematurely (e.g. round 35
+        # of 500) producing near-constant predictions. Regularization params
+        # (max_depth, min_child_weight, reg_alpha/lambda) prevent overfitting.
         self.model = xgb.XGBRegressor(**params)
 
         fit_kwargs: dict[str, Any] = {}
         if sample_weight is not None:
             fit_kwargs["sample_weight"] = sample_weight
-        if eval_set is not None:
-            fit_kwargs["eval_set"] = eval_set
-            fit_kwargs["verbose"] = False
-            if sample_weight_val is not None:
-                fit_kwargs["sample_weight_eval_set"] = [sample_weight_val]
 
         self.model.fit(X_train, y_train, **fit_kwargs)
         self.is_fitted = True
 
-        n_trees = (
-            self.model.best_iteration
-            if hasattr(self.model, "best_iteration") and self.model.best_iteration
-            else params["n_estimators"]
-        )
-
-        # Enforce minimum rounds: retrain with n_estimators=min_rounds if too few
-        if n_trees < min_rounds and eval_set is not None:
-            params_min = {**params, "n_estimators": min_rounds}
-            params_min.pop("early_stopping_rounds", None)
-            self.model = xgb.XGBRegressor(**params_min)
-            self.model.fit(X_train, y_train, **{
-                k: v for k, v in fit_kwargs.items()
-                if k not in ("eval_set", "sample_weight_eval_set")
-            })
-            n_trees = min_rounds
+        n_trees = params["n_estimators"]
         weighted_str = "weighted" if sample_weight is not None else "standard"
         logger.info(
             "XGBoost %s training: %d trees, train shape %s",

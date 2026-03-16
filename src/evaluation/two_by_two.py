@@ -165,6 +165,16 @@ def _prepare_xy(
     """
     target_col = config["data"]["target_col"]  # "excess_ret"
 
+    # ── Drop rows with >50% features missing (safety guard) ──
+    # Matches 01_process_data.py Step 4. Stocks missing most features
+    # are pure noise even after zero-fill; most are microcaps caught
+    # by the liquidity filter anyway.
+    for df_ref in [train_df, val_df, test_df]:
+        frac_miss = df_ref[features].isna().mean(axis=1)
+        drop_mask = frac_miss > 0.5
+        if drop_mask.any():
+            df_ref.drop(df_ref.index[drop_mask], inplace=True)
+
     # ── Normalize: train+val together, test independently ──
     train_val = pd.concat([train_df, val_df], ignore_index=False)
     train_val_norm = normalize_features(train_val, features)
@@ -174,15 +184,11 @@ def _prepare_xy(
     train_norm = train_val_norm.loc[train_df.index]
     val_norm = train_val_norm.loc[val_df.index]
 
-    # ── Handle missing features ──
-    missing_strategy = config.get("training", {}).get("preprocessing", {}).get("missing_fill", "zero")
-    if missing_strategy == "drop":
-        train_norm = train_norm.dropna(subset=features)
-        val_norm = val_norm.dropna(subset=features)
-        test_norm = test_norm.dropna(subset=features)
-    else:
-        for df in [train_norm, val_norm, test_norm]:
-            df[features] = df[features].fillna(0.0)
+    # ── Fill remaining NaN with 0.0 (neutral rank) ──
+    # Consistent with 01_process_data.py and Gu, Kelly & Xiu (2020):
+    # a single missing feature should not disqualify a stock.
+    for df in [train_norm, val_norm, test_norm]:
+        df[features] = df[features].fillna(0.0)
 
     # ── Drop rows with NaN target ──
     train_norm = train_norm.dropna(subset=[target_col])

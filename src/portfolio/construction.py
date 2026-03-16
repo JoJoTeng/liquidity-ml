@@ -235,6 +235,10 @@ def build_portfolio_timeseries(
 ) -> tuple[pd.DataFrame, dict]:
     """Build monthly long-short portfolios over the full test period.
 
+    Uses a no-trade buffer zone: stocks in the previous long/short leg
+    are kept if they remain within ``buffer_quantiles`` deciles of the
+    target. This reduces turnover from noisy month-to-month re-rankings.
+
     Parameters
     ----------
     panel : Full test panel with columns: permno, yyyymm, ret, weight_*, liq_*.
@@ -249,17 +253,32 @@ def build_portfolio_timeseries(
         yyyymm, ret_long, ret_short, ret_long_short, n_long, n_short, turnover
     positions_history : {yyyymm: {"long": {permno: w}, "short": {permno: w}}}
     """
+    if config is None:
+        config = _cfg
+    pcfg = config["portfolio"]
+    buffer_q = pcfg.get("buffer_quantiles", 0)
+
     results: list[dict] = []
     positions_history: dict[int, dict] = {}
     prev_positions: dict[str, dict[int, float]] = {"long": {}, "short": {}}
+    prev_long_permnos: set[int] = set()
+    prev_short_permnos: set[int] = set()
 
     for yyyymm, group in panel.groupby("yyyymm"):
         group_preds = predictions.loc[group.index]
 
-        month_result = build_long_short_portfolio(
-            group, group_preds, weighted=weighted,
-            weight_col=weight_col, config=config,
-        )
+        if buffer_q > 0 and (prev_long_permnos or prev_short_permnos):
+            month_result = _build_portfolio_with_buffer(
+                group, group_preds,
+                prev_long_permnos, prev_short_permnos,
+                buffer_q=buffer_q,
+                weighted=weighted, weight_col=weight_col, config=config,
+            )
+        else:
+            month_result = build_long_short_portfolio(
+                group, group_preds, weighted=weighted,
+                weight_col=weight_col, config=config,
+            )
 
         # Compute turnover vs previous month
         turnover = _compute_turnover(
@@ -278,6 +297,8 @@ def build_portfolio_timeseries(
             "short": month_result["positions_short"],
         }
         prev_positions = positions_history[yyyymm]
+        prev_long_permnos = set(month_result["positions_long"].keys())
+        prev_short_permnos = set(month_result["positions_short"].keys())
 
     results_df = pd.DataFrame(results)
     # Drop position dicts from the DataFrame (kept in positions_history)
@@ -294,6 +315,96 @@ def build_portfolio_timeseries(
     )
 
     return results_df, positions_history
+
+
+def _build_portfolio_with_buffer(
+    df: pd.DataFrame,
+    predictions: np.ndarray | pd.Series,
+    prev_long_permnos: set[int],
+    prev_short_permnos: set[int],
+    buffer_q: int = 1,
+    weighted: bool = False,
+    weight_col: str | None = None,
+    config: dict | None = None,
+) -> dict[str, Any]:
+    """Build long-short portfolio with no-trade buffer zone.
+
+    Stocks already in the long (short) leg are kept if their new quantile
+    is within ``buffer_q`` deciles of the target. New entries must strictly
+    qualify for the target decile. This reduces turnover from noisy
+    month-to-month re-rankings without distorting the portfolio signal.
+    """
+    if config is None:
+        config = _cfg
+    pcfg = config["portfolio"]
+    n_q = pcfg["n_quantiles"]
+    long_q = pcfg["long_quantile"]
+    short_q = pcfg["short_quantile"]
+    cap = pcfg["position_cap"]
+    min_liq_pctile = pcfg["min_liquidity_pctile"]
+
+    if weight_col is None:
+        weight_col = DEFAULT_WEIGHT_COL
+
+    work = df.copy()
+    if isinstance(predictions, np.ndarray):
+        predictions = pd.Series(predictions, index=df.index)
+    work["_pred"] = predictions.values
+
+    # Liquidity filter
+    if PRIMARY_LIQ_COL in work.columns:
+        liq_threshold = work[PRIMARY_LIQ_COL].quantile(min_liq_pctile)
+        work = work[work[PRIMARY_LIQ_COL] >= liq_threshold]
+
+    if len(work) < n_q * 2:
+        return _empty_result()
+
+    # Assign quantiles
+    work["_quantile"] = _assign_quantiles(work["_pred"], n_q)
+
+    # Buffer logic: keep previous holdings if within buffer range
+    long_mask = work["_quantile"] == long_q  # strict qualifiers
+    short_mask = work["_quantile"] == short_q
+
+    # Existing holdings get a wider acceptance band
+    in_prev_long = work["permno"].isin(prev_long_permnos)
+    in_prev_short = work["permno"].isin(prev_short_permnos)
+
+    long_buffer_mask = in_prev_long & (work["_quantile"] >= long_q - buffer_q)
+    short_buffer_mask = in_prev_short & (work["_quantile"] <= short_q + buffer_q)
+
+    long_df = work[long_mask | long_buffer_mask]
+    short_df = work[short_mask | short_buffer_mask]
+
+    if len(long_df) < 2 or len(short_df) < 2:
+        return _empty_result()
+
+    # Compute weights
+    if weighted and weight_col in work.columns:
+        w_long = long_df[weight_col] / long_df[weight_col].sum()
+        w_short = short_df[weight_col] / short_df[weight_col].sum()
+    else:
+        w_long = pd.Series(1.0 / len(long_df), index=long_df.index)
+        w_short = pd.Series(1.0 / len(short_df), index=short_df.index)
+
+    w_long = _apply_position_cap(w_long, cap)
+    w_short = _apply_position_cap(w_short, cap)
+
+    ret_long = (w_long * long_df["ret"]).sum()
+    ret_short = (w_short * short_df["ret"]).sum()
+
+    pos_long = dict(zip(long_df["permno"], w_long))
+    pos_short = dict(zip(short_df["permno"], w_short))
+
+    return {
+        "ret_long": ret_long,
+        "ret_short": ret_short,
+        "ret_long_short": ret_long - ret_short,
+        "n_long": len(long_df),
+        "n_short": len(short_df),
+        "positions_long": pos_long,
+        "positions_short": pos_short,
+    }
 
 
 def _compute_turnover(
@@ -346,6 +457,8 @@ def compute_transaction_costs(
     spread_col = tc_cfg["spread_col"]
     sigma_col = tc_cfg["sigma_col"]
     adv_col = tc_cfg["adv_col"]
+    spread_scale = tc_cfg.get("spread_scale", 1.0)
+    spread_cap = tc_cfg.get("spread_cap", 0.05)
 
     # Build lookup: (permno, yyyymm) → {spread, sigma, adv}
     # Use liq_ prefixed columns if available, fall back to raw
@@ -404,6 +517,11 @@ def compute_transaction_costs(
                     sigma = 0.02
                 if pd.isna(adv) or adv <= 0:
                     adv = 1e6
+
+                # Calibrate spread: CZ Corwin-Schultz → effective spread
+                spread = spread * spread_scale
+                # Clip extreme outliers
+                spread = min(spread, spread_cap)
 
                 # Trade size in dollars
                 q_i = delta_w * aum
