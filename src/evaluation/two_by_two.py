@@ -165,16 +165,6 @@ def _prepare_xy(
     """
     target_col = config["data"]["target_col"]  # "excess_ret"
 
-    # ── Drop rows with >50% features missing (safety guard) ──
-    # Matches 01_process_data.py Step 4. Stocks missing most features
-    # are pure noise even after zero-fill; most are microcaps caught
-    # by the liquidity filter anyway.
-    for df_ref in [train_df, val_df, test_df]:
-        frac_miss = df_ref[features].isna().mean(axis=1)
-        drop_mask = frac_miss > 0.5
-        if drop_mask.any():
-            df_ref.drop(df_ref.index[drop_mask], inplace=True)
-
     # ── Normalize: train+val together, test independently ──
     train_val = pd.concat([train_df, val_df], ignore_index=False)
     train_val_norm = normalize_features(train_val, features)

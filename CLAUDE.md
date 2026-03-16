@@ -87,7 +87,7 @@ All support `sample_weight` in `.fit()` for liquidity-weighted training.
 |-------|------|------------------------|-------------|
 | XGBoost | `xgboost_model.py` | Enters gradient computation | TreeExplainer (exact) |
 | Random Forest | `random_forest_model.py` | Enters impurity criterion | TreeExplainer (exact) |
-| Neural Network | `neural_network_model.py` | Keras weighted MSE loss | DeepExplainer → KernelExplainer |
+| Neural Network | `neural_network_model.py` | PyTorch weighted MSE loss | DeepExplainer → KernelExplainer |
 
 Factory: `from src.models import create_model; m = create_model("xgboost")`
 
@@ -175,7 +175,7 @@ The signed_predictors_all_wide.csv contains:
 - Returns: decimal (0.05 = 5%)
 - Target: excess_ret = ret - RF, shifted forward by 1 month
 - Normalization: rank → quantile [0, 1] → rescale to [-0.5, 0.5]
-- Missing: drop rows with >50% features missing, fill remaining NaN with 0.0
+- Missing: fill NaN with 0.0 after rank-quantile normalization (neutral rank, Gu et al. 2020)
 
 ## Training Protocol
 - Rolling window: 120 months train, 12 months validation, 1 month test
@@ -187,10 +187,13 @@ The signed_predictors_all_wide.csv contains:
 - Decile portfolios: Long Q10 (highest predicted), Short Q1
 - Liquidity filter: remove bottom 40% by dvol_21d
 - Position cap: 5% max per stock (iterative redistribution)
+- No-trade buffer: ±1 decile (stocks in long/short stay if within buffer, reduces turnover)
 
 ## Transaction Costs (Frazzini et al. 2018, Eq. 12)
-TC_i = Spread_i/2 + λ · σ_i · √(Q_i / ADV_i), where λ = 0.1
-AUM scenarios: $100M, $500M, $1B, $5B
+TC_i = (Spread_i × spread_scale)/2 + λ · σ_i · √(Q_i / ADV_i), where λ = 0.1
+- spread_scale = 0.30 (calibrates CZ Corwin-Schultz ~94bps → ~28bps effective)
+- spread_cap = 5% (clips outliers)
+- AUM scenarios: $100M, $500M, $1B, $5B
 Net return columns in saved CSVs: `ret_ls_net_{100M,500M,1B,5B}`
 
 ## Experiment Outputs (02_run_experiment.py)
@@ -244,5 +247,5 @@ pytest tests/ -v                                     # all tests (160 total)
 
 ## Testing
 Run: `pytest tests/ -v -m "not slow"` (159 tests, ~7s)
-The 1 slow test (`test_nn_requires_background`) requires TensorFlow initialization.
+The 1 slow test (`test_nn_requires_background`) requires PyTorch initialization.
 Test files: test_weighting, test_portfolio, test_statistics, test_two_by_two, test_feature_importance.
