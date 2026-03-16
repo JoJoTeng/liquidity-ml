@@ -682,7 +682,7 @@ def _choose_block_length(
             ])
 
             if one_sided:
-                reject = np.sum(d_star <= d_k) / len(d_star) < alpha
+                reject = np.sum(d_star >= d_k) / len(d_star) < alpha
             else:
                 crit = np.quantile(d_star, 1 - alpha / 2)
                 reject = d_k > crit
@@ -807,9 +807,9 @@ def bootstrap_sharpe_test(
 
     # P-value
     if one_sided:
-        p_value = (np.sum(d_star <= d_obs) + 1) / (M + 1)
-    else:
         p_value = (np.sum(d_star >= d_obs) + 1) / (M + 1)
+    else:
+        p_value = (np.sum(np.abs(d_star) >= abs(d_obs)) + 1) / (M + 1)
 
     result: dict[str, Any] = {
         "difference": float(delta_hat),
