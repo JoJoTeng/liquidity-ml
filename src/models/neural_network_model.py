@@ -153,6 +153,8 @@ class NeuralNetPredictor(BaseReturnPredictor):
 
             for start in range(0, len(X_t), batch_size):
                 idx = perm[start : start + batch_size]
+                if len(idx) < 2:
+                    continue  # BatchNorm requires ≥2 samples
                 X_batch = X_t[idx]
                 y_batch = y_t[idx]
 
