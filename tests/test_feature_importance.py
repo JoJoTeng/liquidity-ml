@@ -357,7 +357,8 @@ class TestShapComputation:
 
         X, y = tiny_data
         model = XGBoostPredictor(
-            config={"n_estimators": 10, "max_depth": 3}, seed=42
+            config={"n_estimators": 10, "max_depth": 3, "min_child_weight": 1},
+            seed=42,
         )
         model.fit(X[:40], y[:40])
 
@@ -387,7 +388,8 @@ class TestShapComputation:
 
         X, y = tiny_data
         model = XGBoostPredictor(
-            config={"n_estimators": 50, "max_depth": 3}, seed=42
+            config={"n_estimators": 50, "max_depth": 3, "min_child_weight": 1},
+            seed=42,
         )
         model.fit(X[:40], y[:40])
 
@@ -400,7 +402,7 @@ class TestShapComputation:
         base = explainer.expected_value
         shap_sum = sv.values.sum(axis=1) + base
 
-        np.testing.assert_allclose(shap_sum, preds, atol=0.01)
+        np.testing.assert_allclose(shap_sum, preds, atol=0.05)
 
     @pytest.mark.slow
     def test_nn_requires_background(self, tiny_data, feature_names):

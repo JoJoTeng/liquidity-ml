@@ -163,7 +163,7 @@ def _prepare_xy(
     After normalization, remaining NaN in features are filled with 0.0
     (neutral rank) and rows with NaN target are dropped.
     """
-    target_col = config["data"]["target_col"]  # "excess_ret"
+    target_col = config["data"]["target_col"]
 
     # ── Normalize: train+val together, test independently ──
     train_val = pd.concat([train_df, val_df], ignore_index=False)
@@ -589,8 +589,9 @@ def run_two_by_two(
     )
 
     # ── 7. OOS R² ──
-    month_to_mean = dict(zip(rolling["oos_months"], rolling["expanding_means"]))
-    predictions["expanding_mean"] = predictions["yyyymm"].map(month_to_mean)
+    # Zero benchmark for excess returns (Campbell & Thompson 2008):
+    # the null is that expected excess returns are zero.
+    predictions["expanding_mean"] = 0.0
 
     oos_r2_std = oos_r_squared(
         predictions["y_true"].values,

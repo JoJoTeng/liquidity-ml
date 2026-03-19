@@ -121,8 +121,13 @@ def _load_model_results(
 def build_main_results_table(
     all_results: dict[str, dict],
     summary_df: pd.DataFrame | None = None,
+    net_tests: dict[str, dict] | None = None,
+    config: dict | None = None,
 ) -> pd.DataFrame:
-    """Build gross results table: SR per cell, effects, H1/H3 p-values."""
+    """Build results table: SR per cell, effects, H1/H3 p-values (net primary, gross secondary)."""
+    # Determine primary AUM label for net results
+    primary_aum = _get_aum_labels(config)[1] if config else "500M"
+
     rows = []
     for model_name, res in all_results.items():
         decomp = res["effect_decomposition"]
@@ -133,15 +138,14 @@ def build_main_results_table(
         total = decomp["total_effect"]
         interaction = decomp["interaction"]
 
-        # H1: training share (training / total)
+        # Gross H1/H3
         training_share = training / total if total != 0 else np.nan
-        # H1 p-value: lw_h3 tests SR(2A) > SR(1B)
-        h1_pval = decomp["lw_h3"]["p_value"]
-        # H3 p-value: lw_total tests SR(2B) > SR(1A)
-        h3_pval = decomp["lw_total"]["p_value"]
+        h1_gross_pval = decomp["lw_h3"]["p_value"]
+        h3_gross_pval = decomp["lw_total"]["p_value"]
 
-        rows.append({
+        row = {
             "model": model_name,
+            # Gross Sharpe ratios and effects
             "SR_1A": sharpes["1A"],
             "SR_1B": sharpes["1B"],
             "SR_2A": sharpes["2A"],
@@ -151,10 +155,32 @@ def build_main_results_table(
             "total_effect": total,
             "interaction": interaction,
             "training_share": training_share,
-            "h1_pval": h1_pval,
-            "h3_total_effect": total,
-            "h3_pval": h3_pval,
-        })
+            "h1_gross_pval": h1_gross_pval,
+            "h3_gross_total_effect": total,
+            "h3_gross_pval": h3_gross_pval,
+        }
+
+        # Net primary H1/H3 at primary AUM
+        if net_tests and model_name in net_tests:
+            aum_tests = net_tests[model_name].get(primary_aum, {})
+            if aum_tests:
+                row["net_SR_1A"] = aum_tests["sharpe_ratios"]["1A"]
+                row["net_SR_1B"] = aum_tests["sharpe_ratios"]["1B"]
+                row["net_SR_2A"] = aum_tests["sharpe_ratios"]["2A"]
+                row["net_SR_2B"] = aum_tests["sharpe_ratios"]["2B"]
+                row["net_training_effect"] = aum_tests["training_effect"]
+                row["net_portfolio_effect"] = aum_tests["portfolio_effect"]
+                row["net_total_effect"] = aum_tests["total_effect"]
+                row["net_interaction"] = aum_tests["interaction"]
+                row["net_training_share"] = (
+                    aum_tests["training_share"]
+                    if aum_tests["training_share"] is not None else np.nan
+                )
+                row["h1_net_pval"] = aum_tests["lw_h3"]["p_value"]
+                row["h3_net_total_effect"] = aum_tests["total_effect"]
+                row["h3_net_pval"] = aum_tests["lw_total"]["p_value"]
+
+        rows.append(row)
 
     # Ensemble row from summary.csv
     if summary_df is not None and len(summary_df) > 1:
@@ -173,9 +199,9 @@ def build_main_results_table(
             ens["training_effect"] / ens["total_effect"]
             if ens["total_effect"] != 0 else np.nan
         )
-        ens["h1_pval"] = np.nan  # no single p-value for ensemble
-        ens["h3_total_effect"] = ens["total_effect"]
-        ens["h3_pval"] = np.nan
+        ens["h1_gross_pval"] = np.nan
+        ens["h3_gross_total_effect"] = ens["total_effect"]
+        ens["h3_gross_pval"] = np.nan
         rows.append(ens)
 
     return pd.DataFrame(rows)
@@ -505,24 +531,52 @@ def build_hypothesis_summary(
     h2_summary: pd.DataFrame | None,
     capacity_df: pd.DataFrame | None,
     net_tests: dict[str, dict] | None = None,
+    config: dict | None = None,
 ) -> dict:
-    """Consolidate H1–H4 results into a single JSON-serializable dict."""
+    """Consolidate H1–H4 results into a single JSON-serializable dict.
+
+    Primary tests use net returns at the primary AUM ($500M).
+    Gross results are kept as secondary under ``gross_results``.
+    """
+    primary_aum = _get_aum_labels(config)[1] if config else "500M"
 
     # H1: Training Dominance
     h1_per_model = {}
     for model_name, res in all_results.items():
         decomp = res["effect_decomposition"]
-        training = decomp["training_effect"]
-        portfolio = decomp["portfolio_effect"]
-        total = decomp["total_effect"]
-        h1_entry = {
-            "training_effect": training,
-            "portfolio_effect": portfolio,
-            "total_effect": total,
-            "training_share": training / total if total != 0 else None,
+        gross_training = decomp["training_effect"]
+        gross_portfolio = decomp["portfolio_effect"]
+        gross_total = decomp["total_effect"]
+
+        # Gross (secondary)
+        gross_h1 = {
+            "training_effect": gross_training,
+            "portfolio_effect": gross_portfolio,
+            "total_effect": gross_total,
+            "training_share": gross_training / gross_total if gross_total != 0 else None,
             "p_value": decomp["lw_h3"]["p_value"],
         }
-        # Add net-based decomposition per AUM level
+
+        # Primary: net at primary AUM
+        primary_tests = (
+            net_tests.get(model_name, {}).get(primary_aum)
+            if net_tests else None
+        )
+        if primary_tests:
+            h1_entry = {
+                "training_effect": primary_tests["training_effect"],
+                "portfolio_effect": primary_tests["portfolio_effect"],
+                "total_effect": primary_tests["total_effect"],
+                "training_share": primary_tests["training_share"],
+                "p_value": primary_tests["lw_h3"]["p_value"],
+                "primary_aum": primary_aum,
+                "gross_results": gross_h1,
+            }
+        else:
+            h1_entry = gross_h1
+            h1_entry["primary_aum"] = "gross (net unavailable)"
+
+        # Per-AUM net results
         if net_tests and model_name in net_tests:
             net_h1 = {}
             for aum_label, tests in net_tests[model_name].items():
@@ -554,13 +608,34 @@ def build_hypothesis_summary(
     h3_per_model = {}
     for model_name, res in all_results.items():
         decomp = res["effect_decomposition"]
-        total = decomp["total_effect"]
-        h3_entry = {
-            "total_effect": total,
+        gross_total = decomp["total_effect"]
+
+        # Gross (secondary)
+        gross_h3 = {
+            "total_effect": gross_total,
             "p_value": decomp["lw_total"]["p_value"],
-            "meets_target": total >= 0.20,
+            "meets_target": gross_total >= 0.20,
         }
-        # Add net-based decomposition per AUM level
+
+        # Primary: net at primary AUM
+        primary_tests = (
+            net_tests.get(model_name, {}).get(primary_aum)
+            if net_tests else None
+        )
+        if primary_tests:
+            net_total = primary_tests["total_effect"]
+            h3_entry = {
+                "total_effect": net_total,
+                "p_value": primary_tests["lw_total"]["p_value"],
+                "meets_target": net_total >= 0.20,
+                "primary_aum": primary_aum,
+                "gross_results": gross_h3,
+            }
+        else:
+            h3_entry = gross_h3
+            h3_entry["primary_aum"] = "gross (net unavailable)"
+
+        # Per-AUM net results
         if net_tests and model_name in net_tests:
             net_h3 = {}
             for aum_label, tests in net_tests[model_name].items():
@@ -606,7 +681,7 @@ def build_hypothesis_summary(
         "H1_training_dominance": {
             "description": (
                 "Training effect exceeds portfolio effect: "
-                "[SR(2A)-SR(1A)] > [SR(1B)-SR(1A)]"
+                "[SR(2A)-SR(1A)] > [SR(1B)-SR(1A)] (net returns, primary AUM)"
             ),
             "target": "Training effect = 60-70% of total improvement",
             "per_model": h1_per_model,
@@ -620,8 +695,8 @@ def build_hypothesis_summary(
             "per_model": h2_per_model,
         },
         "H3_sharpe_improvement": {
-            "description": "SR(2B) - SR(1A) >= 0.20 annualized",
-            "target": "Total effect >= 0.20",
+            "description": "Net SR(2B) - Net SR(1A) >= 0.20 annualized (primary AUM)",
+            "target": "Net total effect >= 0.20",
             "per_model": h3_per_model,
         },
         "H4_capacity_improvement": {
@@ -912,16 +987,18 @@ def main():
     summary_path = experiment_dir / "summary.csv"
     summary_df = pd.read_csv(summary_path) if summary_path.exists() else None
 
-    # ── 2. Main results table (gross) ──
-    logger.info("Building main results table (gross)...")
-    main_df = build_main_results_table(all_results, summary_df)
+    # ── 2. Net return statistical tests (Ledoit-Wolf bootstrap) ──
+    logger.info("Running Ledoit-Wolf bootstrap tests on net returns...")
+    net_tests = compute_net_effect_tests(all_results, config)
+
+    # ── 3. Main results table (gross + net primary) ──
+    logger.info("Building main results table...")
+    main_df = build_main_results_table(
+        all_results, summary_df, net_tests=net_tests, config=config,
+    )
     main_df.to_csv(tables_dir / "main_results.csv", index=False)
     _save_latex(main_df, tables_dir / "main_results.tex")
     logger.info("  Saved main_results.csv / .tex")
-
-    # ── 3. Net return statistical tests (Ledoit-Wolf bootstrap) ──
-    logger.info("Running Ledoit-Wolf bootstrap tests on net returns...")
-    net_tests = compute_net_effect_tests(all_results, config)
 
     # ── 4. Net results table ──
     logger.info("Building net results table...")
@@ -1029,7 +1106,8 @@ def main():
     # ── 9. Hypothesis test summary (H1–H4) ──
     logger.info("Building hypothesis test summary...")
     hyp_summary = build_hypothesis_summary(
-        all_results, h2_summary, capacity_df, net_tests=net_tests
+        all_results, h2_summary, capacity_df,
+        net_tests=net_tests, config=config,
     )
     with open(tables_dir / "hypothesis_tests.json", "w") as f:
         json.dump(hyp_summary, f, indent=2, default=str)
@@ -1117,20 +1195,39 @@ def main():
     # Print hypothesis verdicts
     logger.info("\n--- Hypothesis Summary ---")
     aum_labels = _get_aum_labels(config)
+    primary_aum = aum_labels[1]  # 500M
     for model_name, res in all_results.items():
         decomp = res["effect_decomposition"]
-        training = decomp["training_effect"]
-        total = decomp["total_effect"]
-        share = training / total if total != 0 else 0
+        gross_training = decomp["training_effect"]
+        gross_total = decomp["total_effect"]
+        gross_share = gross_training / gross_total if gross_total != 0 else 0
 
         logger.info("\n%s:", model_name)
+
+        # H1 — primary: net at primary AUM; secondary: gross
+        if model_name in net_tests and primary_aum in net_tests[model_name]:
+            nt = net_tests[model_name][primary_aum]
+            net_share = (
+                nt["training_share"] * 100
+                if nt["training_share"] is not None else 0
+            )
+            logger.info(
+                "  H1 (Training Dominance): share=%.1f%%, training=%.3f, "
+                "portfolio=%.3f, total=%.3f, p=%.4f [net %s]",
+                net_share,
+                nt["training_effect"], nt["portfolio_effect"],
+                nt["total_effect"], nt["lw_h3"]["p_value"],
+                primary_aum,
+            )
         logger.info(
-            "  H1 (Training Dominance): share=%.1f%% (target: 60-70%%), p=%.4f [gross]",
-            share * 100, decomp["lw_h3"]["p_value"],
+            "    H1 (gross): share=%.1f%%, p=%.4f",
+            gross_share * 100, decomp["lw_h3"]["p_value"],
         )
-        # Net H1 decomposition
+        # Other AUM levels
         if model_name in net_tests:
             for aum_label in aum_labels:
+                if aum_label == primary_aum:
+                    continue
                 if aum_label in net_tests[model_name]:
                     nt = net_tests[model_name][aum_label]
                     net_share = (
@@ -1144,6 +1241,8 @@ def main():
                         nt["training_effect"], nt["portfolio_effect"],
                         nt["total_effect"], nt["lw_h3"]["p_value"],
                     )
+
+        # H2
         if h2_summary is not None and len(h2_summary) > 0:
             h2_row = h2_summary[h2_summary["model"] == model_name]
             if len(h2_row) > 0:
@@ -1151,13 +1250,26 @@ def main():
                     "  H2 (Feature Reallocation): ratio_diff=%.3f, p=%.4f",
                     h2_row["ratio_diff"].iloc[0], h2_row["p_value"].iloc[0],
                 )
+
+        # H3 — primary: net at primary AUM; secondary: gross
+        if model_name in net_tests and primary_aum in net_tests[model_name]:
+            nt = net_tests[model_name][primary_aum]
+            logger.info(
+                "  H3 (Sharpe Improvement): total_effect=%.3f (target: >=0.20), "
+                "p=%.4f, SR(1A)=%.3f, SR(2B)=%.3f [net %s]",
+                nt["total_effect"], nt["lw_total"]["p_value"],
+                nt["sharpe_ratios"]["1A"], nt["sharpe_ratios"]["2B"],
+                primary_aum,
+            )
         logger.info(
-            "  H3 (Sharpe Improvement): total_effect=%.3f (target: >=0.20), p=%.4f [gross]",
-            total, decomp["lw_total"]["p_value"],
+            "    H3 (gross): total_effect=%.3f, p=%.4f",
+            gross_total, decomp["lw_total"]["p_value"],
         )
-        # Net H3 decomposition
+        # Other AUM levels
         if model_name in net_tests:
             for aum_label in aum_labels:
+                if aum_label == primary_aum:
+                    continue
                 if aum_label in net_tests[model_name]:
                     nt = net_tests[model_name][aum_label]
                     logger.info(
@@ -1167,6 +1279,8 @@ def main():
                         nt["lw_total"]["p_value"],
                         nt["sharpe_ratios"]["1A"], nt["sharpe_ratios"]["2B"],
                     )
+
+        # H4
         model_cap = capacity_df[capacity_df["model"] == model_name]
         be_2b_row = model_cap[model_cap["cell"] == "2B"]
         if not be_2b_row.empty and "h4_uplift" in be_2b_row.columns:
