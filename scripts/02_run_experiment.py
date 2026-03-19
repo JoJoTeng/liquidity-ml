@@ -83,8 +83,8 @@ def main() -> None:
     # ── Quick mode: shorten OOS period ──
     if args.quick:
         config = copy.deepcopy(config)
-        config["training"]["oos_start"] = 201501
-        logger.info("QUICK MODE: OOS from 201501 (last ~10 years)")
+        config["training"]["oos_start"] = 202001
+        logger.info("QUICK MODE: OOS from 202001 (last ~5 years)")
 
     # ── Load data ──
     logger.info("Loading panel …")

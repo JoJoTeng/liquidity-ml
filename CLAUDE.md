@@ -79,15 +79,15 @@ liquidity_ml/
 10. `src/analysis/feature_importance.py` — SHAP analysis + H2 testing
 11. `scripts/03_analyze_results.py` — tables, figures, hypothesis tests (H1–H4)
 
-## ML Models (3 models)
+## ML Models (2 active + 1 pending)
 Each model runs independently through the 2×2 framework.
 All support `sample_weight` in `.fit()` for liquidity-weighted training.
 
-| Model | File | sample_weight mechanism | SHAP method |
-|-------|------|------------------------|-------------|
-| XGBoost | `xgboost_model.py` | Enters gradient computation | TreeExplainer (exact) |
-| Random Forest | `random_forest_model.py` | Enters impurity criterion | TreeExplainer (exact) |
-| Neural Network | `neural_network_model.py` | PyTorch weighted MSE loss | DeepExplainer → KernelExplainer |
+| Model | File | sample_weight mechanism | SHAP method | Status |
+|-------|------|------------------------|-------------|--------|
+| XGBoost | `xgboost_model.py` | Enters gradient computation | TreeExplainer (exact) | Active |
+| Random Forest | `random_forest_model.py` | Enters impurity criterion | TreeExplainer (exact) | Active |
+| Neural Network | `neural_network_model.py` | PyTorch weighted MSE loss | DeepExplainer → KernelExplainer | Pending fix |
 
 Factory: `from src.models import create_model; m = create_model("xgboost")`
 
@@ -99,13 +99,13 @@ All models inherit from `BaseReturnPredictor` (src/models/base.py) with API:
   - `.tune_hyperparameters(X_train, y_train, X_val, y_val, sample_weight, sample_weight_val)` → dict
 
 ## 2×2 Experimental Design (CORE)
-Run INDEPENDENTLY for each of the 3 models (XGBoost, RF, NN):
+Run INDEPENDENTLY for each active model (currently XGBoost and RF):
 ```
                         Standard Portfolio    Liquidity-Weighted Portfolio
 Standard Training       1A (Baseline)         1B
 Weighted Training       2A                    2B (Combined)
 ```
-That's 3 models × 4 cells = 12 experiment configurations.
+That's 2 models × 4 cells = 8 experiment configurations (12 when NN is added back).
 Results are reported per-model and as an ensemble average.
 Effect decomposition:
 - Training Effect  = SR(2A) - SR(1A)
@@ -127,11 +127,14 @@ Code label mapping in `effect_decomposition.json`:
 - H3 → `lw_total` (tests SR(2B) > SR(1A))
 - H4 → computed from `net_returns_{cell}.csv` across AUM scenarios
 
-H1 and H3 are tested on both gross and net returns:
-- Gross: primary test (from `effect_decomposition.json`, computed during experiment)
-- Net: robustness test per AUM level (computed during analysis by `compute_net_effect_tests()`
-  in `03_analyze_results.py`). Results in `net_results.csv` (`h1_pval_{aum}`, `h3_pval_{aum}`)
-  and `hypothesis_tests.json` (under `net_results` sub-dict in H1/H3 entries)
+H1 and H3 are tested on both net and gross returns:
+- Net at $500M: **primary test** (computed during analysis by `compute_net_effect_tests()`
+  in `03_analyze_results.py`). Top-level values in `hypothesis_tests.json` H1/H3 entries.
+  Also in `main_results.csv` columns `h1_net_pval`, `h3_net_pval`, `h3_net_total_effect`.
+- Gross: secondary test (from `effect_decomposition.json`, computed during experiment).
+  In `hypothesis_tests.json` under `gross_results` sub-dict, and `main_results.csv`
+  columns `h1_gross_pval`, `h3_gross_pval`, `h3_gross_total_effect`.
+- All AUM levels: in `net_results.csv` and `hypothesis_tests.json` `net_results` sub-dict.
 
 ## Feature Groups (for H2)
 - **Illiquidity (8):** IdioVol3F, IdioVolAHT, zerotrade1M/6M/12M, MaxRet, VolSD, BetaLiquidityPS
@@ -173,7 +176,7 @@ The signed_predictors_all_wide.csv contains:
 ## Data Conventions
 - Dates: yyyymm integer (e.g. 202301 for Jan 2023)
 - Returns: decimal (0.05 = 5%)
-- Target: excess_ret = ret - RF, shifted forward by 1 month
+- Target: `excess_ret = ret - RF`, shifted forward by 1 month (config: `target_col: "excess_ret"`)
 - Normalization: rank → quantile [0, 1] → rescale to [-0.5, 0.5]
 - Missing: fill NaN with 0.0 after rank-quantile normalization (neutral rank, Gu et al. 2020)
 
@@ -211,7 +214,7 @@ Cross-model: `outputs/experiment/summary.csv`, `ensemble.json`
 
 ## Analysis Outputs (03_analyze_results.py)
 Tables in `outputs/analysis/tables/`:
-- `main_results.csv/.tex` — gross SR, effects, H1/H3 p-values
+- `main_results.csv/.tex` — gross + net SR, effects, H1/H3 p-values (net primary, gross secondary)
 - `net_results.csv/.tex` — net SR per AUM, net effects, net H1/H3 p-values per AUM
 - `capacity.csv` — break-even AUM per cell (H4)
 - `factor_alphas.csv/.tex` — CAPM/FF3/FF5 alphas
@@ -236,7 +239,7 @@ Figures in `outputs/analysis/figures/`:
 python scripts/00_fetch_data.py                      # WRDS download + merge (needs WRDS)
 python scripts/01_process_data.py                    # normalize + compute weights
 python scripts/02_run_experiment.py                  # run 2×2 experiment (full)
-python scripts/02_run_experiment.py --quick          # quick test (2015–2024)
+python scripts/02_run_experiment.py --quick          # quick test (2020–2024)
 python scripts/02_run_experiment.py --model xgboost  # single model
 python scripts/03_analyze_results.py                 # tables + figures + H1–H4
 python scripts/03_analyze_results.py --no-figures    # tables only (faster)
@@ -244,6 +247,31 @@ python scripts/03_analyze_results.py --model xgboost # single model
 pytest tests/ -v -m "not slow"                       # run tests (159 fast)
 pytest tests/ -v                                     # all tests (160 total)
 ```
+
+## OOS R-squared
+- Benchmark: **zero** (Campbell & Thompson 2008) — appropriate for excess return predictions
+- Null hypothesis: expected excess returns are zero (no predictability)
+- Positive R² means model beats the zero benchmark
+- Implemented in `src/evaluation/two_by_two.py`: `predictions["expanding_mean"] = 0.0`
+
+## XGBoost Hyperparameters (Notable)
+- `min_child_weight: 10` (was 100 — old value produced only ~12 unique predictions)
+- Search space: `[5, 10, 30, 50]`
+- Other params: `max_depth: 4`, `learning_rate: 0.01`, `n_estimators: 500`
+
+## Planned Extensions (Not Yet Implemented)
+See `update.md` for full details.
+
+### Scheme E: TC-Based Training Weights
+Replace Scheme A (softmax rank) with weights derived from the full Frazzini TC model:
+`w_i = 1 / (1 + kappa * TC_i_stock)`, where `TC_i_stock = Spread/2 + lambda * sigma / sqrt(ADV)`.
+Captures spread, volatility, and market impact dimensions.
+Implementation: add to `src/weighting/schemes.py`, change `weighting.primary` in config.
+
+### TC-Penalized Portfolio Ranking
+Rank by `predicted_return - TC` instead of raw predicted return for cells 1B/2B.
+Directly penalizes costly-to-trade stocks at portfolio construction stage.
+Implementation: add `tc_penalize` parameter to `src/portfolio/construction.py`.
 
 ## Testing
 Run: `pytest tests/ -v -m "not slow"` (159 tests, ~7s)
