@@ -69,9 +69,12 @@ data:
     # Volatility / tail risk
     - ReturnSkew
     - ReturnSkew3F
+    - RealizedVol        # realized volatility
     - betaVIX            # systematic volatility beta
+    - Beta               # CAPM beta
     - BetaTailRisk       # tail risk beta
     - CoskewACX          # coskewness
+    - Coskewness         # Harvey & Siddique coskewness
     - SmileSlope         # options implied vol skew
     - OptionVolume1      # option-to-stock volume
     # Institutional / information frictions
@@ -107,6 +110,7 @@ data:
     - LRreversal
     - STreversal
     - MomRev
+    - High52              # 52-week high (George & Hwang 2004)
     - Mom6mJunk
     - MomVol
     - FirmAgeMom
@@ -184,7 +188,6 @@ data:
     - RDAbility
     - PatentsRD
     - CitationsRD
-    - RDIPO
     # Accruals
     - Accruals
     - TotalAccruals
@@ -214,14 +217,10 @@ data:
     - CompEquIss
     - CompositeDebtIssuance
     # Dividend policy / capital structure / corporate events
-    - DivOmit
-    - DivInit
     - DivSeason
-    - ConvDebt
     - CredRatDG
     - ExchSwitch
     - SurpriseRD
-    - IndIPO
     # Tax / other fundamentals
     - Tax
     - ChTax
@@ -229,10 +228,11 @@ data:
     - Governance
     - Activism1
 
-  # All 160 CZ (2022) clear predictors available in our data.
+  # 75 curated features with coverage from 1972 onward.
   # NaN filled with 0.0 after rank-quantile normalization (neutral rank).
+  # All 160 CZ clear predictors are available in the data; this subset
+  # focuses on features with broad temporal coverage.
   selected_features:
-    # --- Previously selected (72) ---
     - AM
     - Accruals
     - AnnouncementReturn
@@ -253,7 +253,7 @@ data:
     - ChNWC
     - ChNNCOA
     - ChTax
-    - ConvDebt
+    - Coskewness
     - CoskewACX
     - DelCOA
     - DelCOL
@@ -261,8 +261,8 @@ data:
     - DelFINL
     - DelLTI
     - DelNetFin
-    - DivInit
-    - DivOmit
+    - High52
+    - RealizedVol
     - DolVol
     - EBM
     - EarningsSurprise
@@ -272,7 +272,7 @@ data:
     - Herf
     - IdioVol3F
     - IdioVolAHT
-    - IndIPO
+    - PriceDelayRsq
     - IndMom
     - IntMom
     - InvestPPEInv
@@ -290,7 +290,7 @@ data:
     - OPLeverage
     - PctAcc
     - Price
-    - RDIPO
+    - Beta
     - ResidualMomentum
     - ReturnSkew
     - ReturnSkew3F
@@ -307,95 +307,6 @@ data:
     - zerotrade1M
     - zerotrade6M
     - zerotrade12M
-    # --- New: remaining CZ clear predictors (88) ---
-    - AbnormalAccruals
-    - AccrualsBM
-    - Activism1
-    - AnalystRevision
-    - BM
-    - BetaTailRisk
-    - Cash
-    - ChForecastAccrual
-    - ChNAnalyst
-    - ChangeInRecommendation
-    - CitationsRD
-    - CompEquIss
-    - CompositeDebtIssuance
-    - CredRatDG
-    - CustomerMomentum
-    - DelBreadth
-    - DivSeason
-    - DivYieldST
-    - EP
-    - EarnSupBig
-    - EarningsConsistency
-    - EarningsForecastDisparity
-    - EarningsStreak
-    - EntMult
-    - ExchSwitch
-    - ExclExp
-    - FEPS
-    - FirmAgeMom
-    - ForecastDispersion
-    - Frontier
-    - Governance
-    - GrAdExp
-    - HerfBE
-    - Illiquidity
-    - IndRetBig
-    - IntanBM
-    - IntanCFP
-    - IntanEP
-    - IntanSP
-    - InvGrowth
-    - MS
-    - MeanRankRevGrowth
-    - Mom6mJunk
-    - MomOffSeason06YrPlus
-    - MomOffSeason16YrPlus
-    - MomRev
-    - MomSeason06YrPlus
-    - MomSeason11YrPlus
-    - MomSeason16YrPlus
-    - MomVol
-    - NetDebtFinance
-    - NetDebtPrice
-    - NetEquityFinance
-    - NetPayoutYield
-    - OScore
-    - OptionVolume1
-    - OrderBacklog
-    - OrderBacklogChg
-    - OrgCap
-    - PS
-    - PatentsRD
-    - PayoutYield
-    - PctTotAcc
-    - PriceDelayRsq
-    - RD
-    - RDAbility
-    - RDS
-    - RDcap
-    - REV6
-    - RIO_Disp
-    - RIO_MB
-    - RIO_Turnover
-    - RIO_Volatility
-    - ShareIss5Y
-    - ShareVol
-    - SmileSlope
-    - SurpriseRD
-    - XFIN
-    - betaVIX
-    - fgr5yrLag
-    - grcapx3y
-    - iomom_cust
-    - iomom_supp
-    - retConglomerate
-    - roaq
-    - sfe
-    - std_turn
-    - tang
 
 # ----------------------------------------------------------
 # Liquidity (raw columns from 00_fetch_data.py)
@@ -460,7 +371,7 @@ models:
       n_estimators: [300, 500, 800]
       min_child_weight: [1, 5, 10]
       reg_lambda: [0.01, 0.1, 1.0]
-    n_random_search: 30
+    n_random_search: 80
 
   random_forest:
     n_estimators: 300

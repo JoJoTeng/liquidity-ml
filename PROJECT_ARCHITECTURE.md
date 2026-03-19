@@ -67,7 +67,7 @@ Results are reported per-model and as an ensemble average.
 ### 4.1 Data Sources
 - **CRSP Monthly:** permno, date, ret, prc, shrout, vol, spread -- stock returns and characteristics
 - **CRSP Daily:** Used to compute 21-day dollar volume (dvol_21d), Liu (2006) illiquidity (liu_lm)
-- **Chen & Zimmermann (2022):** Open Source Asset Pricing database -- 160 CZ (2022) clear predictors (signed)
+- **Chen & Zimmermann (2022):** Open Source Asset Pricing database -- 74 CZ (2022) clear predictors (signed, continuous)
 - **Fama-French Factors:** Mkt-RF, SMB, HML (FF3) + RMW, CMA (FF5) -- for alpha regressions
 - **Risk-free rate:** From FF factors file, for computing excess returns
 
@@ -93,7 +93,7 @@ Results are reported per-model and as an ensemble average.
 ### 4.4 Panel Structure
 - ~5.4M stock-month rows covering ~38,870 unique permnos
 - Date range: 1972-01 to 2024-12
-- Columns: permno, yyyymm, ret, excess_ret, 160 feature columns, liq_* columns, weight_* columns
+- Columns: permno, yyyymm, ret, excess_ret, 74 feature columns, liq_* columns, weight_* columns
 - Stored as Parquet for efficient I/O
 
 ### 4.5 Data Conventions
@@ -102,7 +102,7 @@ Results are reported per-model and as an ensemble average.
 - Target: excess_ret = ret - RF, shifted forward by 1 month
 - Normalization: cross-sectional rank -> quantile [0, 1] -> rescale to [-0.5, 0.5]
 - Target column: `target_col: "excess_ret"` in config
-- Missing: fill NaN with 0.0 after rank-quantile normalization (neutral rank, Gu et al. 2020)
+- Missing: drop rows with >30% features missing, fill remaining NaN with 0.0 (neutral rank, Gu et al. 2020)
 
 ---
 
@@ -153,7 +153,7 @@ SHAP values are computed at each rolling window during the experiment (mean|SHAP
 
 ### 6.4 Neural Network Architecture (Gu, Kelly, Xiu 2020)
 
-Input(160) -> Dense(64)+BatchNorm+ReLU+Dropout(0.5) -> Dense(32)+BatchNorm+ReLU+Dropout(0.5) -> Dense(16)+BatchNorm+ReLU+Dropout(0.5) -> Dense(1, linear)
+Input(74) -> Dense(64)+BatchNorm+ReLU+Dropout(0.5) -> Dense(32)+BatchNorm+ReLU+Dropout(0.5) -> Dense(16)+BatchNorm+ReLU+Dropout(0.5) -> Dense(1, linear)
 
 Callbacks: EarlyStopping(patience=10), ReduceLROnPlateau(patience=5, factor=0.5)
 
@@ -337,7 +337,7 @@ liquidity_ml/
 │   ├── config.py                    -- load_config(), get_data_dir(), get_output_dir()
 │   ├── data/
 │   │   └── loader.py                -- load_panel(), get_feature_names(), normalize_features()
-│   │                                   SELECTED_FEATURES (160), TRADABLE_FEATURES (8),
+│   │                                   SELECTED_FEATURES (74), TRADABLE_FEATURES (8),
 │   │                                   ILLIQUIDITY_FEATURES (8), *_EXT variants
 │   ├── weighting/
 │   │   ├── __init__.py              -- compute_weights(), compute_all_weights(), PRIMARY_SCHEME

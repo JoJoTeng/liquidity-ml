@@ -88,12 +88,12 @@ def main() -> None:
         miss.max() * 100,
     )
 
-    # ── 4. Drop rows with >50% features missing ──────────────
+    # ── 4. Drop rows with >30% features missing ──────────────
     frac_missing = panel[features].isna().mean(axis=1)
-    sparse_mask = frac_missing > 0.5
+    sparse_mask = frac_missing > 0.3
     n_sparse = sparse_mask.sum()
     if n_sparse > 0:
-        logger.info("Dropping %d rows with >50%% features missing", n_sparse)
+        logger.info("Dropping %d rows with >30%% features missing", n_sparse)
         panel = panel[~sparse_mask].reset_index(drop=True)
 
     # ── 5. Normalize features ─────────────────────────────────
