@@ -26,7 +26,7 @@ The design cleanly separates two channels through which liquidity can enter:
 | Standard Training    | 1A (Baseline)           | 1B                           |
 | Weighted Training    | 2A                      | 2B (Combined)                |
 
-3 models x 4 cells = 12 experiment configurations.
+2 active models x 4 cells = 8 experiment configurations (12 when NN is added back).
 Results are reported per-model and as an ensemble average.
 
 **Effect Decomposition:**
@@ -53,10 +53,12 @@ Results are reported per-model and as an ensemble average.
 - H3 -> `lw_total` (tests SR(2B) > SR(1A)), plus `total_effect` value
 - H4 -> computed from `net_returns_{cell}.csv` across AUM scenarios via log-scale interpolation
 
-**Gross vs Net testing:**
-- H1 and H3 are tested on both gross returns (primary, computed during experiment) and net returns (robustness, computed during analysis via `compute_net_effect_tests()` in `03_analyze_results.py`)
+**Net vs Gross testing:**
+- H1 and H3 use **net returns at $500M** as the primary test (computed during analysis via `compute_net_effect_tests()` in `03_analyze_results.py`)
+- Gross returns are the secondary test (from `effect_decomposition.json`, computed during experiment)
 - Net tests use Ledoit-Wolf bootstrap on `ret_ls_net_{AUM}` columns at each AUM level
-- Net p-values saved in `net_results.csv` (`h1_pval_{AUM}`, `h3_pval_{AUM}`) and `hypothesis_tests.json` (`net_results` sub-dict under H1/H3)
+- In `main_results.csv`: `h1_net_pval`/`h3_net_pval` (primary), `h1_gross_pval`/`h3_gross_pval` (secondary)
+- In `hypothesis_tests.json`: top-level H1/H3 use net $500M values, with `gross_results` sub-dict and per-AUM `net_results`
 
 ---
 
@@ -99,7 +101,8 @@ Results are reported per-model and as an ensemble average.
 - Returns: decimal (0.05 = 5%)
 - Target: excess_ret = ret - RF, shifted forward by 1 month
 - Normalization: cross-sectional rank -> quantile [0, 1] -> rescale to [-0.5, 0.5]
-- Missing: drop rows with >50% features missing, fill remaining NaN with 0.0 (neutral)
+- Target column: `target_col: "excess_ret"` in config
+- Missing: fill NaN with 0.0 after rank-quantile normalization (neutral rank, Gu et al. 2020)
 
 ---
 
@@ -186,8 +189,8 @@ Net return columns saved: `ret_ls_net_{100M,500M,1B,5B}`
 - **factor_alpha():** r_t = alpha + sum(beta_k * F_k,t) + epsilon_t with NW SEs (CAPM, FF3, FF5)
 - **grs_test():** H0 = all portfolio alphas jointly zero (Gibbons, Ross, Shanken 1989)
 - **bootstrap_sharpe_test():** Ledoit-Wolf (2008) studentized circular-block bootstrap for Sharpe ratio difference, with prewhitened VAR(1) residuals and Parzen kernel HAC
-- **oos_r_squared():** Campbell-Thompson (2008): 1 - SS_pred/SS_hist (benchmark = expanding mean), aggregate scalar
-- **oos_r_squared_monthly():** Cross-sectional OOS R² per month: R²_t = 1 - Σ_i(y_it - ŷ_it)² / Σ_i(y_it - ȳ_expanding_t)², returns time series DataFrame
+- **oos_r_squared():** Campbell-Thompson (2008): 1 - SS_pred/SS_hist (benchmark = **zero** for excess returns), aggregate scalar
+- **oos_r_squared_monthly():** Cross-sectional OOS R² per month: R²_t = 1 - Σ_i(y_it - ŷ_it)² / Σ_i(y_it - 0)², returns time series DataFrame
 - **paired_ttest():** for feature importance differences across rolling windows (H2)
 - **compute_effect_decomposition():** full 2x2 with Sharpe ratios, effects, LW tests, factor alphas (gross returns)
 - **compute_net_effect_tests():** (in `03_analyze_results.py`) Ledoit-Wolf bootstrap tests on net return series per AUM level for H1/H3 robustness
@@ -235,7 +238,7 @@ Runs all 3 models sharing one panel load. Produces per-model results + ensemble 
 ### CLI
 ```bash
 python scripts/02_run_experiment.py                  # Full run (2000-2024)
-python scripts/02_run_experiment.py --quick          # Quick test (2015-2024)
+python scripts/02_run_experiment.py --quick          # Quick test (2020-2024)
 python scripts/02_run_experiment.py --model xgboost  # Single model
 ```
 
@@ -245,9 +248,9 @@ python scripts/02_run_experiment.py --model xgboost  # Single model
 
 ### 11.0 Analysis Pipeline (main() execution order)
 1. Load experiment results
-2. Main results table (gross SR, effects, gross H1/H3 p-values)
-3. Net return statistical tests (`compute_net_effect_tests()` — LW bootstrap on net returns per AUM)
-4. Net results table (net SR, net effects, net H1/H3 p-values)
+2. Net return statistical tests (`compute_net_effect_tests()` — LW bootstrap on net returns per AUM)
+3. Main results table (gross + net SR, effects, net primary H1/H3 p-values)
+4. Net results table (net SR, net effects, net H1/H3 p-values per AUM)
 5. Capacity analysis (H4 break-even AUM)
 6. Factor alpha table
 7. OOS R² table
@@ -260,7 +263,7 @@ python scripts/02_run_experiment.py --model xgboost  # Single model
 
 | File | Contents |
 |------|----------|
-| main_results.csv/.tex | Gross SR per cell, effects, training share (H1), total effect (H3), LW p-values |
+| main_results.csv/.tex | Gross + net SR, effects, net primary H1/H3 p-values ($500M), gross secondary |
 | net_results.csv/.tex | Net SR for 4 AUM scenarios, net effects, net H1/H3 p-values per AUM per model |
 | capacity.csv | Break-even AUM per cell per model, H4 uplift ratio |
 | factor_alphas.csv/.tex | CAPM/FF3/FF5 alphas per cell per model |
@@ -316,6 +319,7 @@ python scripts/03_analyze_results.py --importance-type gain # Use gain instead o
 | aum_scenarios | [100M, 500M, 1B, 5B] | Capacity testing (H4) |
 | newey_west_lags | 6 | HAC lag count |
 | bootstrap_samples | 5000 | LW bootstrap replications |
+| target_col | excess_ret | Models predict excess returns (ret - RF) |
 | primary weighting | softmax_rank | Default scheme (Scheme A) |
 | compute_shap | true | Enable SHAP at each rolling window |
 | background_samples | 100 | Background data for NN SHAP |
@@ -355,7 +359,7 @@ liquidity_ml/
 ├── scripts/
 │   ├── 00_fetch_data.py             -- WRDS CRSP download + CZ merge
 │   ├── 01_process_data.py           -- normalize, compute weights, save panel
-│   ├── 02_run_experiment.py         -- 2x2 rolling experiment (all 3 models)
+│   ├── 02_run_experiment.py         -- 2x2 rolling experiment (XGBoost + RF; NN pending fix)
 │   └── 03_analyze_results.py        -- tables, figures, hypothesis tests (H1-H4)
 ├── tests/                           -- 160 tests total (159 fast + 1 slow TF test)
 │   ├── conftest.py                  -- shared fixtures, "slow" marker
@@ -405,7 +409,17 @@ The 1 slow test (`test_nn_requires_background`) requires TensorFlow initializati
 
 ---
 
-## 15. Known Issues and Design Decisions
+## 15. Planned Extensions (Not Yet Implemented)
+
+See `update.md` for full details.
+
+**Scheme E: TC-Based Training Weights** — Replace Scheme A with weights derived from the full Frazzini TC model: `w_i = 1/(1 + kappa * TC_i_stock)`, where `TC_i_stock = Spread/2 + lambda * sigma / sqrt(ADV)`. Captures spread, volatility, and market impact. Implementation: add to `src/weighting/schemes.py`.
+
+**TC-Penalized Portfolio Ranking** — Rank by `predicted_return - TC` instead of raw predicted return for cells 1B/2B. Directly penalizes costly-to-trade stocks at portfolio construction. Implementation: add `tc_penalize` parameter to `src/portfolio/construction.py`.
+
+---
+
+## 16. Known Issues and Design Decisions
 
 1. **Scheme C NaN handling:** Missing BidAskSpread set to 0.0 gives max weight. Acceptable since liquidity filter removes most problematic stocks.
 2. **Validation weights:** sample_weight_val added to all models so early stopping and tuning optimize the same weighted objective as training.
@@ -414,3 +428,6 @@ The 1 slow test (`test_nn_requires_background`) requires TensorFlow initializati
 5. **Block length calibration:** Disabled by default in LW bootstrap (too expensive). Uses grid [2,4,6,8,10] with b=6 as default.
 6. **SHAP in rolling loop:** Mean|SHAP| per feature is accumulated at each window (not full SHAP matrices) to keep memory manageable. Only the aggregated importance is saved.
 7. **H4 break-even interpolation:** Uses log10(AUM) scale with scipy.interpolate.interp1d + brentq. Reports ">5B" if net SR positive at all AUM levels, "<100M" if negative everywhere.
+8. **Neural Network pending fix:** BatchNorm crashes on single-sample batches. NN outputs removed; XGBoost and Random Forest are the two active models.
+9. **XGBoost min_child_weight:** Changed from 100 to 10. Old value produced only ~12 unique predictions for ~5,777 stocks. Search space: [5, 10, 30, 50].
+10. **OOS R² benchmark:** Uses zero (not expanding mean) since target is excess returns. The null is no predictability (Campbell & Thompson 2008).

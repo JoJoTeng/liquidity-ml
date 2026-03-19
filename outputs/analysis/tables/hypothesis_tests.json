@@ -1,0 +1,152 @@
+{
+  "H1_training_dominance": {
+    "description": "Training effect exceeds portfolio effect: [SR(2A)-SR(1A)] > [SR(1B)-SR(1A)] (net returns, primary AUM)",
+    "target": "Training effect = 60-70% of total improvement",
+    "per_model": {
+      "xgboost": {
+        "training_effect": 0.08866437565629337,
+        "portfolio_effect": 0.10263100384461307,
+        "total_effect": 0.19252717040912481,
+        "training_share": 0.46052915787355864,
+        "p_value": 0.4767046590681864,
+        "primary_aum": "500M",
+        "gross_results": {
+          "training_effect": 0.013661091249160817,
+          "portfolio_effect": 0.051150825129665456,
+          "total_effect": 0.0689783179724549,
+          "training_share": 0.19804906310728101,
+          "p_value": 0.5240951809638073
+        },
+        "net_results": {
+          "100M": {
+            "training_effect": 0.06708179955507554,
+            "portfolio_effect": 0.07409054444265345,
+            "total_effect": 0.14701663221855638,
+            "interaction": 0.005844288220827387,
+            "training_share": 0.4562871461737137,
+            "p_value": 0.46750649870025995,
+            "difference": -0.0020406176483030447
+          },
+          "500M": {
+            "training_effect": 0.08866437565629337,
+            "portfolio_effect": 0.10263100384461307,
+            "total_effect": 0.19252717040912481,
+            "interaction": 0.001231790908218372,
+            "training_share": 0.46052915787355864,
+            "p_value": 0.4767046590681864,
+            "difference": -0.004066426789036863
+          },
+          "1B": {
+            "training_effect": 0.1042090202235255,
+            "portfolio_effect": 0.1237224888574834,
+            "total_effect": 0.225891537549754,
+            "interaction": -0.0020399715312549027,
+            "training_share": 0.46132325873682994,
+            "p_value": 0.483503299340132,
+            "difference": -0.005681406459041938
+          },
+          "5B": {
+            "training_effect": 0.16357129740875048,
+            "portfolio_effect": 0.2094419495331734,
+            "total_effect": 0.3590675609251536,
+            "interaction": -0.01394568601677032,
+            "training_share": 0.4555446250485612,
+            "p_value": 0.5156968606278745,
+            "difference": -0.013355381564846044
+          }
+        }
+      }
+    }
+  },
+  "H2_feature_reallocation": {
+    "description": "Weighted training shifts feature importance from illiquidity to tradable features",
+    "target": "Illiquidity total 43% -> 12%, Mom12m 10% -> 24%",
+    "per_model": {
+      "xgboost": {
+        "ratio_std_mean": 0.4014547695116221,
+        "ratio_wt_mean": 0.28838738607146963,
+        "ratio_diff": -0.11306738344015249,
+        "t_stat": -4.536924955774197,
+        "p_value": 0.999985394340317
+      }
+    }
+  },
+  "H3_sharpe_improvement": {
+    "description": "Net SR(2B) - Net SR(1A) >= 0.20 annualized (primary AUM)",
+    "target": "Net total effect >= 0.20",
+    "per_model": {
+      "xgboost": {
+        "total_effect": 0.19252717040912481,
+        "p_value": 0.20735852829434112,
+        "meets_target": false,
+        "primary_aum": "500M",
+        "gross_results": {
+          "total_effect": 0.0689783179724549,
+          "p_value": 0.3715256948610278,
+          "meets_target": false
+        },
+        "net_results": {
+          "100M": {
+            "sharpe_ratios": {
+              "1A": 0.07959112755536246,
+              "1B": 0.1536816719980159,
+              "2A": 0.146672927110438,
+              "2B": 0.22660775977391884
+            },
+            "total_effect": 0.14701663221855638,
+            "meets_target": false,
+            "p_value": 0.2565486902619476,
+            "difference": 0.0428043450163214
+          },
+          "500M": {
+            "sharpe_ratios": {
+              "1A": -0.04268911101460961,
+              "1B": 0.05994189283000347,
+              "2A": 0.04597526464168376,
+              "2B": 0.14983805939451522
+            },
+            "total_effect": 0.19252717040912481,
+            "meets_target": false,
+            "p_value": 0.20735852829434112,
+            "difference": 0.056054878300824715
+          },
+          "1B": {
+            "sharpe_ratios": {
+              "1A": -0.13343563592874455,
+              "1B": -0.009713147071261157,
+              "2A": -0.029226615705219047,
+              "2B": 0.09245590162100943
+            },
+            "total_effect": 0.225891537549754,
+            "meets_target": true,
+            "p_value": 0.17216556688662268,
+            "difference": 0.06576901649585302
+          },
+          "5B": {
+            "sharpe_ratios": {
+              "1A": -0.5070788290489416,
+              "1B": -0.2976368795157682,
+              "2A": -0.34350753164019115,
+              "2B": -0.14801126812378804
+            },
+            "total_effect": 0.3590675609251536,
+            "meets_target": true,
+            "p_value": 0.08458308338332333,
+            "difference": 0.1045436256433939
+          }
+        }
+      }
+    }
+  },
+  "H4_capacity_improvement": {
+    "description": "Break-even AUM of combined approach (2B) vs baseline (1A)",
+    "target": "25x increase (~$200M to ~$5B)",
+    "per_model": {
+      "xgboost": {
+        "breakeven_1A": 285071239.42167443,
+        "breakeven_2B": 1856705990.9038343,
+        "uplift_ratio": 6.513129822112339
+      }
+    }
+  }
+}
