@@ -21,13 +21,13 @@ liquidity_ml/
 ├── scripts/
 │   ├── 00_fetch_data.py       ← WRDS download + merge CZ
 │   ├── 01_process_data.py     ← normalize, compute weights, save panel
-│   ├── 02_run_experiment.py   ← 2×2 rolling experiment (all 3 models)
+│   ├── 02_run_experiment.py   ← 2×2 rolling experiment (XGBoost + RF)
 │   └── 03_analyze_results.py  ← tables, figures, hypothesis tests (H1–H4)
 ├── src/
 │   ├── config.py              ← load_config(), get_data_dir(), get_output_dir()
 │   ├── data/
 │   │   └── loader.py          ← load_panel(), get_feature_names(), normalize_features()
-│   │                            Feature lists: SELECTED_FEATURES (75),
+│   │                            Feature lists: SELECTED_FEATURES (160),
 │   │                            TRADABLE_FEATURES (8), ILLIQUIDITY_FEATURES (8),
 │   │                            TRADABLE_FEATURES_EXT (38), ILLIQUIDITY_FEATURES_EXT (12)
 │   ├── weighting/
@@ -87,7 +87,7 @@ All support `sample_weight` in `.fit()` for liquidity-weighted training.
 |-------|------|------------------------|-------------|--------|
 | XGBoost | `xgboost_model.py` | Enters gradient computation | TreeExplainer (exact) | Active |
 | Random Forest | `random_forest_model.py` | Enters impurity criterion | TreeExplainer (exact) | Active |
-| Neural Network | `neural_network_model.py` | PyTorch weighted MSE loss | DeepExplainer → KernelExplainer | Pending fix |
+| Neural Network | `neural_network_model.py` | Keras/TF weighted MSE loss | DeepExplainer → KernelExplainer | Pending fix |
 
 Factory: `from src.models import create_model; m = create_model("xgboost")`
 

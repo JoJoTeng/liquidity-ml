@@ -135,21 +135,44 @@ class XGBoostPredictor(BaseReturnPredictor):
         sample_weight: np.ndarray | None = None,
         sample_weight_val: np.ndarray | None = None,
     ) -> dict[str, Any]:
-        """Grid search over the configured search space.
+        """Random search over the configured search space.
 
-        When sample_weight_val is provided, the validation MSE is weighted
-        so that tuning optimizes the same objective as weighted training.
+        Samples ``n_random_search`` combinations (default 30) from the full
+        grid.  When sample_weight_val is provided, the validation MSE is
+        weighted so that tuning optimizes the same objective as weighted
+        training.
         """
         search_space = self.config.get("search_space", {})
         if not search_space:
             logger.info("No search space configured; using defaults.")
             return self.config
 
+        n_trials = self.config.get("n_random_search", 30)
         keys = list(search_space.keys())
         values = list(search_space.values())
-        param_grid = [dict(zip(keys, v)) for v in itertools.product(*values)]
 
-        logger.info("Tuning XGBoost over %d combinations...", len(param_grid))
+        # Full grid size for logging
+        full_grid_size = 1
+        for v in values:
+            full_grid_size *= len(v)
+
+        # Sample random combinations (or use full grid if small enough)
+        rng = np.random.RandomState(self.seed)
+        if full_grid_size <= n_trials:
+            param_grid = [dict(zip(keys, v)) for v in itertools.product(*values)]
+            logger.info(
+                "Tuning XGBoost: full grid %d combinations (≤ %d)",
+                full_grid_size, n_trials,
+            )
+        else:
+            param_grid = []
+            for _ in range(n_trials):
+                combo = {k: v[rng.randint(len(v))] for k, v in zip(keys, values)}
+                param_grid.append(combo)
+            logger.info(
+                "Tuning XGBoost: random search %d / %d combinations",
+                n_trials, full_grid_size,
+            )
 
         best_mse = np.inf
         best_params = {}

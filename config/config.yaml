@@ -57,11 +57,34 @@ data:
     - MaxRet
     - VolSD
     - BetaLiquidityPS
-    # Additional microstructure / liquidity-related
-    - BidAskSpread # direct trading cost
-    - DolVol # dollar volume (inverse liquidity)
-    - Size # small-cap illiquidity premium
-    - Price # low-price stocks are less liquid
+    # Microstructure / trading frictions
+    - BidAskSpread
+    - DolVol
+    - Size
+    - Price
+    - Illiquidity        # Amihud (2002) illiquidity
+    - std_turn           # turnover volatility
+    - ShareVol           # share volume
+    - PriceDelayRsq      # price delay (Hou & Moskowitz 2005)
+    # Volatility / tail risk
+    - ReturnSkew
+    - ReturnSkew3F
+    - betaVIX            # systematic volatility beta
+    - BetaTailRisk       # tail risk beta
+    - CoskewACX          # coskewness
+    - SmileSlope         # options implied vol skew
+    - OptionVolume1      # option-to-stock volume
+    # Institutional / information frictions
+    - RIO_Disp
+    - RIO_MB
+    - RIO_Turnover
+    - RIO_Volatility
+    - DelBreadth         # breadth of ownership change
+    - ChNAnalyst         # change in analyst coverage
+    - ForecastDispersion # analyst disagreement
+    # Industry concentration
+    - Herf
+    - HerfBE
 
   tradable_features_extended:
     # Core 8
@@ -83,38 +106,133 @@ data:
     - ResidualMomentum
     - LRreversal
     - STreversal
-    # Value
+    - MomRev
+    - Mom6mJunk
+    - MomVol
+    - FirmAgeMom
+    - MomSeason06YrPlus
+    - MomSeason11YrPlus
+    - MomSeason16YrPlus
+    - MomOffSeason06YrPlus
+    - MomOffSeason16YrPlus
+    - CustomerMomentum
+    - retConglomerate
+    - iomom_cust
+    - iomom_supp
+    - IndRetBig
+    # Value / fundamentals
     - BPEBM
     - EBM
     - cfp
     - BookLeverage
     - EquityDuration
+    - BM
+    - EP
+    - EntMult
+    - NetDebtPrice
+    - IntanBM
+    - IntanCFP
+    - IntanEP
+    - IntanSP
+    - AM
+    - Leverage
+    - NetPayoutYield
+    - PayoutYield
+    - DivYieldST
+    - fgr5yrLag
+    - sfe
     # Investment
     - Investment
     - InvestPPEInv
     - grcapx
+    - grcapx3y
     - ChInv
     - ChInvIA
-    # Earnings / announcements
+    - InvGrowth
+    - GrAdExp
+    - OrderBacklog
+    - OrderBacklogChg
+    - tang
+    # Earnings / announcements / analyst
     - EarningsSurprise
     - RevenueSurprise
     - AnnouncementReturn
+    - EarningsStreak
+    - EarningsConsistency
+    - EarningsForecastDisparity
+    - EarnSupBig
+    - FEPS
+    - REV6
+    - ChangeInRecommendation
+    - AnalystRevision
+    - ChForecastAccrual
+    - ExclExp
+    - MeanRankRevGrowth
     # Profitability
     - CashProd
     - OPLeverage
+    - roaq
+    - MS
+    - Frontier
+    - Cash
+    - OrgCap
+    - PS
+    # R&D / intangibles
+    - RD
+    - RDcap
+    - RDS
+    - RDAbility
+    - PatentsRD
+    - CitationsRD
+    - RDIPO
     # Accruals
     - Accruals
     - TotalAccruals
     - NOA
     - dNoa
+    - AbnormalAccruals
+    - AccrualsBM
+    - PctAcc
+    - PctTotAcc
+    - DelCOA
+    - DelCOL
+    - DelEqu
+    - DelFINL
+    - DelLTI
+    - DelNetFin
+    - ChAssetTurnover
+    - ChNNCOA
+    - ChNWC
+    - ChEQ
     # Issuance / corporate actions
     - ShareIss1Y
+    - ShareIss5Y
     - hire
+    - XFIN
+    - NetEquityFinance
+    - NetDebtFinance
+    - CompEquIss
+    - CompositeDebtIssuance
+    # Dividend policy / capital structure / corporate events
+    - DivOmit
+    - DivInit
+    - DivSeason
+    - ConvDebt
+    - CredRatDG
+    - ExchSwitch
+    - SurpriseRD
+    - IndIPO
+    # Tax / other fundamentals
+    - Tax
+    - ChTax
+    - OScore
+    - Governance
+    - Activism1
 
-  # Curated features with coverage from 1972 onward (~75 predictors).
-  # Using a hand-picked subset avoids massive row loss from dropna()
-  # on sparse early-period features (many CZ predictors start post-1985).
+  # All 160 CZ (2022) clear predictors available in our data.
+  # NaN filled with 0.0 after rank-quantile normalization (neutral rank).
   selected_features:
+    # --- Previously selected (72) ---
     - AM
     - Accruals
     - AnnouncementReturn
@@ -189,6 +307,95 @@ data:
     - zerotrade1M
     - zerotrade6M
     - zerotrade12M
+    # --- New: remaining CZ clear predictors (88) ---
+    - AbnormalAccruals
+    - AccrualsBM
+    - Activism1
+    - AnalystRevision
+    - BM
+    - BetaTailRisk
+    - Cash
+    - ChForecastAccrual
+    - ChNAnalyst
+    - ChangeInRecommendation
+    - CitationsRD
+    - CompEquIss
+    - CompositeDebtIssuance
+    - CredRatDG
+    - CustomerMomentum
+    - DelBreadth
+    - DivSeason
+    - DivYieldST
+    - EP
+    - EarnSupBig
+    - EarningsConsistency
+    - EarningsForecastDisparity
+    - EarningsStreak
+    - EntMult
+    - ExchSwitch
+    - ExclExp
+    - FEPS
+    - FirmAgeMom
+    - ForecastDispersion
+    - Frontier
+    - Governance
+    - GrAdExp
+    - HerfBE
+    - Illiquidity
+    - IndRetBig
+    - IntanBM
+    - IntanCFP
+    - IntanEP
+    - IntanSP
+    - InvGrowth
+    - MS
+    - MeanRankRevGrowth
+    - Mom6mJunk
+    - MomOffSeason06YrPlus
+    - MomOffSeason16YrPlus
+    - MomRev
+    - MomSeason06YrPlus
+    - MomSeason11YrPlus
+    - MomSeason16YrPlus
+    - MomVol
+    - NetDebtFinance
+    - NetDebtPrice
+    - NetEquityFinance
+    - NetPayoutYield
+    - OScore
+    - OptionVolume1
+    - OrderBacklog
+    - OrderBacklogChg
+    - OrgCap
+    - PS
+    - PatentsRD
+    - PayoutYield
+    - PctTotAcc
+    - PriceDelayRsq
+    - RD
+    - RDAbility
+    - RDS
+    - RDcap
+    - REV6
+    - RIO_Disp
+    - RIO_MB
+    - RIO_Turnover
+    - RIO_Volatility
+    - ShareIss5Y
+    - ShareVol
+    - SmileSlope
+    - SurpriseRD
+    - XFIN
+    - betaVIX
+    - fgr5yrLag
+    - grcapx3y
+    - iomom_cust
+    - iomom_supp
+    - retConglomerate
+    - roaq
+    - sfe
+    - std_turn
+    - tang
 
 # ----------------------------------------------------------
 # Liquidity (raw columns from 00_fetch_data.py)
@@ -232,27 +439,28 @@ weighting:
 # ML Models (3 models, each run with standard + weighted)
 # ----------------------------------------------------------
 models:
-  # All 3 models are run in the 2×2 framework independently.
-  # Results are reported per-model + ensemble average.
+  # Active models run in the 2×2 framework independently.
+  # Neural network pending fix (BatchNorm single-sample crash).
   run_models:
     - xgboost
     - random_forest
-    - neural_network
 
   xgboost:
     n_estimators: 500
-    max_depth: 4
+    max_depth: 6
     learning_rate: 0.01
     subsample: 0.8
     colsample_bytree: 0.8
-    min_child_weight: 10
+    min_child_weight: 5
     reg_alpha: 0.1
-    reg_lambda: 1.0
+    reg_lambda: 0.1
     search_space:
-      max_depth: [3, 4, 5, 6]
+      max_depth: [4, 6, 8]
       learning_rate: [0.005, 0.01, 0.05]
       n_estimators: [300, 500, 800]
-      min_child_weight: [5, 10, 30, 50]
+      min_child_weight: [1, 5, 10]
+      reg_lambda: [0.01, 0.1, 1.0]
+    n_random_search: 30
 
   random_forest:
     n_estimators: 300

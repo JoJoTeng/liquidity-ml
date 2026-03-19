@@ -330,6 +330,20 @@ def _rolling_predict(
                 sample_weight_val=data["weights_val"],
             )
 
+            # Log tuned hyperparameters for diagnostics
+            _tune_keys = ["max_depth", "learning_rate", "n_estimators",
+                          "min_child_weight", "min_samples_leaf"]
+            _std_summary = {k: best_params_std.get(k) for k in _tune_keys
+                           if k in best_params_std}
+            _wt_summary = {k: best_params_wt.get(k) for k in _tune_keys
+                           if k in best_params_wt}
+            logger.info(
+                "  Tuned params (std): %s", _std_summary,
+            )
+            logger.info(
+                "  Tuned params (wt):  %s", _wt_summary,
+            )
+
             months_since_retune = 0
 
         # ── 4. Train standard model ──
@@ -363,6 +377,23 @@ def _rolling_predict(
         month_preds["pred_std"] = pred_std
         month_preds["pred_wt"] = pred_wt
         predictions_list.append(month_preds)
+
+        # Log prediction diversity
+        n_test = len(pred_std)
+        u_std = len(np.unique(pred_std))
+        u_wt = len(np.unique(pred_wt))
+        logger.debug(
+            "Month %d predictions: %d stocks, std=%d unique (%.1f%%), wt=%d unique (%.1f%%)",
+            test_month, n_test,
+            u_std, u_std / n_test * 100,
+            u_wt, u_wt / n_test * 100,
+        )
+        if u_std < n_test * 0.02:
+            logger.warning(
+                "Month %d: pred_std has only %d unique values (%.1f%%) — "
+                "near-constant predictions",
+                test_month, u_std, u_std / n_test * 100,
+            )
 
         # ── 7. Feature importances ──
         fi_std = model_std.get_feature_importance(features)

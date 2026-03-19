@@ -65,9 +65,9 @@ def parse_args() -> argparse.Namespace:
         help="Analyze a single model only (e.g. xgboost).",
     )
     parser.add_argument(
-        "--importance-type", type=str, default="shap",
-        choices=["shap", "gain"],
-        help="Feature importance type (default: shap, falls back to gain).",
+        "--importance-type", type=str, default="gain",
+        choices=["gain", "shap"],
+        help="Feature importance type (default: gain; shap as robustness check).",
     )
     return parser.parse_args()
 
@@ -1062,6 +1062,7 @@ def main():
             model_names=model_names,
             importance_type=importance_type,
             output_dir=experiment_dir,
+            extended=True,
         )
         if len(h2_summary) > 0:
             h2_summary.to_csv(tables_dir / "h2_summary.csv", index=False)
@@ -1077,6 +1078,7 @@ def main():
                     model_names=model_names,
                     importance_type="gain",
                     output_dir=experiment_dir,
+                    extended=True,
                 )
                 if len(h2_summary) > 0:
                     h2_summary.to_csv(tables_dir / "h2_summary.csv", index=False)

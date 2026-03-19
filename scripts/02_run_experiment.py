@@ -13,7 +13,7 @@ Output: outputs/experiment/{model_name}/     (predictions, returns, stats)
 
 Usage:
     python scripts/02_run_experiment.py            # full run (2000–2024)
-    python scripts/02_run_experiment.py --quick     # quick test (2015–2024)
+    python scripts/02_run_experiment.py --quick     # quick test (2020–2024)
     python scripts/02_run_experiment.py --model xgboost  # single model
 """
 
@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--quick",
         action="store_true",
-        help="Quick mode: OOS from 2015 instead of 2000 (~2.5× faster).",
+        help="Quick mode: OOS from 2020 instead of 2000.",
     )
     parser.add_argument(
         "--model",
