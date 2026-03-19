@@ -108,8 +108,9 @@ class TestAssignQuantiles:
 
 
 class TestTurnover:
-    def test_no_previous(self):
-        assert _compute_turnover({}, {10001: 0.5, 10002: 0.5}) == 0.0
+    def test_no_previous_full_entry(self):
+        # First month: all positions are new, turnover = sum of all weights
+        assert _compute_turnover({}, {10001: 0.5, 10002: 0.5}) == 1.0
 
     def test_identical_positions(self):
         pos = {10001: 0.5, 10002: 0.5}
@@ -215,13 +216,13 @@ class TestBuildTimeseries:
         assert "ret_long_short" in results_df.columns
         assert "turnover" in results_df.columns
 
-    def test_first_month_zero_turnover(self, multi_month):
+    def test_first_month_has_entry_turnover(self, multi_month):
         preds = pd.Series(
             np.random.RandomState(1).randn(len(multi_month)),
             index=multi_month.index,
         )
         results_df, _ = build_portfolio_timeseries(multi_month, preds)
-        assert results_df.iloc[0]["turnover"] == 0.0
+        assert results_df.iloc[0]["turnover"] > 0.0
 
     def test_positions_history_has_all_months(self, multi_month):
         preds = pd.Series(
@@ -236,14 +237,14 @@ class TestBuildTimeseries:
 
 
 class TestTransactionCosts:
-    def test_first_month_zero_cost(self, multi_month):
+    def test_first_month_has_entry_cost(self, multi_month):
         preds = pd.Series(
             np.random.RandomState(1).randn(len(multi_month)),
             index=multi_month.index,
         )
         _, pos_hist = build_portfolio_timeseries(multi_month, preds)
         tc = compute_transaction_costs(pos_hist, multi_month, aum=1e9)
-        assert tc.iloc[0] == 0.0
+        assert tc.iloc[0] > 0.0
 
     def test_costs_are_non_negative(self, multi_month):
         preds = pd.Series(

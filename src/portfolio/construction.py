@@ -413,10 +413,9 @@ def _compute_turnover(
     """Compute one-way turnover between two position dicts.
 
     Turnover = Σ|w_i,t - w_i,t-1| summed over all stocks in either period.
-    Returns 0.0 if previous positions are empty (first month).
+    If previous positions are empty (first month), all current weights
+    count as new entries (full establishment cost).
     """
-    if not prev_pos:
-        return 0.0
 
     all_permnos = set(prev_pos) | set(curr_pos)
     turnover = sum(
@@ -478,13 +477,13 @@ def compute_transaction_costs(
 
     for i, yyyymm in enumerate(months):
         pos = positions_history[yyyymm]
-        if i == 0:
-            # No turnover in first month
-            tc_series[yyyymm] = 0.0
-            continue
 
-        prev_yyyymm = months[i - 1]
-        prev_pos = positions_history[prev_yyyymm]
+        if i == 0:
+            # First month: all positions are new entries
+            prev_pos = {"long": {}, "short": {}}
+        else:
+            prev_yyyymm = months[i - 1]
+            prev_pos = positions_history[prev_yyyymm]
 
         total_tc = 0.0
 
