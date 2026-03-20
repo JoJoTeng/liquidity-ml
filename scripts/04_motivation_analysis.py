@@ -16,6 +16,7 @@ Outputs (saved to outputs/motivation/):
 Usage:
   python scripts/04_motivation_analysis.py           # Full run (2000-2024)
   python scripts/04_motivation_analysis.py --quick   # Quick run (2015-2024)
+  python scripts/04_motivation_analysis.py --recompute  # Recompute tables from saved predictions
 """
 
 from __future__ import annotations
@@ -316,16 +317,28 @@ def compute_table2(predictions: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_table3(predictions: pd.DataFrame, config: dict) -> pd.DataFrame:
-    """Compute within-quintile long-short portfolio gross and net SR."""
+    """Compute within-quintile long-short portfolio gross and net SR at multiple AUMs."""
     tc_cfg = config["transaction_costs"]
     spread_scale = tc_cfg["spread_scale"]
     lam = tc_cfg["lambda_market_impact"]
-    aum = 500_000_000
+    aum_scenarios = {
+        "100M": 100_000_000,
+        "500M": 500_000_000,
+        "1B":  1_000_000_000,
+        "5B":  5_000_000_000,
+    }
 
     all_months = sorted(predictions["yyyymm"].unique())
-    quintile_results = {q: {"gross": [], "tc": []} for q in range(1, 6)}
 
-    # Track previous month positions for turnover
+    # Per-quintile monthly data: gross returns, turnover, and stock-level TC inputs
+    quintile_data = {q: {
+        "gross": [],
+        "turnover": [],
+        "spread_arr": [],   # avg half-spread of traded stocks per month
+        "impact_arr": [],   # avg sigma/sqrt(ADV) of traded stocks per month
+        "n_portfolio": [],  # portfolio size per month
+    } for q in range(1, 6)}
+
     prev_positions = {q: {"long": set(), "short": set()} for q in range(1, 6)}
 
     for month_idx, month in enumerate(all_months):
@@ -343,28 +356,23 @@ def compute_table3(predictions: pd.DataFrame, config: dict) -> pd.DataFrame:
                 qdf["pred"].rank(method="first"), n_bins, labels=False
             ) + 1
 
-            long_mask = qdf["decile"] == n_bins
-            short_mask = qdf["decile"] == 1
-
-            long_stocks = qdf.loc[long_mask]
-            short_stocks = qdf.loc[short_mask]
+            long_stocks = qdf[qdf["decile"] == n_bins]
+            short_stocks = qdf[qdf["decile"] == 1]
 
             if len(long_stocks) == 0 or len(short_stocks) == 0:
                 continue
 
-            # Gross return
-            r_long = long_stocks["ret"].mean()
-            r_short = short_stocks["ret"].mean()
-            r_gross = r_long - r_short
-            quintile_results[q]["gross"].append(r_gross)
+            # Gross return (AUM-independent)
+            r_gross = long_stocks["ret"].mean() - short_stocks["ret"].mean()
+            quintile_data[q]["gross"].append(r_gross)
 
-            # Transaction costs
+            # Turnover (AUM-independent)
             current_long = set(long_stocks["permno"].values)
             current_short = set(short_stocks["permno"].values)
             n_portfolio = len(current_long) + len(current_short)
 
             if month_idx == 0:
-                turnover = 2.0  # full establishment
+                turnover = 2.0
             else:
                 prev_long = prev_positions[q]["long"]
                 prev_short = prev_positions[q]["short"]
@@ -375,8 +383,10 @@ def compute_table3(predictions: pd.DataFrame, config: dict) -> pd.DataFrame:
 
             prev_positions[q]["long"] = current_long
             prev_positions[q]["short"] = current_short
+            quintile_data[q]["turnover"].append(turnover)
+            quintile_data[q]["n_portfolio"].append(n_portfolio)
 
-            # Average TC for traded stocks
+            # Stock-level TC components (separate AUM-independent parts)
             portfolio_stocks = pd.concat([long_stocks, short_stocks])
             spread = portfolio_stocks["liq_BidAskSpread"].fillna(
                 portfolio_stocks["liq_BidAskSpread"].median()
@@ -385,33 +395,53 @@ def compute_table3(predictions: pd.DataFrame, config: dict) -> pd.DataFrame:
                 portfolio_stocks["liq_daily_sigma"].median()
             )
             adv = portfolio_stocks["liq_dvol_21d"].clip(lower=1e3)
-            q_i = aum / max(n_portfolio, 1)
 
-            half_spread = spread * spread_scale / 2.0
-            market_impact = lam * sigma * np.sqrt(q_i / adv)
-            avg_tc = (half_spread + market_impact).mean()
+            avg_half_spread = (spread * spread_scale / 2.0).mean()
+            avg_impact_base = (sigma / np.sqrt(adv)).mean()  # needs * lam * sqrt(q_i)
 
-            portfolio_tc = turnover * avg_tc
-            quintile_results[q]["tc"].append(portfolio_tc)
+            quintile_data[q]["spread_arr"].append(avg_half_spread)
+            quintile_data[q]["impact_arr"].append(avg_impact_base)
 
-    # Compute annualized Sharpe ratios
+    # Compute SR for each quintile × AUM
     rows = []
     for q in range(1, 6):
-        gross = np.array(quintile_results[q]["gross"])
-        tc = np.array(quintile_results[q]["tc"])
-        net = gross - tc[:len(gross)]
+        gross = np.array(quintile_data[q]["gross"])
+        turnover = np.array(quintile_data[q]["turnover"])
+        spread_arr = np.array(quintile_data[q]["spread_arr"])
+        impact_arr = np.array(quintile_data[q]["impact_arr"])
+        n_port = np.array(quintile_data[q]["n_portfolio"])
+        n_months = len(gross)
 
-        gross_sr = np.mean(gross) / np.std(gross) * np.sqrt(12) if len(gross) > 1 else np.nan
-        net_sr = np.mean(net) / np.std(net) * np.sqrt(12) if len(net) > 1 else np.nan
+        if n_months < 2:
+            row = {"Quintile": f"Q{q}", "Gross_SR": np.nan,
+                   "Avg_Ret_pct": np.nan, "N_months": 0}
+            for label in aum_scenarios:
+                row[f"Net_SR_{label}"] = np.nan
+                row[f"Avg_TC_{label}_pct"] = np.nan
+            rows.append(row)
+            continue
 
-        rows.append({
+        gross_sr = np.mean(gross) / np.std(gross, ddof=1) * np.sqrt(12)
+
+        row = {
             "Quintile": f"Q{q}",
             "Gross_SR": gross_sr,
-            "Net_SR_500M": net_sr,
             "Avg_Ret_pct": np.mean(gross) * 100,
-            "Avg_TC_pct": np.mean(tc[:len(gross)]) * 100,
-            "N_months": len(gross),
-        })
+            "N_months": n_months,
+        }
+
+        for label, aum in aum_scenarios.items():
+            # TC = turnover * (half_spread + lam * sqrt(q_i/ADV) component)
+            # q_i = aum / n_portfolio per month
+            q_i = aum / np.maximum(n_port, 1)
+            monthly_tc = turnover * (spread_arr + lam * np.sqrt(q_i) * impact_arr)
+            net = gross - monthly_tc[:len(gross)]
+
+            net_sr = np.mean(net) / np.std(net, ddof=1) * np.sqrt(12)
+            row[f"Net_SR_{label}"] = net_sr
+            row[f"Avg_TC_{label}_pct"] = np.mean(monthly_tc[:len(gross)]) * 100
+
+        rows.append(row)
 
     return pd.DataFrame(rows)
 
@@ -447,14 +477,28 @@ def plot_r2_by_quintile(table2: pd.DataFrame, output_dir: Path):
 
 
 def plot_sr_scissors(table3: pd.DataFrame, output_dir: Path):
-    """Scissors chart: gross SR vs net SR by quintile."""
-    fig, ax = plt.subplots(figsize=(8, 5))
+    """Scissors chart: gross SR vs net SR at multiple AUM levels."""
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     x = range(len(table3))
-    ax.plot(x, table3["Gross_SR"], "o-", color="#4C72B0", linewidth=2,
-            markersize=8, label="Gross SR")
-    ax.plot(x, table3["Net_SR_500M"], "s--", color="#DD8452", linewidth=2,
-            markersize=8, label="Net SR ($500M)")
+
+    # Gross SR (AUM-independent)
+    ax.plot(x, table3["Gross_SR"], "o-", color="#4C72B0", linewidth=2.5,
+            markersize=8, label="Gross SR", zorder=5)
+
+    # Net SR at each AUM
+    net_styles = {
+        "Net_SR_100M": ("#66C2A5", "^", "--", "$100M"),
+        "Net_SR_500M": ("#DD8452", "s", "--", "$500M"),
+        "Net_SR_1B":   ("#E78AC3", "D", ":",  "$1B"),
+        "Net_SR_5B":   ("#E5C494", "v", ":",  "$5B"),
+    }
+
+    for col, (color, marker, ls, label) in net_styles.items():
+        if col in table3.columns:
+            ax.plot(x, table3[col], marker=marker, linestyle=ls,
+                    color=color, linewidth=1.8, markersize=7,
+                    label=f"Net SR ({label})", zorder=4)
 
     ax.set_xticks(x)
     ax.set_xticklabels(table3["Quintile"])
@@ -462,7 +506,7 @@ def plot_sr_scissors(table3: pd.DataFrame, output_dir: Path):
     ax.set_ylabel("Annualized Sharpe Ratio")
     ax.set_title("Gross vs. Net Sharpe Ratio by Liquidity Quintile (ElasticNet)")
     ax.axhline(y=0, color="black", linewidth=0.5)
-    ax.legend()
+    ax.legend(loc="upper right", fontsize=9)
 
     plt.tight_layout()
     fig.savefig(output_dir / "figure_sr_scissors.png", dpi=150)
@@ -480,6 +524,10 @@ def main():
     parser.add_argument(
         "--quick", action="store_true",
         help="Use OOS start from 2015 for faster iteration"
+    )
+    parser.add_argument(
+        "--recompute", action="store_true",
+        help="Recompute tables/figures from existing predictions (skip model training)"
     )
     args = parser.parse_args()
 
@@ -513,12 +561,18 @@ def main():
     table1.to_csv(output_dir / "table1_distribution.csv", index=False)
     logger.info("Table 1:\n%s", table1.to_string(index=False))
 
-    # ── Rolling predictions ──
+    # ── Rolling predictions (or load existing) ──
     pred_path = output_dir / "predictions_elasticnet.parquet"
-    logger.info("Running ElasticNet rolling predictions...")
-    predictions = run_rolling_predictions(panel, features, config, oos_months)
-    predictions.to_parquet(pred_path, index=False)
-    logger.info("Saved predictions: %d rows", len(predictions))
+
+    if args.recompute and pred_path.exists():
+        logger.info("Loading existing predictions from %s", pred_path)
+        predictions = pd.read_parquet(pred_path)
+        logger.info("Loaded predictions: %d rows", len(predictions))
+    else:
+        logger.info("Running ElasticNet rolling predictions...")
+        predictions = run_rolling_predictions(panel, features, config, oos_months)
+        predictions.to_parquet(pred_path, index=False)
+        logger.info("Saved predictions: %d rows", len(predictions))
 
     # ── Table 2: OOS R² by quintile ──
     logger.info("Computing Table 2: OOS R² by quintile...")

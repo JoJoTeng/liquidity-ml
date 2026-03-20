@@ -41,7 +41,7 @@ TC_i = (spread_i * spread_scale) / 2 + lambda_mi * sigma_i * sqrt(Q_i / ADV_i)
 
 where:
 - `spread_i` = `liq_BidAskSpread` (Corwin-Schultz from CZ)
-- `spread_scale` = 0.30 (from `config["transaction_costs"]["spread_scale"]`)
+- `spread_scale` = 1.0 (from `config["transaction_costs"]["spread_scale"]`)
 - `lambda_mi` = 0.1 (from `config["transaction_costs"]["lambda_market_impact"]`)
 - `sigma_i` = `liq_daily_sigma` (21-day rolling daily return volatility)
 - `ADV_i` = `liq_dvol_21d`
@@ -187,7 +187,7 @@ config["training"]["retune_frequency"]     # 24
 config["data"]["target_col"]               # "excess_ret"
 config["data"]["selected_features"]        # list of 86 feature names
 config["liquidity"]["primary"]             # "dvol_21d"
-config["transaction_costs"]["spread_scale"]        # 0.30
+config["transaction_costs"]["spread_scale"]        # 1.0
 config["transaction_costs"]["lambda_market_impact"] # 0.1
 config["project"]["seed"]                  # 42
 ```
@@ -309,7 +309,7 @@ Bar chart for R² and scissors chart for SR. Use matplotlib with Agg backend.
 
 6. **Zero benchmark for OOS R² (Evidence 2).** Following GKX: `R² = 1 - SS_pred / SS_zero` where `SS_zero = sum(y_true²)`. Not `sum((y_true - mean)²)`.
 
-7. **TC uses spread_scale = 0.30** (institutional calibration), not 1.0. The TC needs to be in realistic absolute units for both the implementability threshold (Table 1) and net return computation (Table 3).
+7. **TC uses spread_scale = 1.0** (raw CZ Corwin-Schultz spread). Uses the full spread estimate for both the implementability threshold (Table 1) and net return computation (Table 3).
 
 8. **Implementability threshold τ = 1% one-way** for Table 1. Can add robustness with τ ∈ {0.5%, 1.0%, 2.0%} later.
 

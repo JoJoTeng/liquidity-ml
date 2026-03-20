@@ -141,22 +141,21 @@ H1 and H3 are tested on both net and gross returns:
 - **Tradable (8):** Mom12m, Mom6m, BMdec, GP, AssetGrowth, RoE, CF, CBOperProf
 - Extended versions also defined: ILLIQUIDITY_FEATURES_EXT (12), TRADABLE_FEATURES_EXT (38)
 
-## Weighting Schemes (Equations 8–11)
+## Weighting Schemes (Equations 11–14)
 All normalized to mean=1.0 within each cross-section.
-Liquidity percentile is based on dvol_21d (21-day trailing avg dollar volume, Eq. 14).
 
-Scheme A — Softmax on Rank (Primary):
+Scheme C — Transaction Cost-Based (Primary):
+  w_i = 1 / (1 + Spread_i)
+  where Spread_i = BidAskSpread (from CZ signed predictors, raw scale)
+
+Scheme A — Softmax on Rank (Robustness):
   w_i = exp(λ · percentile_i) / Σ_j exp(λ · percentile_j)
-  λ = 2.0
+  λ = 2.0, percentile based on dvol_21d
 
-Scheme B — Linear Dollar Volume:
+Scheme B — Linear Dollar Volume (Robustness):
   w_i = DolVol_i / mean(DolVol)
 
-Scheme C — Transaction Cost-Based:
-  w_i = 1 / (1 + Spread_i)
-  where Spread_i = BidAskSpread (from CZ signed predictors)
-
-Scheme D — Quintile Discrete:
+Scheme D — Quintile Discrete (Robustness):
   Q5 (most liquid): 5.0, Q4: 3.0, Q3: 1.0, Q2: 0.3, Q1 (most illiquid): 0.1
 
 ## Data Columns After Fetch (00_fetch_data.py output)
@@ -190,11 +189,11 @@ The signed_predictors_all_wide.csv contains:
 - Decile portfolios: Long Q10 (highest predicted), Short Q1
 - Liquidity filter: remove bottom 40% by dvol_21d
 - Position cap: 5% max per stock (iterative redistribution)
-- No-trade buffer: ±1 decile (stocks in long/short stay if within buffer, reduces turnover)
+- No-trade buffer: disabled (buffer_quantiles = 0, full rebalance each month)
 
 ## Transaction Costs (Frazzini et al. 2018, Eq. 12)
 TC_i = (Spread_i × spread_scale)/2 + λ · σ_i · √(Q_i / ADV_i), where λ = 0.1
-- spread_scale = 0.30 (calibrates CZ Corwin-Schultz ~94bps → ~28bps effective)
+- spread_scale = 1.0 (raw CZ Corwin-Schultz spread, no downscaling)
 - spread_cap = 5% (clips outliers)
 - AUM scenarios: $100M, $500M, $1B, $5B
 Net return columns in saved CSVs: `ret_ls_net_{100M,500M,1B,5B}`
