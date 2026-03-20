@@ -184,7 +184,10 @@ def normalize_features(
     For each feature and each month (yyyymm cross-section):
         1. Rank non-NaN values (average ties)
         2. Percentile = (rank - 1) / (N - 1)    → [0, 1]
-        3. Rescale = percentile - 0.5            → [-0.5, 0.5]
+        3. Rescale = percentile * 2 - 1          → [-1, 1]
+
+    Following GKX (2020, footnote 29). Missing values filled with 0.0
+    after normalization (midpoint = median rank).
 
     This function is intentionally separate from load_panel so that the
     rolling-window framework can normalize each train/val/test split
@@ -207,5 +210,5 @@ def normalize_features(
             method="average", na_option="keep"
         )
         n_valid = out.groupby("yyyymm")[col].transform("count")
-        out[col] = (ranked - 1) / (n_valid - 1) - 0.5
+        out[col] = (ranked - 1) / (n_valid - 1) * 2 - 1
     return out

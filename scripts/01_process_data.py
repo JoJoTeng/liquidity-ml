@@ -104,7 +104,7 @@ def main() -> None:
     feat_min = panel[features].min().min()
     feat_max = panel[features].max().max()
     logger.info(
-        "Normalized feature range: [%.4f, %.4f] (expected [-0.5, 0.5])",
+        "Normalized feature range: [%.4f, %.4f] (expected [-1.0, 1.0])",
         feat_min,
         feat_max,
     )
@@ -152,7 +152,7 @@ def main() -> None:
     logger.info("  Columns:         %d", len(panel.columns))
     logger.info("  Permnos:         %d", panel["permno"].nunique())
     logger.info("  Date range:      %d – %d", panel["yyyymm"].min(), panel["yyyymm"].max())
-    logger.info("  Features:        %d (normalized to [-0.5, 0.5])", len(features))
+    logger.info("  Features:        %d (normalized to [-1, 1])", len(features))
     logger.info("  Liquidity cols:  %d (%s)", len(liq_cols), ", ".join(liq_cols))
     logger.info("  Weight schemes:  %d (%s)", len(weight_cols), ", ".join(weight_cols))
     logger.info("  Target NaN:      %d", panel["excess_ret"].isna().sum())

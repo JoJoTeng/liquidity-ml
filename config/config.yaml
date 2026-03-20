@@ -256,6 +256,7 @@ data:
     - BMdec
     - BookLeverage
     - BPEBM
+    - Cash
     - CBOperProf
     - CF
     - cfp
@@ -275,12 +276,15 @@ data:
     - DelFINL
     - DelLTI
     - DelNetFin
+    - DivYieldST
+    - EP
     - High52
     - RealizedVol
     - DolVol
     - EBM
     - EarningsSurprise
     - EquityDuration
+    - Illiquidity
     - GP
     - grcapx
     - Herf
@@ -294,6 +298,7 @@ data:
     - LRreversal
     - Leverage
     - MaxRet
+    - MS
     - Mom12m
     - Mom12mOffSeason
     - Mom6m
@@ -302,9 +307,13 @@ data:
     - MomSeasonShort
     - NOA
     - OPLeverage
+    - OrgCap
+    - PS
     - PctAcc
     - Price
     - Beta
+    - RD
+    - RDS
     - ResidualMomentum
     - ReturnSkew
     - ReturnSkew3F
@@ -318,6 +327,9 @@ data:
     - VolSD
     - dNoa
     - hire
+    - roaq
+    - std_turn
+    - tang
     - zerotrade1M
     - zerotrade6M
     - zerotrade12M
@@ -427,7 +439,7 @@ training:
   oos_end: 202412   # December 2024
 
   preprocessing:
-    normalization: "rank_quantile" # rank → [-0.5, 0.5]
+    normalization: "rank_quantile" # rank → [-1, 1] (GKX 2020 convention)
     missing_fill: "zero"
 
 # ----------------------------------------------------------

@@ -27,7 +27,7 @@ liquidity_ml/
 │   ├── config.py              ← load_config(), get_data_dir(), get_output_dir()
 │   ├── data/
 │   │   └── loader.py          ← load_panel(), get_feature_names(), normalize_features()
-│   │                            Feature lists: SELECTED_FEATURES (74),
+│   │                            Feature lists: SELECTED_FEATURES (86),
 │   │                            TRADABLE_FEATURES (8), ILLIQUIDITY_FEATURES (8),
 │   │                            TRADABLE_FEATURES_EXT (38), ILLIQUIDITY_FEATURES_EXT (12)
 │   ├── weighting/
@@ -177,7 +177,7 @@ The signed_predictors_all_wide.csv contains:
 - Dates: yyyymm integer (e.g. 202301 for Jan 2023)
 - Returns: decimal (0.05 = 5%)
 - Target: `excess_ret = ret - RF`, shifted forward by 1 month (config: `target_col: "excess_ret"`)
-- Normalization: rank → quantile [0, 1] → rescale to [-0.5, 0.5]
+- Normalization: rank → quantile [0, 1] → rescale to [-1, 1] (GKX 2020 convention)
 - Missing: drop rows with >30% features missing, fill remaining NaN with 0.0 (neutral rank, Gu et al. 2020)
 
 ## Training Protocol
