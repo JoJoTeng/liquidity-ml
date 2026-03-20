@@ -351,20 +351,22 @@ liquidity:
     # - DolVol # dollar volume (from CZ predictors)
 
 # ----------------------------------------------------------
-# Weighting Schemes (Equations 8–11)
+# Weighting Schemes (Equations 11–14)
 # ----------------------------------------------------------
 weighting:
-  primary: "softmax_rank"
+  primary: "transaction_cost"        # Scheme C: w_i = 1/(1 + Spread_i), Eq. 13
 
-  softmax_rank: # Eq. 8
+  transaction_cost: # Eq. 13 (Primary)
+    spread_col: "BidAskSpread" # from CZ predictors (Corwin-Schultz, raw scale)
+    spread_scale: 1.0          # Use raw CZ spread for training weights (no downscaling)
+                               # Note: TC *evaluation* uses spread_scale=0.30 separately
+
+  softmax_rank: # Eq. 11 (Robustness)
     lambda: 2.0
 
-  linear_dolvol: {} # Eq. 9
+  linear_dolvol: {} # Eq. 12 (Robustness)
 
-  transaction_cost: # Eq. 10
-    spread_col: "BidAskSpread" # from CZ predictors
-
-  quintile_discrete: # Eq. 11
+  quintile_discrete: # Eq. 14 (Robustness)
     weights:
       Q1: 0.1
       Q2: 0.3
@@ -452,19 +454,14 @@ portfolio:
   position_cap: 0.05
   min_liquidity_pctile: 0.40
   rebalance_frequency: "monthly"
-  buffer_quantiles: 1             # No-trade buffer: keep stocks that move ±1 decile
-                                  # from target. A stock in the long decile (10) stays
-                                  # if it only drops to decile 9. Reduces turnover ~30-50%.
+  buffer_quantiles: 0             # No buffer — full rebalance each month
 
 # ----------------------------------------------------------
 # Transaction Cost Model
 # ----------------------------------------------------------
 transaction_costs:
   spread_col: "BidAskSpread"
-  spread_scale: 0.30              # Corwin-Schultz → effective spread calibration
-                                  # CZ BidAskSpread uses high-low estimator (~94bps avg),
-                                  # institutional effective spreads are ~20-30bps (3-5× lower).
-                                  # 0.30 maps ~94bps → ~28bps, consistent with TAQ evidence.
+  spread_scale: 1.0               # Use raw CZ Corwin-Schultz spread (no downscaling)
   spread_cap: 0.05               # Cap spread at 5% (clip outliers)
   lambda_market_impact: 0.1       # Frazzini et al. (2018) Eq. 12
   sigma_col: "daily_sigma"        # 21-day rolling daily return volatility
