@@ -2,16 +2,19 @@
 Motivation Analysis — Section 2: The Implementability Imbalance Problem
 ========================================================================
 Produces empirical evidence that standard ML training is misaligned with
-the implementable investment universe.  Uses ElasticNet only (linear
-benchmark) with standard (unweighted) training.
+the implementable investment universe, and previews that weighted training
+helps. Uses ElasticNet (linear benchmark) with both standard and weighted
+training.
 
 Outputs (saved to outputs/motivation/):
-  - table1_distribution.csv       Distribution mismatch by quintile
-  - table2_oos_r2_quintile.csv    OOS R² by liquidity quintile
-  - table3_sr_quintile.csv        Gross vs net SR by quintile
-  - predictions_elasticnet.parquet  Raw OOS predictions
-  - figure_r2_by_quintile.png     Bar chart of R² by quintile
-  - figure_sr_scissors.png        Gross vs net SR scissors chart
+  - table1_distribution.csv              Distribution mismatch by quintile
+  - table2_oos_r2_quintile.csv           OOS R² by quintile (std vs weighted)
+  - table3_sr_quintile_std.csv           Gross vs net SR by quintile (standard)
+  - table3_sr_quintile_weighted.csv      Gross vs net SR by quintile (weighted)
+  - predictions_elasticnet_std.parquet   Raw OOS predictions (standard)
+  - predictions_elasticnet_wt.parquet    Raw OOS predictions (weighted)
+  - figure_r2_by_quintile.png            R² bar chart (std vs weighted)
+  - figure_sr_scissors.png               Gross vs net SR scissors chart
 
 Usage:
   python scripts/04_motivation_analysis.py           # Full run (2000-2024)
@@ -35,6 +38,7 @@ from sklearn.linear_model import ElasticNetCV
 
 from src.config import load_config, get_output_dir
 from src.data.loader import load_panel, get_feature_names, normalize_features
+from src.weighting import compute_weights
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +61,7 @@ class ElasticNetPredictor:
             max_iter=5000,
             random_state=self.seed,
         )
-        self.model.fit(X_train, y_train)
+        self.model.fit(X_train, y_train, sample_weight=sample_weight)
         return self
 
     def predict(self, X) -> np.ndarray:
@@ -106,7 +110,7 @@ def _split_window(panel, test_yyyymm, all_months, config):
 
 
 def _prepare_xy(train_df, val_df, test_df, features, config):
-    """Normalize features and extract arrays (standard training only)."""
+    """Normalize features and extract arrays."""
     target_col = config["data"]["target_col"]
 
     # Normalize: train+val together, test independently
@@ -133,6 +137,7 @@ def _prepare_xy(train_df, val_df, test_df, features, config):
         "y_val": val_norm[target_col].values,
         "X_test": test_norm[features].values,
         "y_test": test_norm[target_col].values,
+        "train_norm": train_norm,  # for weight computation
         "test_norm": test_norm,
     }
 
@@ -215,11 +220,19 @@ def run_rolling_predictions(
     features: list[str],
     config: dict,
     oos_months: list[int],
+    weighted: bool = False,
 ) -> pd.DataFrame:
-    """Run ElasticNet rolling-window OOS predictions."""
+    """Run ElasticNet rolling-window OOS predictions.
+
+    Parameters
+    ----------
+    weighted : If True, use implementability weights (primary scheme)
+               from config for sample_weight in training.
+    """
     seed = config["project"]["seed"]
     all_months = sorted(panel["yyyymm"].unique())
     target_col = config["data"]["target_col"]
+    label = "weighted" if weighted else "standard"
 
     predictions_list = []
     t_start = time.time()
@@ -242,9 +255,16 @@ def run_rolling_predictions(
         # Prepare
         data = _prepare_xy(train_df, val_df, test_df, features, config)
 
+        # Compute sample weights for training data (if weighted)
+        sw = None
+        if weighted:
+            train_norm = data["train_norm"]
+            if len(train_norm) > 0:
+                sw = compute_weights(train_norm).values
+
         # Train ElasticNet
         model = ElasticNetPredictor(seed=seed)
-        model.fit(data["X_train"], data["y_train"])
+        model.fit(data["X_train"], data["y_train"], sample_weight=sw)
 
         # Predict
         preds = model.predict(data["X_test"])
@@ -264,8 +284,8 @@ def run_rolling_predictions(
         predictions_list.append(month_preds)
 
         elapsed = time.time() - t_start
-        logger.info("Month %d (%d/%d) — %.0fs elapsed",
-                    test_month, i + 1, len(oos_months), elapsed)
+        logger.info("[%s] Month %d (%d/%d) — %.0fs elapsed",
+                    label, test_month, i + 1, len(oos_months), elapsed)
 
     predictions = pd.concat(predictions_list, ignore_index=True)
 
@@ -449,25 +469,25 @@ def compute_table3(predictions: pd.DataFrame, config: dict) -> pd.DataFrame:
 # ── Figures ───────────────────────────────────────────────────
 
 
-def plot_r2_by_quintile(table2: pd.DataFrame, output_dir: Path):
-    """Bar chart of OOS R² by liquidity quintile."""
-    # Exclude pooled row for the bar chart
-    data = table2[table2["Quintile"] != "Pooled"]
+def plot_r2_by_quintile_comparison(table2: pd.DataFrame, output_dir: Path):
+    """Grouped bar chart: OOS R² standard vs weighted by quintile."""
+    data = table2[table2["Quintile"] != "Pooled"].copy()
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    x = range(len(data))
-    bars = ax.bar(x, data["OOS_R2_pct"], color="#4C72B0", edgecolor="black", width=0.6)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    x = np.arange(len(data))
+    width = 0.35
+
+    bars_std = ax.bar(x - width / 2, data["R2_Standard"], width,
+                      color="#4C72B0", edgecolor="white", label="Standard Training")
+    bars_wt = ax.bar(x + width / 2, data["R2_Weighted"], width,
+                     color="#DD8452", edgecolor="white", label="Weighted Training")
+
     ax.set_xticks(x)
     ax.set_xticklabels(data["Quintile"])
     ax.set_xlabel("Liquidity Quintile")
     ax.set_ylabel("OOS R² (%)")
-    ax.set_title("Out-of-Sample R² by Liquidity Quintile (ElasticNet)")
+    ax.set_title("OOS R² by Liquidity Quintile: Standard vs. Weighted Training (ElasticNet)")
     ax.axhline(y=0, color="black", linewidth=0.5)
-
-    # Add pooled reference line
-    pooled_r2 = table2.loc[table2["Quintile"] == "Pooled", "OOS_R2_pct"].values[0]
-    ax.axhline(y=pooled_r2, color="red", linestyle="--", linewidth=1,
-               label=f"Pooled R² = {pooled_r2:.2f}%")
     ax.legend()
 
     plt.tight_layout()
@@ -476,7 +496,8 @@ def plot_r2_by_quintile(table2: pd.DataFrame, output_dir: Path):
     logger.info("Saved figure_r2_by_quintile.png")
 
 
-def plot_sr_scissors(table3: pd.DataFrame, output_dir: Path):
+def plot_sr_scissors(table3: pd.DataFrame, output_dir: Path,
+                     title_suffix: str = "", filename: str = "figure_sr_scissors.png"):
     """Scissors chart: gross SR vs net SR at multiple AUM levels."""
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -504,14 +525,59 @@ def plot_sr_scissors(table3: pd.DataFrame, output_dir: Path):
     ax.set_xticklabels(table3["Quintile"])
     ax.set_xlabel("Liquidity Quintile")
     ax.set_ylabel("Annualized Sharpe Ratio")
-    ax.set_title("Gross vs. Net Sharpe Ratio by Liquidity Quintile (ElasticNet)")
+    title = "Gross vs. Net Sharpe Ratio by Liquidity Quintile (ElasticNet)"
+    if title_suffix:
+        title += f" — {title_suffix}"
+    ax.set_title(title)
     ax.axhline(y=0, color="black", linewidth=0.5)
     ax.legend(loc="upper right", fontsize=9)
 
     plt.tight_layout()
-    fig.savefig(output_dir / "figure_sr_scissors.png", dpi=150)
+    fig.savefig(output_dir / filename, dpi=150)
     plt.close(fig)
-    logger.info("Saved figure_sr_scissors.png")
+    logger.info("Saved %s", filename)
+
+
+def plot_sr_scissors_comparison(table3_std: pd.DataFrame, table3_wt: pd.DataFrame,
+                                output_dir: Path):
+    """Side-by-side scissors chart: standard (left) vs weighted (right)."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+
+    net_styles = {
+        "Net_SR_100M": ("#66C2A5", "^", "--", "$100M"),
+        "Net_SR_500M": ("#DD8452", "s", "--", "$500M"),
+        "Net_SR_1B":   ("#E78AC3", "D", ":",  "$1B"),
+        "Net_SR_5B":   ("#E5C494", "v", ":",  "$5B"),
+    }
+
+    for ax, table3, subtitle in [(ax1, table3_std, "Standard Training"),
+                                  (ax2, table3_wt, "Weighted Training")]:
+        x = range(len(table3))
+        ax.plot(x, table3["Gross_SR"], "o-", color="#4C72B0", linewidth=2.5,
+                markersize=8, label="Gross SR", zorder=5)
+
+        for col, (color, marker, ls, label) in net_styles.items():
+            if col in table3.columns:
+                ax.plot(x, table3[col], marker=marker, linestyle=ls,
+                        color=color, linewidth=1.8, markersize=7,
+                        label=f"Net SR ({label})", zorder=4)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(table3["Quintile"])
+        ax.set_xlabel("Liquidity Quintile")
+        ax.set_title(subtitle)
+        ax.axhline(y=0, color="black", linewidth=0.5)
+
+    ax1.set_ylabel("Annualized Sharpe Ratio")
+    ax2.legend(loc="upper right", fontsize=8)
+
+    fig.suptitle("Gross vs. Net Sharpe Ratio: Standard vs. Weighted Training (ElasticNet)",
+                 fontsize=13, y=1.02)
+    plt.tight_layout()
+    fig.savefig(output_dir / "figure_sr_scissors_comparison.png", dpi=150,
+                bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved figure_sr_scissors_comparison.png")
 
 
 # ── Main ──────────────────────────────────────────────────────
@@ -561,35 +627,60 @@ def main():
     table1.to_csv(output_dir / "table1_distribution.csv", index=False)
     logger.info("Table 1:\n%s", table1.to_string(index=False))
 
-    # ── Rolling predictions (or load existing) ──
-    pred_path = output_dir / "predictions_elasticnet.parquet"
+    # ── Rolling predictions: Standard + Weighted (or load existing) ──
+    pred_path_std = output_dir / "predictions_elasticnet_std.parquet"
+    pred_path_wt = output_dir / "predictions_elasticnet_wt.parquet"
 
-    if args.recompute and pred_path.exists():
-        logger.info("Loading existing predictions from %s", pred_path)
-        predictions = pd.read_parquet(pred_path)
-        logger.info("Loaded predictions: %d rows", len(predictions))
+    if args.recompute and pred_path_std.exists() and pred_path_wt.exists():
+        logger.info("Loading existing predictions (--recompute)...")
+        preds_std = pd.read_parquet(pred_path_std)
+        preds_wt = pd.read_parquet(pred_path_wt)
+        logger.info("Loaded: std=%d rows, wt=%d rows", len(preds_std), len(preds_wt))
     else:
-        logger.info("Running ElasticNet rolling predictions...")
-        predictions = run_rolling_predictions(panel, features, config, oos_months)
-        predictions.to_parquet(pred_path, index=False)
-        logger.info("Saved predictions: %d rows", len(predictions))
+        logger.info("Running ElasticNet rolling predictions (STANDARD)...")
+        preds_std = run_rolling_predictions(
+            panel, features, config, oos_months, weighted=False
+        )
+        preds_std.to_parquet(pred_path_std, index=False)
+        logger.info("Saved standard predictions: %d rows", len(preds_std))
 
-    # ── Table 2: OOS R² by quintile ──
+        logger.info("Running ElasticNet rolling predictions (WEIGHTED)...")
+        preds_wt = run_rolling_predictions(
+            panel, features, config, oos_months, weighted=True
+        )
+        preds_wt.to_parquet(pred_path_wt, index=False)
+        logger.info("Saved weighted predictions: %d rows", len(preds_wt))
+
+    # ── Table 2: OOS R² by quintile (std vs weighted) ──
     logger.info("Computing Table 2: OOS R² by quintile...")
-    table2 = compute_table2(predictions)
+    t2_std = compute_table2(preds_std)
+    t2_wt = compute_table2(preds_wt)
+
+    table2 = t2_std.rename(columns={"OOS_R2_pct": "R2_Standard"})
+    table2["R2_Weighted"] = t2_wt["OOS_R2_pct"].values
+    table2["R2_Improvement"] = table2["R2_Weighted"] - table2["R2_Standard"]
     table2.to_csv(output_dir / "table2_oos_r2_quintile.csv", index=False)
     logger.info("Table 2:\n%s", table2.to_string(index=False))
 
     # ── Table 3: Gross vs net SR by quintile ──
     logger.info("Computing Table 3: SR by quintile...")
-    table3 = compute_table3(predictions, config)
-    table3.to_csv(output_dir / "table3_sr_quintile_elasticnet.csv", index=False)
-    logger.info("Table 3:\n%s", table3.to_string(index=False))
+    table3_std = compute_table3(preds_std, config)
+    table3_wt = compute_table3(preds_wt, config)
+    table3_std.to_csv(output_dir / "table3_sr_quintile_std.csv", index=False)
+    table3_wt.to_csv(output_dir / "table3_sr_quintile_weighted.csv", index=False)
+    logger.info("Table 3 (Standard):\n%s", table3_std.to_string(index=False))
+    logger.info("Table 3 (Weighted):\n%s", table3_wt.to_string(index=False))
 
     # ── Figures ──
     logger.info("Generating figures...")
-    plot_r2_by_quintile(table2, output_dir)
-    plot_sr_scissors(table3, output_dir)
+    plot_r2_by_quintile_comparison(table2, output_dir)
+    plot_sr_scissors(table3_std, output_dir,
+                     title_suffix="Standard Training",
+                     filename="figure_sr_scissors_std.png")
+    plot_sr_scissors(table3_wt, output_dir,
+                     title_suffix="Weighted Training",
+                     filename="figure_sr_scissors_weighted.png")
+    plot_sr_scissors_comparison(table3_std, table3_wt, output_dir)
 
     logger.info("Done. Outputs saved to %s", output_dir)
 
