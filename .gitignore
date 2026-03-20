@@ -58,3 +58,4 @@ Thumbs.db
 # Claude Code (local session state)
 # =========================
 .claude/
+outputs/motivation/predictions_elasticnet.parquet
