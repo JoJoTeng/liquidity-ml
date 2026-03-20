@@ -1062,7 +1062,7 @@ def main():
             model_names=model_names,
             importance_type=importance_type,
             output_dir=experiment_dir,
-            extended=True,
+            extended=False,
         )
         if len(h2_summary) > 0:
             h2_summary.to_csv(tables_dir / "h2_summary.csv", index=False)

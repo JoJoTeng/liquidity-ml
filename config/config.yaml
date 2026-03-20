@@ -26,24 +26,38 @@ data:
   # Feature groups for mechanism analysis (Hypothesis 2)
   # Core groups: narrow, cleanest exemplars for the main test
   illiquidity_features:
-    - IdioVol3F
-    - IdioVolAHT
+    - Size
+    - Price
+    - DolVol
+    - BidAskSpread
     - zerotrade1M
     - zerotrade6M
     - zerotrade12M
-    - MaxRet
-    - VolSD
+    - PriceDelayRsq
     - BetaLiquidityPS
+    - Herf
+    - IdioVol3F
+    - IdioVolAHT
+    - RealizedVol
+    - ReturnSkew
+    - MaxRet
 
   tradable_features:
     - Mom12m
     - Mom6m
+    - IndMom
+    - High52
     - BMdec
-    - GP
-    - AssetGrowth
-    - RoE
     - CF
+    - cfp
+    - GP
+    - RoE
     - CBOperProf
+    - AssetGrowth
+    - ChInv
+    - Investment
+    - hire
+    - Tax
 
   # Extended groups: broader sets for robustness checks
   # Report both narrow (above) and extended results
