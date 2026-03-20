@@ -9,6 +9,7 @@ from src.weighting.schemes import (
     compute_all_weights,
     get_available_schemes,
     PRIMARY_LIQ_COL,
+    PRIMARY_SCHEME,
     _normalize_to_mean_one,
     _softmax_rank,
     _linear_dolvol,
@@ -197,7 +198,7 @@ class TestDispatcher:
 
     def test_default_is_primary(self, single_cross_section):
         w_default = compute_weights(single_cross_section)
-        w_explicit = compute_weights(single_cross_section, scheme="softmax_rank")
+        w_explicit = compute_weights(single_cross_section, scheme=PRIMARY_SCHEME)
         pd.testing.assert_series_equal(w_default, w_explicit)
 
 

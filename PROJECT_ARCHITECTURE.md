@@ -110,13 +110,13 @@ Results are reported per-model and as an ensemble average.
 
 Four schemes, all normalize to mean=1 within each cross-section:
 
-**Scheme A: Softmax on Rank (Primary)** -- w_i = exp(lambda * percentile_i) / mean(...), lambda=2.0. Smooth, differentiable. Most liquid gets ~7.4x weight of least liquid.
+**Scheme C: Transaction Cost Inverse (Primary)** -- w_i = 1/(1+Spread_i) / mean(...). Uses raw CZ BidAskSpread (scale=1.0). Tighter spreads = higher weights.
 
-**Scheme B: Linear Dollar Volume** -- w_i = DolVol_i / mean(DolVol_i). Direct proportional weighting.
+**Scheme A: Softmax on Rank (Robustness)** -- w_i = exp(lambda * percentile_i) / mean(...), lambda=2.0. Smooth, differentiable. Most liquid gets ~7.4x weight of least liquid.
 
-**Scheme C: Transaction Cost Inverse** -- w_i = 1/(1+Spread_i) / mean(...). Tighter spreads = higher weights.
+**Scheme B: Linear Dollar Volume (Robustness)** -- w_i = DolVol_i / mean(DolVol_i). Direct proportional weighting.
 
-**Scheme D: Quintile Discrete** -- Q1->0.1, Q2->0.3, Q3->1.0, Q4->3.0, Q5->5.0 then normalize. Most aggressive.
+**Scheme D: Quintile Discrete (Robustness)** -- Q1->0.1, Q2->0.3, Q3->1.0, Q4->3.0, Q5->5.0 then normalize. Most aggressive.
 
 ---
 
@@ -320,7 +320,7 @@ python scripts/03_analyze_results.py --importance-type gain # Use gain instead o
 | newey_west_lags | 6 | HAC lag count |
 | bootstrap_samples | 5000 | LW bootstrap replications |
 | target_col | excess_ret | Models predict excess returns (ret - RF) |
-| primary weighting | softmax_rank | Default scheme (Scheme A) |
+| primary weighting | transaction_cost | Default scheme (Scheme C): w_i = 1/(1+Spread_i) |
 | compute_shap | true | Enable SHAP at each rolling window |
 | background_samples | 100 | Background data for NN SHAP |
 | seed | 42 | Reproducibility |

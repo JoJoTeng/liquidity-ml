@@ -98,15 +98,17 @@ def _linear_dolvol(group: pd.DataFrame) -> pd.Series:
 
 
 def _transaction_cost(group: pd.DataFrame, spread_col: str | None = None) -> pd.Series:
-    """w_i = 1 / (1 + Spread_i), normalized to mean=1.
+    """w_i = 1 / (1 + spread_scale * Spread_i), normalized to mean=1.
 
     Parameters
     ----------
     group : single cross-section with liq_{spread_col} column.
     spread_col : column base name. Default from config ('BidAskSpread').
     """
+    tc_cfg = _weighting_cfg["transaction_cost"]
     if spread_col is None:
-        spread_col = _weighting_cfg["transaction_cost"]["spread_col"]
+        spread_col = tc_cfg["spread_col"]
+    spread_scale = tc_cfg.get("spread_scale", 1.0)
     col = f"liq_{spread_col}"
 
     spread = group[col].copy()
@@ -119,6 +121,7 @@ def _transaction_cost(group: pd.DataFrame, spread_col: str | None = None) -> pd.
     spread = spread.fillna(median_val)
     spread = spread.abs()  # safety: CZ signed predictors may be negated
     spread = spread.clip(lower=0.0)
+    spread = spread * spread_scale
 
     raw = 1.0 / (1.0 + spread)
     return _normalize_to_mean_one(raw)
