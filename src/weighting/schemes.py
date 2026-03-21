@@ -105,7 +105,7 @@ def _bid_ask_spread(group: pd.DataFrame, spread_col: str | None = None) -> pd.Se
     group : single cross-section with liq_{spread_col} column.
     spread_col : column base name. Default from config ('BidAskSpread').
     """
-    tc_cfg = _weighting_cfg.get("bid_ask_spread", _weighting_cfg.get("transaction_cost", {}))
+    tc_cfg = _weighting_cfg.get("bid_ask_spread", {})
     if spread_col is None:
         spread_col = tc_cfg["spread_col"]
     spread_scale = tc_cfg.get("spread_scale", 1.0)

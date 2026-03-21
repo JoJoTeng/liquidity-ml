@@ -137,14 +137,19 @@ H1 and H3 are tested on both net and gross returns:
 - All AUM levels: in `net_results.csv` and `hypothesis_tests.json` `net_results` sub-dict.
 
 ## Feature Groups (for H2)
-- **Illiquidity (8):** IdioVol3F, IdioVolAHT, zerotrade1M/6M/12M, MaxRet, VolSD, BetaLiquidityPS
-- **Tradable (8):** Mom12m, Mom6m, BMdec, GP, AssetGrowth, RoE, CF, CBOperProf
-- Extended versions also defined: ILLIQUIDITY_FEATURES_EXT (12), TRADABLE_FEATURES_EXT (38)
+- **Illiquidity (15):** Size, Price, DolVol, BidAskSpread, zerotrade1M/6M/12M, PriceDelayRsq, BetaLiquidityPS, Herf, IdioVol3F, IdioVolAHT, RealizedVol, ReturnSkew, MaxRet
+- **Tradable (15):** Mom12m, Mom6m, IndMom, High52, BMdec, CF, cfp, GP, RoE, CBOperProf, AssetGrowth, ChInv, Investment, hire, Tax
+- Extended versions also defined: ILLIQUIDITY_FEATURES_EXT, TRADABLE_FEATURES_EXT
 
 ## Weighting Schemes (Equations 11–14)
 All normalized to mean=1.0 within each cross-section.
 
-Scheme C — Transaction Cost-Based (Primary):
+Scheme E — TC-Stock Full (Primary):
+  w_i = 1 / (1 + κ · TC_stock_i)
+  TC_stock_i = S_i/2 + λ · σ_i / √ADV_i
+  κ = 1.0, λ = 0.1 (Frazzini et al. 2018). AUM-invariant.
+
+Scheme C — Bid-Ask Spread (Robustness):
   w_i = 1 / (1 + Spread_i)
   where Spread_i = BidAskSpread (from CZ signed predictors, raw scale)
 
@@ -259,13 +264,6 @@ pytest tests/ -v                                     # all tests (160 total)
 - Other params: `max_depth: 4`, `learning_rate: 0.01`, `n_estimators: 500`
 
 ## Planned Extensions (Not Yet Implemented)
-See `update.md` for full details.
-
-### Scheme E: TC-Based Training Weights
-Replace Scheme A (softmax rank) with weights derived from the full Frazzini TC model:
-`w_i = 1 / (1 + kappa * TC_i_stock)`, where `TC_i_stock = Spread/2 + lambda * sigma / sqrt(ADV)`.
-Captures spread, volatility, and market impact dimensions.
-Implementation: add to `src/weighting/schemes.py`, change `weighting.primary` in config.
 
 ### TC-Penalized Portfolio Ranking
 Rank by `predicted_return - TC` instead of raw predicted return for cells 1B/2B.
