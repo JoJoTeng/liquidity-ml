@@ -34,6 +34,8 @@ def single_cross_section():
         "permno": range(10001, 10001 + n),
         _LIQ_COL: rng.lognormal(mean=18, sigma=2, size=n),
         "liq_BidAskSpread": rng.uniform(0.001, 0.05, size=n),
+        "liq_daily_sigma": rng.uniform(0.005, 0.04, size=n),
+        "liq_dvol_21d": rng.lognormal(mean=18, sigma=2, size=n),
     })
 
 
@@ -50,6 +52,8 @@ def multi_month_panel():
             "permno": range(10001, 10001 + n),
             _LIQ_COL: rng.lognormal(mean=18, sigma=2, size=n),
             "liq_BidAskSpread": rng.uniform(0.001, 0.05, size=n),
+            "liq_daily_sigma": rng.uniform(0.005, 0.04, size=n),
+            "liq_dvol_21d": rng.lognormal(mean=18, sigma=2, size=n),
         }))
     return pd.concat(dfs, ignore_index=True)
 
@@ -170,6 +174,8 @@ class TestEdgeCases:
             "yyyymm": [202301],
             _LIQ_COL: [1e8],
             "liq_BidAskSpread": [0.01],
+            "liq_daily_sigma": [0.02],
+            "liq_dvol_21d": [1e8],
         })
         w = compute_weights(df, scheme=scheme)
         assert len(w) == 1
@@ -182,6 +188,8 @@ class TestEdgeCases:
             "yyyymm": 202301,
             _LIQ_COL: [1e8] * n,
             "liq_BidAskSpread": [0.01] * n,
+            "liq_daily_sigma": [0.02] * n,
+            "liq_dvol_21d": [1e8] * n,
         })
         w = compute_weights(df, scheme=scheme)
         # All identical inputs → uniform weights

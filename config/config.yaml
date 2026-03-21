@@ -354,12 +354,18 @@ liquidity:
 # Weighting Schemes (Equations 11–14)
 # ----------------------------------------------------------
 weighting:
-  primary: "transaction_cost"        # Scheme C: w_i = 1/(1 + Spread_i), Eq. 13
+  primary: "tc_stock"               # Scheme E: w_i = 1/(1 + κ·TC_stock_i), AUM-invariant
 
-  transaction_cost: # Eq. 13 (Primary)
+  transaction_cost: # Eq. 13 (Robustness — spread only)
     spread_col: "BidAskSpread" # from CZ predictors (Corwin-Schultz, raw scale)
     spread_scale: 1.0          # Use raw CZ spread for training weights (no downscaling)
-                               # Note: TC *evaluation* uses spread_scale=0.30 separately
+
+  tc_stock: # Eq. 13 extended — full TC_stock (spread + volatility + volume)
+    kappa: 1.0                 # scaling: w_i = 1/(1 + kappa * TC_stock_i)
+    lambda_market_impact: 0.1  # Frazzini et al. (2018)
+    spread_col: "BidAskSpread"
+    sigma_col: "daily_sigma"
+    adv_col: "dvol_21d"
 
   softmax_rank: # Eq. 11 (Robustness)
     lambda: 2.0

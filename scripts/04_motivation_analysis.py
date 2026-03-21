@@ -595,6 +595,11 @@ def main():
         "--recompute", action="store_true",
         help="Recompute tables/figures from existing predictions (skip model training)"
     )
+    parser.add_argument(
+        "--label", type=str, default=None,
+        help="Subfolder label (e.g. 'spread_only' or 'tc_stock'). "
+             "Outputs saved to outputs/motivation/{label}/"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -615,8 +620,12 @@ def main():
     logger.info("Panel: %d rows, %d features", len(panel), len(features))
 
     # Output directory
-    output_dir = Path(get_output_dir()) / "motivation"
+    if args.label:
+        output_dir = Path(get_output_dir()) / "motivation" / args.label
+    else:
+        output_dir = Path(get_output_dir()) / "motivation"
     output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Output directory: %s", output_dir)
 
     # OOS months
     oos_months = _get_oos_months(panel, config)

@@ -162,12 +162,48 @@ def _quintile_discrete(
     return _normalize_to_mean_one(raw)
 
 
+# ── Scheme E: TC-Stock Full (Eq. 13 extended) ────────────────
+
+
+def _tc_stock(group: pd.DataFrame) -> pd.Series:
+    """w_i = 1 / (1 + κ · TC_stock_i), normalized to mean=1.
+
+    TC_stock_i = S_i/2 + λ · σ_i / √ADV_i
+
+    Captures spread, volatility, and volume — the full stock-specific
+    component of the Frazzini et al. (2018) TC model. AUM-invariant
+    because the constant c = λ·√(AUM/n) is absorbed by normalization.
+    """
+    tc_cfg = _weighting_cfg.get("tc_stock", {})
+    kappa = tc_cfg.get("kappa", 1.0)
+    lam = tc_cfg.get("lambda_market_impact", 0.1)
+    spread_col = tc_cfg.get("spread_col", "BidAskSpread")
+    sigma_col = tc_cfg.get("sigma_col", "daily_sigma")
+    adv_col = tc_cfg.get("adv_col", "dvol_21d")
+
+    spread = group[f"liq_{spread_col}"].copy()
+    sigma = group[f"liq_{sigma_col}"].copy()
+    adv = group[f"liq_{adv_col}"].copy()
+
+    # Fill missing with cross-sectional median
+    spread = spread.fillna(spread.median()).abs().clip(lower=0.0)
+    sigma = sigma.fillna(sigma.median()).abs().clip(lower=1e-8)
+    adv = adv.fillna(adv.median()).clip(lower=1e3)
+
+    # TC_stock = S/2 + lambda * sigma / sqrt(ADV)
+    tc_stock = spread / 2.0 + lam * sigma / np.sqrt(adv)
+
+    raw = 1.0 / (1.0 + kappa * tc_stock)
+    return _normalize_to_mean_one(raw)
+
+
 # ── Registry ─────────────────────────────────────────────────
 
 SCHEME_REGISTRY: dict[str, callable] = {
     "softmax_rank": _softmax_rank,
     "linear_dolvol": _linear_dolvol,
     "transaction_cost": _transaction_cost,
+    "tc_stock": _tc_stock,
     "quintile_discrete": _quintile_discrete,
 }
 
