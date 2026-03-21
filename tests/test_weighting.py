@@ -13,7 +13,7 @@ from src.weighting.schemes import (
     _normalize_to_mean_one,
     _softmax_rank,
     _linear_dolvol,
-    _transaction_cost,
+    _spread,
     _quintile_discrete,
 )
 
@@ -150,9 +150,10 @@ class TestMonotonicity:
         corr = df[_LIQ_COL].corr(w, method="spearman")
         assert corr > 0.99  # perfectly monotone (linear transform)
 
-    def test_transaction_cost_monotone(self, single_cross_section):
+    def test_spread_monotone(self, single_cross_section):
+        """Higher spread → lower weight (more costly to trade)."""
         df = single_cross_section
-        w = compute_weights(df, scheme="transaction_cost")
+        w = compute_weights(df, scheme="spread")
         # Lower spread → higher weight (negative correlation)
         corr = df["liq_BidAskSpread"].corr(w, method="spearman")
         assert corr < -0.9
