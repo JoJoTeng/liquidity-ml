@@ -356,7 +356,7 @@ liquidity:
 weighting:
   primary: "tc_stock"               # Scheme E: w_i = 1/(1 + κ·TC_stock_i), AUM-invariant
 
-  spread: # Eq. 13 (Robustness — spread only)
+  bid_ask_spread: # Eq. 13 (Robustness — spread only)
     spread_col: "BidAskSpread" # from CZ predictors (Corwin-Schultz, raw scale)
     spread_scale: 1.0          # Use raw CZ spread for training weights (no downscaling)
 

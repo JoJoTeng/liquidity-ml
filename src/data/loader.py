@@ -33,7 +33,7 @@ ILLIQUIDITY_FEATURES_EXT: list[str] = _cfg["data"]["illiquidity_features_extende
 TRADABLE_FEATURES_EXT: list[str] = _cfg["data"]["tradable_features_extended"]
 LIQUIDITY_COLS: list[str] = [f"liq_{m}" for m in _cfg["liquidity"]["measures"]]
 
-_WEIGHT_SCHEMES = ["softmax_rank", "linear_dolvol", "spread", "tc_stock", "quintile_discrete"]
+_WEIGHT_SCHEMES = ["softmax_rank", "linear_dolvol", "bid_ask_spread", "tc_stock", "quintile_discrete"]
 
 NON_FEATURE_COLS: set[str] = {
     "permno", "yyyymm", "ret", "excess_ret",

@@ -97,7 +97,7 @@ def _linear_dolvol(group: pd.DataFrame) -> pd.Series:
 # ── Scheme C: Spread-Based (Eq. 10) ──────────────────────────
 
 
-def _spread(group: pd.DataFrame, spread_col: str | None = None) -> pd.Series:
+def _bid_ask_spread(group: pd.DataFrame, spread_col: str | None = None) -> pd.Series:
     """w_i = 1 / (1 + spread_scale * Spread_i), normalized to mean=1.
 
     Parameters
@@ -105,7 +105,7 @@ def _spread(group: pd.DataFrame, spread_col: str | None = None) -> pd.Series:
     group : single cross-section with liq_{spread_col} column.
     spread_col : column base name. Default from config ('BidAskSpread').
     """
-    tc_cfg = _weighting_cfg.get("spread", _weighting_cfg.get("transaction_cost", {}))
+    tc_cfg = _weighting_cfg.get("bid_ask_spread", _weighting_cfg.get("transaction_cost", {}))
     if spread_col is None:
         spread_col = tc_cfg["spread_col"]
     spread_scale = tc_cfg.get("spread_scale", 1.0)
@@ -202,7 +202,7 @@ def _tc_stock(group: pd.DataFrame) -> pd.Series:
 SCHEME_REGISTRY: dict[str, callable] = {
     "softmax_rank": _softmax_rank,
     "linear_dolvol": _linear_dolvol,
-    "spread": _spread,
+    "bid_ask_spread": _bid_ask_spread,
     "tc_stock": _tc_stock,
     "quintile_discrete": _quintile_discrete,
 }
@@ -288,7 +288,7 @@ def compute_all_weights(df: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame with columns: weight_softmax_rank, weight_linear_dolvol,
-        weight_spread, weight_quintile_discrete.
+        weight_bid_ask_spread, weight_quintile_discrete.
     Index aligned to df.index.
     """
     result = pd.DataFrame(index=df.index)
