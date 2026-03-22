@@ -60,3 +60,4 @@ Thumbs.db
 .claude/
 outputs/motivation/**/*.parquet
 outputs/motivation/*.parquet
+paper/
