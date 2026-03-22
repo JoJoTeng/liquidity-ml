@@ -1,0 +1,167 @@
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .container { padding: 1rem 0; font-family: var(--font-sans); }
+  .controls { display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem; }
+  .controls label { font-size: 13px; color: var(--color-text-secondary); min-width: 70px; }
+  .controls input[type=range] { flex: 1; }
+  .year-display { font-size: 15px; font-weight: 500; min-width: 44px; text-align: right; }
+  .section-label { font-size: 14px; font-weight: 500; color: var(--color-text-primary); margin: 1.5rem 0 0.5rem; }
+  .section-label:first-of-type { margin-top: 0.5rem; }
+  .timeline-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .timeline-label { font-size: 12px; color: var(--color-text-secondary); min-width: 80px; text-align: right; }
+  .timeline-bar-container { flex: 1; height: 28px; position: relative; background: var(--color-background-secondary); border-radius: 4px; overflow: hidden; }
+  .bar-segment { position: absolute; top: 0; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 500; transition: left 0.3s ease, width 0.3s ease; overflow: hidden; white-space: nowrap; }
+  .bar-train { background: #5DCAA5; color: #04342C; border-radius: 4px 0 0 4px; }
+  .bar-val { background: #F0997B; color: #4A1B0C; }
+  .bar-test { background: #AFA9EC; color: #26215C; border-radius: 0 4px 4px 0; }
+  .bar-unused { background: transparent; }
+  .axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--color-text-tertiary); margin-top: 2px; padding: 0 88px; }
+  .legend { display: flex; gap: 16px; margin: 0.75rem 0; }
+  .legend-item { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--color-text-secondary); }
+  .legend-swatch { width: 12px; height: 12px; border-radius: 2px; }
+  .info-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0.75rem 0; }
+  .info-card { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 8px 12px; }
+  .info-label { font-size: 11px; color: var(--color-text-secondary); }
+  .info-value { font-size: 14px; font-weight: 500; margin-top: 2px; }
+  .divider { border-top: 0.5px solid var(--color-border-tertiary); margin: 1.25rem 0; }
+  .note { font-size: 12px; color: var(--color-text-secondary); line-height: 1.5; margin-top: 0.5rem; }
+  .diff-highlight { font-size: 12px; color: var(--color-text-info); margin-top: 4px; }
+</style>
+
+<div class="container">
+  <div class="controls">
+    <label>Test year</label>
+    <input type="range" min="1987" max="2016" value="1987" step="1" id="yearSlider" oninput="updateAll(this.value)">
+    <span class="year-display" id="yearLabel">1987</span>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-swatch" style="background:#5DCAA5"></div>Training</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#F0997B"></div>Validation</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#AFA9EC"></div>Testing</div>
+  </div>
+
+  <div class="section-label">GKX (2020) — expanding training window</div>
+  <div class="timeline-row">
+    <span class="timeline-label" id="gkx-train-label">1957–1974</span>
+    <div class="timeline-bar-container">
+      <div class="bar-segment bar-train" id="gkx-train"></div>
+      <div class="bar-segment bar-val" id="gkx-val"></div>
+      <div class="bar-segment bar-test" id="gkx-test"></div>
+    </div>
+  </div>
+  <div class="info-grid">
+    <div class="info-card"><div class="info-label">Training months</div><div class="info-value" id="gkx-train-months">216</div></div>
+    <div class="info-card"><div class="info-label">Validation months</div><div class="info-value" id="gkx-val-months">144</div></div>
+    <div class="info-card"><div class="info-label">Test year</div><div class="info-value" id="gkx-test-year">1987</div></div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="section-label">Your project — fixed 120-month rolling window</div>
+  <div class="timeline-row">
+    <span class="timeline-label" id="your-train-label">1988–1997</span>
+    <div class="timeline-bar-container">
+      <div class="bar-segment bar-unused" id="your-pre"></div>
+      <div class="bar-segment bar-train" id="your-train"></div>
+      <div class="bar-segment bar-val" id="your-val"></div>
+      <div class="bar-segment bar-test" id="your-test"></div>
+    </div>
+  </div>
+  <div class="info-grid">
+    <div class="info-card"><div class="info-label">Training months</div><div class="info-value">120 (fixed)</div></div>
+    <div class="info-card"><div class="info-label">Validation months</div><div class="info-value">12 (fixed)</div></div>
+    <div class="info-card"><div class="info-label">Test window</div><div class="info-value">1 month</div></div>
+  </div>
+  <div class="diff-highlight" id="diff-note">GKX training set is 1.8× larger than yours at this test date</div>
+
+  <div class="divider"></div>
+
+  <div class="section-label">Key structural differences</div>
+  <div class="note">
+    <strong>GKX expands</strong>: training window grows from 18→48 years. Early periods have less data; later periods risk non-stationarity. Models refit annually on the full expanding sample.<br><br>
+    <strong>Yours rolls</strong>: training window is always exactly 10 years. Drops old data, avoiding structural breaks. More adaptive to regime changes but uses less total data. Retune every 24 months (hyperparams only; model refits monthly).
+  </div>
+</div>
+
+<script>
+const TOTAL_START = 1957;
+const TOTAL_END = 2024;
+const TOTAL_SPAN = TOTAL_END - TOTAL_START;
+
+function pct(year) { return ((year - TOTAL_START) / TOTAL_SPAN) * 100; }
+
+function updateAll(testYear) {
+  testYear = parseInt(testYear);
+  document.getElementById('yearLabel').textContent = testYear;
+
+  // GKX: expanding train, rolling 12-year val, 1-year test
+  const gkxTrainStart = 1957;
+  const gkxTrainEnd = testYear - 13;  // val is 12 years before test
+  const gkxValStart = gkxTrainEnd + 1;
+  const gkxValEnd = testYear - 1;
+  const gkxTestStart = testYear;
+  const gkxTestEnd = testYear;
+
+  const gkxTrainMonths = (gkxTrainEnd - gkxTrainStart + 1) * 12;
+  const gkxValMonths = (gkxValEnd - gkxValStart + 1) * 12;
+
+  document.getElementById('gkx-train-label').textContent = `${gkxTrainStart}–${gkxTrainEnd}`;
+  document.getElementById('gkx-train-months').textContent = gkxTrainMonths;
+  document.getElementById('gkx-val-months').textContent = gkxValMonths;
+  document.getElementById('gkx-test-year').textContent = testYear;
+
+  const gkxT = document.getElementById('gkx-train');
+  gkxT.style.left = pct(gkxTrainStart) + '%';
+  gkxT.style.width = pct(gkxTrainEnd + 1) - pct(gkxTrainStart) + '%';
+  gkxT.textContent = gkxTrainMonths > 240 ? `Train (${gkxTrainMonths}mo)` : '';
+
+  const gkxV = document.getElementById('gkx-val');
+  gkxV.style.left = pct(gkxValStart) + '%';
+  gkxV.style.width = pct(gkxValEnd + 1) - pct(gkxValStart) + '%';
+  gkxV.style.borderRadius = '0';
+  gkxV.textContent = '';
+
+  const gkxTe = document.getElementById('gkx-test');
+  gkxTe.style.left = pct(gkxTestStart) + '%';
+  gkxTe.style.width = Math.max(pct(gkxTestEnd + 1) - pct(gkxTestStart), 1.5) + '%';
+  gkxTe.textContent = '';
+
+  // Your project: fixed 120mo train, 12mo val, 1mo test
+  const yourTestStart = testYear;
+  const yourValEnd = testYear;
+  const yourValStart = testYear - 1;
+  const yourTrainEnd = yourValStart;
+  const yourTrainStart = yourTrainEnd - 10;
+
+  document.getElementById('your-train-label').textContent = `${yourTrainStart}–${yourTrainEnd - 1}`;
+
+  const yourPre = document.getElementById('your-pre');
+  yourPre.style.left = '0%';
+  yourPre.style.width = pct(yourTrainStart) + '%';
+
+  const yourTr = document.getElementById('your-train');
+  yourTr.style.left = pct(yourTrainStart) + '%';
+  yourTr.style.width = pct(yourTrainEnd) - pct(yourTrainStart) + '%';
+  yourTr.textContent = 'Train (120mo)';
+
+  const yourVa = document.getElementById('your-val');
+  yourVa.style.left = pct(yourValStart) + '%';
+  yourVa.style.width = Math.max(pct(yourValEnd) - pct(yourValStart), 1.5) + '%';
+  yourVa.style.borderRadius = '0';
+  yourVa.textContent = '';
+
+  const yourTes = document.getElementById('your-test');
+  yourTes.style.left = pct(yourTestStart) + '%';
+  yourTes.style.width = Math.max(1.5, pct(yourTestStart + 1) - pct(yourTestStart)) + '%';
+  yourTes.textContent = '';
+
+  // Ratio note
+  const ratio = (gkxTrainMonths / 120).toFixed(1);
+  document.getElementById('diff-note').textContent =
+    `GKX training set is ${ratio}× larger than yours at test year ${testYear}`;
+}
+
+updateAll(1987);
+</script>

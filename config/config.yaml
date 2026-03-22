@@ -354,7 +354,7 @@ liquidity:
 # Weighting Schemes (Equations 11–14)
 # ----------------------------------------------------------
 weighting:
-  primary: "tc_stock"               # Scheme E: w_i = 1/(1 + κ·TC_stock_i), AUM-invariant
+  primary: "softmax_rank"            # Scheme A: softmax on liquidity rank, λ=2.0
 
   bid_ask_spread: # Eq. 13 (Robustness — spread only)
     spread_col: "BidAskSpread" # from CZ predictors (Corwin-Schultz, raw scale)

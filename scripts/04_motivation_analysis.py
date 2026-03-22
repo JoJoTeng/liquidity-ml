@@ -221,13 +221,15 @@ def run_rolling_predictions(
     config: dict,
     oos_months: list[int],
     weighted: bool = False,
+    scheme: str | None = None,
 ) -> pd.DataFrame:
     """Run ElasticNet rolling-window OOS predictions.
 
     Parameters
     ----------
-    weighted : If True, use implementability weights (primary scheme)
-               from config for sample_weight in training.
+    weighted : If True, use implementability weights for sample_weight.
+    scheme : Weighting scheme name (e.g. 'tc_stock', 'softmax_rank').
+             Defaults to config primary if None.
     """
     seed = config["project"]["seed"]
     all_months = sorted(panel["yyyymm"].unique())
@@ -260,7 +262,7 @@ def run_rolling_predictions(
         if weighted:
             train_norm = data["train_norm"]
             if len(train_norm) > 0:
-                sw = compute_weights(train_norm).values
+                sw = compute_weights(train_norm, scheme=scheme).values
 
         # Train ElasticNet
         model = ElasticNetPredictor(seed=seed)
@@ -600,6 +602,11 @@ def main():
         help="Subfolder label (e.g. 'spread_only' or 'tc_stock'). "
              "Outputs saved to outputs/motivation/{label}/"
     )
+    parser.add_argument(
+        "--scheme", type=str, default=None,
+        help="Weighting scheme for weighted training (e.g. 'tc_stock', "
+             "'softmax_rank', 'bid_ask_spread'). Defaults to config primary."
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -626,6 +633,10 @@ def main():
         output_dir = Path(get_output_dir()) / "motivation"
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Output directory: %s", output_dir)
+
+    # Log scheme
+    scheme_name = args.scheme or config["weighting"]["primary"]
+    logger.info("Weighting scheme: %s", scheme_name)
 
     # OOS months
     oos_months = _get_oos_months(panel, config)
@@ -655,7 +666,7 @@ def main():
 
         logger.info("Running ElasticNet rolling predictions (WEIGHTED)...")
         preds_wt = run_rolling_predictions(
-            panel, features, config, oos_months, weighted=True
+            panel, features, config, oos_months, weighted=True, scheme=args.scheme
         )
         preds_wt.to_parquet(pred_path_wt, index=False)
         logger.info("Saved weighted predictions: %d rows", len(preds_wt))
