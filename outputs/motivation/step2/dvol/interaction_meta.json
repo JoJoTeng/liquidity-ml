@@ -1,6 +1,16 @@
 {
+  "f_test_stat_continuous": 26.767326346078764,
   "f_test_pvalue_continuous": 0.0,
+  "f_test_df_continuous": [
+    15,
+    620
+  ],
+  "f_test_stat_dummy": 24.264286227321826,
   "f_test_pvalue_dummy": 0.0,
+  "f_test_df_dummy": [
+    15,
+    620
+  ],
   "n_months": 635,
   "n_sig_gamma_continuous": 9,
   "n_sig_gamma_dummy": 8,

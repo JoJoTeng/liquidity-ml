@@ -877,6 +877,45 @@ def quintile_fama_macbeth(
     }
 
 
+def format_quintile_table(
+    coef_table: pd.DataFrame,
+    beta_fmt: str = ".4f",
+    t_fmt: str = ".2f",
+) -> pd.DataFrame:
+    """Format quintile FM coefficients into academic presentation style.
+
+    Produces a table matching the document's Output 2.1 template:
+        Feature | Q1 (illiq) | Q2 | Q3 | Q4 | Q5 (liq) | Q5-Q1
+
+    Each cell shows β̄ with t-statistic in parentheses, e.g. "0.0313 (10.91)".
+    """
+    rows = []
+    for _, r in coef_table.iterrows():
+        row = {"Feature": r["feature"]}
+        for q in [1, 2, 3, 4, 5]:
+            b = r.get(f"beta_Q{q}", np.nan)
+            t = r.get(f"t_Q{q}", np.nan)
+            if pd.notna(b) and pd.notna(t):
+                row[f"Q{q}"] = f"{b:{beta_fmt}} ({t:{t_fmt}})"
+            else:
+                row[f"Q{q}"] = ""
+        # Q5-Q1
+        b = r.get("beta_Q5-Q1", np.nan)
+        t = r.get("t_Q5-Q1", np.nan)
+        if pd.notna(b) and pd.notna(t):
+            row["Q5-Q1"] = f"{b:{beta_fmt}} ({t:{t_fmt}})"
+        else:
+            row["Q5-Q1"] = ""
+        rows.append(row)
+
+    formatted = pd.DataFrame(rows)
+    formatted = formatted.rename(columns={
+        "Q1": "Q1 (illiq)",
+        "Q5": "Q5 (liq)",
+    })
+    return formatted
+
+
 def interaction_fama_macbeth(
     panel: pd.DataFrame,
     focal_features: list[str],
@@ -1008,13 +1047,17 @@ def interaction_fama_macbeth(
             from scipy.stats import f as f_dist
             f_pvalue = float(1 - f_dist.cdf(f_stat, k, T - k))
         except np.linalg.LinAlgError:
+            f_stat = np.nan
             f_pvalue = np.nan
     else:
+        f_stat = np.nan
         f_pvalue = np.nan
 
     return {
         "coef_table": coef_table,
+        "f_test_stat": f_stat,
         "f_test_pvalue": f_pvalue,
+        "f_test_df": (k, T - k),
         "n_months": len(beta_df),
     }
 
@@ -1139,7 +1182,7 @@ def plot_divergence_vs_heterogeneity(
     ax.set_ylabel("|γ̄_j| (predictability heterogeneity, Step 2)", fontsize=11)
     ax.set_title(
         "Distributional Divergence vs Predictability Heterogeneity\n"
-        f"(Spearman ρ = {rho:.3f}, p = {p_val:.3f}; N = {len(df)} focal characteristics)",
+        f"(Spearman ρ = {rho:.3f}; N = {len(df)} focal characteristics)",
         fontsize=11,
     )
     ax.grid(True, alpha=0.3)

@@ -36,6 +36,7 @@ from src.config import load_config, get_data_dir, get_output_dir
 from src.analysis.motivation import (
     assign_nyse_quintiles,
     quintile_fama_macbeth,
+    format_quintile_table,
     interaction_fama_macbeth,
     plot_quintile_coefficients,
     plot_divergence_vs_heterogeneity,
@@ -115,23 +116,26 @@ def main():
     logger.info("=" * 60)
     logger.info("Output 2.1: Quintile-specific Fama-MacBeth regressions")
     q_results = quintile_fama_macbeth(panel, focal, "liq_quintile")
+
+    # Raw coefficients (for programmatic use)
     q_results["coef_table"].to_csv(
+        output_dir / "quintile_fm_coefficients_raw.csv", index=False
+    )
+
+    # Formatted table: "β̄ (t-stat)" per cell
+    formatted = format_quintile_table(q_results["coef_table"])
+    formatted.to_csv(
         output_dir / "quintile_fm_coefficients.csv", index=False
     )
-    logger.info("\n%s", q_results["coef_table"].to_string(index=False))
+    logger.info("Quintile FM table (formatted):\n%s", formatted.to_string(index=False))
 
     # Count features with significant Q5-Q1 difference
     ct = q_results["coef_table"]
     n_sig_diff = (ct["t_Q5-Q1"].abs() > 2).sum()
     logger.info("Features with significant Q5-Q1 difference: %d/%d", n_sig_diff, len(ct))
 
-    # LaTeX table
-    tex_cols = ["feature", "beta_Q1", "t_Q1", "beta_Q3", "t_Q3", "beta_Q5", "t_Q5", "beta_Q5-Q1", "t_Q5-Q1"]
-    tex_df = ct[[c for c in tex_cols if c in ct.columns]].copy()
-    for c in tex_df.columns:
-        if c.startswith("beta_") or c.startswith("t_"):
-            tex_df[c] = tex_df[c].round(4)
-    tex_df.to_latex(
+    # LaTeX table (formatted with β (t) cells)
+    formatted.to_latex(
         tex_dir / "QuintileFM.tex",
         index=False,
         caption="Fama-MacBeth Coefficients by Liquidity Quintile",
@@ -202,8 +206,12 @@ def main():
 
     # Save metadata
     meta = {
+        "f_test_stat_continuous": int_results["f_test_stat"],
         "f_test_pvalue_continuous": int_results["f_test_pvalue"],
+        "f_test_df_continuous": int_results["f_test_df"],
+        "f_test_stat_dummy": int_dummy["f_test_stat"],
         "f_test_pvalue_dummy": int_dummy["f_test_pvalue"],
+        "f_test_df_dummy": int_dummy["f_test_df"],
         "n_months": int_results["n_months"],
         "n_sig_gamma_continuous": int(n_sig_gamma),
         "n_sig_gamma_dummy": int((int_dummy["coef_table"]["gamma_t"].abs() > 2).sum()),
