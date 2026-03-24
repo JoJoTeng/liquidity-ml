@@ -218,6 +218,19 @@ def main():
     cat_summary.to_csv(output_dir / "divergence_by_category.csv", index=False)
     logger.info("\n%s", cat_summary.to_string(index=False))
 
+    # Save LaTeX version for paper
+    tex_dir = Path("paper/TablesNew")
+    tex_dir.mkdir(parents=True, exist_ok=True)
+    tex_path = tex_dir / "DivergenceByCategory.tex"
+    cat_summary.to_latex(
+        tex_path,
+        index=False,
+        float_format="%.4f",
+        caption="Distributional Divergence by Category",
+        label="tab:divergence_by_category",
+    )
+    logger.info("Saved LaTeX table: %s", tex_path)
+
     # ══════════════════════════════════════════════════════
     # Output 1.3: Fama-MacBeth Weight Regression
     # ══════════════════════════════════════════════════════
@@ -226,11 +239,13 @@ def main():
         logger.info("Output 1.3: Fama-MacBeth weight regression")
         fm = fama_macbeth_weight_regression(panel, features, "w_tilde")
         logger.info(
-            "Fama-MacBeth: R̄² = %.3f over %d months",
+            "Fama-MacBeth: R̄² = %.3f (median %.3f) over %d months",
             fm["r2_mean"],
+            fm["r2_median"],
             fm["n_months"],
         )
 
+        # Coefficient tables
         fm["coef_stats"].to_csv(
             output_dir / "weight_regression_all.csv", index=False
         )
@@ -238,17 +253,48 @@ def main():
             output_dir / "weight_regression_top15.csv", index=False
         )
 
-        # Save R² metadata
+        # Monthly R² time series
+        fm["r2_df"].to_csv(
+            output_dir / "weight_regression_r2_monthly.csv", index=False
+        )
+
+        # Summary metadata (JSON)
         fm_meta = {
             "r2_mean": fm["r2_mean"],
+            "r2_median": fm["r2_median"],
             "n_months": fm["n_months"],
-            "r2_median": float(np.median(fm["r2_series"])) if fm["r2_series"] else None,
         }
         with open(output_dir / "weight_regression_meta.json", "w") as f:
             json.dump(fm_meta, f, indent=2)
 
         logger.info("Top 15 coefficients:")
         logger.info("\n%s", fm["coef_stats"].head(15).to_string(index=False))
+
+        # Save LaTeX version for paper
+        top15 = fm["coef_stats"].head(15)[
+            ["feature", "delta_bar", "t_stat"]
+        ].copy()
+        top15 = top15.rename(columns={
+            "feature": "Characteristic",
+            "delta_bar": r"$\bar{\delta}_j$",
+            "t_stat": "$t$-stat",
+        })
+        top15[r"$\bar{\delta}_j$"] = top15[r"$\bar{\delta}_j$"].round(3)
+        top15["$t$-stat"] = top15["$t$-stat"].round(2)
+        top15.insert(0, "Rank", range(1, 16))
+
+        tex_path = tex_dir / "WeightRegression.tex"
+        top15.to_latex(
+            tex_path,
+            index=False,
+            escape=False,
+            caption=(
+                f"Fama-MacBeth Weight Regression: Top 15 Characteristics "
+                f"($\\bar{{R}}^2 = {fm['r2_mean']:.3f}$, $T = {fm['n_months']}$)"
+            ),
+            label="tab:weight_regression",
+        )
+        logger.info("Saved LaTeX table: %s", tex_path)
     else:
         logger.info("Skipping Fama-MacBeth regression (--skip-regression)")
 

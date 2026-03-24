@@ -1,9 +1,9 @@
-category,n_features,avg_abs_d_bar,n_significant
-Liquidity,13,0.1970267355437166,11
-Value,13,0.06474727347061128,10
-Momentum,19,0.054134199164227,14
-Other,19,0.054061833922444485,18
-Risk,14,0.049739875958194436,13
-Profitability,20,0.04546369149003627,17
-Investment,31,0.03558865364769745,29
-Quality,14,0.02904478802450983,13
+Category,Avg. |d_bar|,# Significant (|t| > 2),# Characteristics
+Liquidity,0.197,11,13
+Value,0.0647,10,13
+Momentum,0.0541,14,19
+Other,0.0541,18,19
+Risk,0.0497,13,14
+Profitability,0.0455,17,20
+Investment,0.0356,29,31
+Quality,0.029,13,14

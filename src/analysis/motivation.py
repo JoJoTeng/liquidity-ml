@@ -402,16 +402,26 @@ def summarize_divergence_by_category(
     summary = (
         df.groupby("category")
         .agg(
-            n_features=("feature", "count"),
             avg_abs_d_bar=("abs_d_bar", "mean"),
             n_significant=("significant", "sum"),
+            n_features=("feature", "count"),
         )
         .sort_values("avg_abs_d_bar", ascending=False)
         .reset_index()
     )
 
-    # Ensure integer count
+    # Clean up types and formatting
     summary["n_significant"] = summary["n_significant"].astype(int)
+    summary["avg_abs_d_bar"] = summary["avg_abs_d_bar"].round(4)
+
+    # Rename columns to match Table 2 template
+    summary = summary.rename(columns={
+        "category": "Category",
+        "avg_abs_d_bar": "Avg. |d_bar|",
+        "n_significant": "# Significant (|t| > 2)",
+        "n_features": "# Characteristics",
+    })
+
     return summary
 
 
@@ -475,7 +485,8 @@ def fama_macbeth_weight_regression(
         ss_res = np.sum((y - y_hat) ** 2)
         ss_tot = np.sum((y - y.mean()) ** 2)
         r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
-        r2_list.append(r2)
+        r2_list.append({"yyyymm": m, "R2": r2, "N_stocks": int(valid_w.sum()),
+                        "N_features": len(good_cols)})
 
         # Store coefficients (skip intercept at index 0)
         coef_row = {"yyyymm": m}
@@ -487,12 +498,15 @@ def fama_macbeth_weight_regression(
         logger.warning("Fama-MacBeth: no valid months")
         return {
             "r2_mean": np.nan,
-            "r2_series": [],
+            "r2_median": np.nan,
+            "r2_df": pd.DataFrame(columns=["yyyymm", "R2", "N_stocks", "N_features"]),
             "coef_stats": pd.DataFrame(),
             "n_months": 0,
         }
 
     coefs_df = pd.DataFrame(coefs_list).set_index("yyyymm")
+    r2_df = pd.DataFrame(r2_list)
+    r2_vals = r2_df["R2"].values
 
     # FM averaging with NW t-stats per feature
     coef_results = []
@@ -522,10 +536,11 @@ def fama_macbeth_weight_regression(
     )
 
     return {
-        "r2_mean": float(np.mean(r2_list)),
-        "r2_series": r2_list,
+        "r2_mean": float(np.mean(r2_vals)),
+        "r2_median": float(np.median(r2_vals)),
+        "r2_df": r2_df,
         "coef_stats": coef_stats,
-        "n_months": len(r2_list),
+        "n_months": len(r2_df),
     }
 
 
@@ -542,6 +557,11 @@ def plot_divergence_bar_chart(
 ) -> None:
     """Horizontal bar chart of d̄_j sorted by |d̄_j|, color-coded by category.
 
+    Significance marking:
+      - |t| > 2: full category color + dark edge → visually prominent
+      - |t| ≤ 2: light gray fill, no edge → clearly "faded out"
+      - Y-axis labels: bold for significant, normal for not significant
+
     Parameters
     ----------
     stats_df : Output of compute_divergence_stats().
@@ -549,9 +569,11 @@ def plot_divergence_bar_chart(
     top_n : If set, show only top N features. None = show all.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
 
     df = stats_df.copy()
     df["category"] = df["feature"].map(broad_categories).fillna("Other")
+    df["significant"] = df["t_stat"].abs() > 2
     df = df.sort_values("abs_d_bar", ascending=True)  # ascending for horizontal bars
 
     if top_n is not None:
@@ -561,34 +583,60 @@ def plot_divergence_bar_chart(
     categories = sorted(df["category"].unique())
     cmap = plt.cm.get_cmap("tab10", len(categories))
     cat_colors = {cat: cmap(i) for i, cat in enumerate(categories)}
-    colors = [cat_colors[c] for c in df["category"]]
 
-    # Mark significance
-    alphas = [1.0 if abs(t) > 2 else 0.4 for t in df["t_stat"]]
+    # Bar colors: category color if significant, light gray if not
+    NONSIG_COLOR = "#D3D3D3"  # light gray
+    bar_colors = [
+        cat_colors[row["category"]] if row["significant"] else NONSIG_COLOR
+        for _, row in df.iterrows()
+    ]
+    edge_colors = [
+        "#333333" if row["significant"] else "none"
+        for _, row in df.iterrows()
+    ]
+    edge_widths = [
+        0.5 if row["significant"] else 0
+        for _, row in df.iterrows()
+    ]
 
     n_bars = len(df)
     fig_height = max(8, n_bars * 0.22)
     fig, ax = plt.subplots(figsize=(10, fig_height))
 
     bars = ax.barh(
-        range(n_bars), df["d_bar"].values, color=colors, edgecolor="none"
+        range(n_bars),
+        df["d_bar"].values,
+        color=bar_colors,
+        edgecolor=edge_colors,
+        linewidth=edge_widths,
     )
-    for bar, alpha in zip(bars, alphas):
-        bar.set_alpha(alpha)
 
+    # Y-axis labels: bold for significant
     ax.set_yticks(range(n_bars))
-    ax.set_yticklabels(df["feature"].values, fontsize=7)
+    labels = ax.set_yticklabels(df["feature"].values, fontsize=7)
+    for label, sig in zip(labels, df["significant"].values):
+        if sig:
+            label.set_fontweight("bold")
+        else:
+            label.set_fontweight("normal")
+            label.set_color("#999999")
+
     ax.axvline(0, color="black", linewidth=0.5)
     ax.set_xlabel("Mean divergence d̄ (deploy − train)")
+
+    n_sig = df["significant"].sum()
+    n_total = len(df)
     ax.set_title(
         "Marginal Divergence: Equal-Weighted vs Volume-Weighted Means\n"
-        "(opaque = |t| > 2, faded = not significant)"
+        f"(colored = significant |t| > 2: {n_sig}/{n_total}; "
+        "gray = not significant)"
     )
 
-    # Legend
-    from matplotlib.patches import Patch
-
-    handles = [Patch(facecolor=cat_colors[c], label=c) for c in categories]
+    # Legend: category colors + gray for not significant
+    handles = [Patch(facecolor=cat_colors[c], edgecolor="#333333",
+                     linewidth=0.5, label=c) for c in categories]
+    handles.append(Patch(facecolor=NONSIG_COLOR, edgecolor="none",
+                         label="Not significant"))
     ax.legend(handles=handles, loc="lower right", fontsize=8)
 
     plt.tight_layout()
