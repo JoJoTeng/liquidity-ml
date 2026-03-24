@@ -755,3 +755,398 @@ def plot_weight_distribution(
         "Weight percentiles: %s",
         {p: f"{v:.4f}" for p, v in zip(pcts, pct_vals)},
     )
+
+
+# ═════════════════════════════════════════════════════════════
+# Step 2: Heterogeneous Predictability
+# ═════════════════════════════════════════════════════════════
+
+
+def quintile_fama_macbeth(
+    panel: pd.DataFrame,
+    focal_features: list[str],
+    quintile_col: str = "liq_quintile",
+    return_col: str = "excess_ret",
+) -> dict:
+    """Quintile-specific Fama-MacBeth regressions (Eq. 5-6 in document).
+
+    For each quintile q=1..5 and each month t:
+        r_i,t+1 = α_q,t + x'_it β_q,t + ε   for i ∈ Q_q,t
+
+    Returns
+    -------
+    dict with keys:
+        coef_table : pd.DataFrame — rows=focal chars, cols include
+            β̄_Q1..β̄_Q5, t_Q1..t_Q5, se_Q1..se_Q5, β̄_Q5-Q1, t_Q5-Q1
+        monthly_coefs : dict[int, pd.DataFrame] — per-quintile monthly coefficients
+    """
+    quintiles = sorted(panel[quintile_col].dropna().unique())
+    quintiles = [int(q) for q in quintiles]
+    months = sorted(panel["yyyymm"].unique())
+
+    # Collect monthly coefficients per quintile
+    monthly_coefs = {q: [] for q in quintiles}
+
+    for m in months:
+        mdf = panel[panel["yyyymm"] == m]
+
+        for q in quintiles:
+            qdf = mdf[mdf[quintile_col] == q]
+            y = qdf[return_col].values
+            X_df = qdf[focal_features].copy()
+
+            valid = ~np.isnan(y)
+            for col in focal_features:
+                valid &= X_df[col].notna()
+
+            if valid.sum() < 30:
+                continue
+
+            y_v = y[valid]
+            X_v = X_df.loc[valid].fillna(0.5).values
+            X_v = np.column_stack([np.ones(len(X_v)), X_v])
+
+            try:
+                beta, _, _, _ = np.linalg.lstsq(X_v, y_v, rcond=None)
+            except np.linalg.LinAlgError:
+                continue
+
+            row = {"yyyymm": m}
+            for i, col in enumerate(focal_features):
+                row[col] = beta[i + 1]
+            monthly_coefs[q].append(row)
+
+    # FM averaging with NW t-stats per quintile per feature
+    results = []
+    for feat in focal_features:
+        row = {"feature": feat}
+
+        q_means = {}
+        q_ses = {}
+        for q in quintiles:
+            df_q = pd.DataFrame(monthly_coefs[q])
+            if feat not in df_q.columns or len(df_q) < 12:
+                row[f"beta_Q{q}"] = np.nan
+                row[f"t_Q{q}"] = np.nan
+                row[f"se_Q{q}"] = np.nan
+                continue
+
+            series = df_q[feat].dropna()
+            if len(series) < 12:
+                row[f"beta_Q{q}"] = np.nan
+                row[f"t_Q{q}"] = np.nan
+                row[f"se_Q{q}"] = np.nan
+                continue
+
+            nw = newey_west_tstat(series.values, lags=6)
+            row[f"beta_Q{q}"] = nw["mean"]
+            row[f"t_Q{q}"] = nw["t_stat"]
+            row[f"se_Q{q}"] = nw["std_err"]
+            q_means[q] = nw["mean"]
+            q_ses[q] = nw["std_err"]
+
+        # Q5 - Q1 difference
+        if 5 in q_means and 1 in q_means:
+            # Compute NW t-stat on the Q5-Q1 difference series
+            df_q5 = pd.DataFrame(monthly_coefs[5]).set_index("yyyymm")
+            df_q1 = pd.DataFrame(monthly_coefs[1]).set_index("yyyymm")
+            if feat in df_q5.columns and feat in df_q1.columns:
+                common = df_q5.index.intersection(df_q1.index)
+                diff = df_q5.loc[common, feat] - df_q1.loc[common, feat]
+                diff = diff.dropna()
+                if len(diff) >= 12:
+                    nw_diff = newey_west_tstat(diff.values, lags=6)
+                    row["beta_Q5-Q1"] = nw_diff["mean"]
+                    row["t_Q5-Q1"] = nw_diff["t_stat"]
+                else:
+                    row["beta_Q5-Q1"] = np.nan
+                    row["t_Q5-Q1"] = np.nan
+            else:
+                row["beta_Q5-Q1"] = np.nan
+                row["t_Q5-Q1"] = np.nan
+        else:
+            row["beta_Q5-Q1"] = np.nan
+            row["t_Q5-Q1"] = np.nan
+
+        results.append(row)
+
+    coef_table = pd.DataFrame(results)
+    return {
+        "coef_table": coef_table,
+        "monthly_coefs": monthly_coefs,
+    }
+
+
+def interaction_fama_macbeth(
+    panel: pd.DataFrame,
+    focal_features: list[str],
+    liq_col: str = "liq_rank",
+    return_col: str = "excess_ret",
+    use_dummy: bool = False,
+) -> dict:
+    """Interaction Fama-MacBeth regression (Eq. 7 in document).
+
+    Each month t, full sample:
+        r_i,t+1 = α_t + x'_it β_t + (x_it · L_it)' γ_t + ε_it
+
+    Parameters
+    ----------
+    liq_col : Liquidity rank column (continuous [0,1] or dummy).
+    use_dummy : If True, L_it = 1 if above median, 0 otherwise.
+
+    Returns
+    -------
+    dict with keys:
+        coef_table : pd.DataFrame — rows=focal chars, cols: beta_bar, beta_t,
+            gamma_bar, gamma_t
+        f_test_pvalue : float — joint F-test p-value for H0: all γ = 0
+        n_months : int
+    """
+    months = sorted(panel["yyyymm"].unique())
+    beta_list = []
+    gamma_list = []
+    n_features = len(focal_features)
+
+    for m in months:
+        mdf = panel[panel["yyyymm"] == m].copy()
+
+        y = mdf[return_col].values
+        L = mdf[liq_col].values
+
+        if use_dummy:
+            L = (L > np.nanmedian(L)).astype(float)
+
+        # Build X = [1, x_1..x_15, x_1*L..x_15*L]
+        X_main = mdf[focal_features].values
+        X_interact = X_main * L[:, np.newaxis]
+
+        # Valid mask
+        valid = ~np.isnan(y) & ~np.isnan(L)
+        for j in range(n_features):
+            valid &= ~np.isnan(X_main[:, j])
+
+        if valid.sum() < 100:
+            continue
+
+        y_v = y[valid]
+        X_m = X_main[valid]
+        X_i = X_interact[valid]
+        X_full = np.column_stack([np.ones(valid.sum()), X_m, X_i])
+
+        try:
+            beta_all, _, _, _ = np.linalg.lstsq(X_full, y_v, rcond=None)
+        except np.linalg.LinAlgError:
+            continue
+
+        # Extract: beta_all[0]=intercept, [1..15]=main, [16..30]=interaction
+        beta_row = {"yyyymm": m}
+        gamma_row = {"yyyymm": m}
+        for i, feat in enumerate(focal_features):
+            beta_row[feat] = beta_all[1 + i]
+            gamma_row[feat] = beta_all[1 + n_features + i]
+        beta_list.append(beta_row)
+        gamma_list.append(gamma_row)
+
+    if not beta_list:
+        logger.warning("Interaction FM: no valid months")
+        return {
+            "coef_table": pd.DataFrame(),
+            "f_test_pvalue": np.nan,
+            "n_months": 0,
+        }
+
+    beta_df = pd.DataFrame(beta_list).set_index("yyyymm")
+    gamma_df = pd.DataFrame(gamma_list).set_index("yyyymm")
+
+    # FM averaging with NW t-stats
+    results = []
+    for feat in focal_features:
+        row = {"feature": feat}
+
+        if feat in beta_df.columns:
+            b_series = beta_df[feat].dropna()
+            if len(b_series) >= 12:
+                nw_b = newey_west_tstat(b_series.values, lags=6)
+                row["beta_bar"] = nw_b["mean"]
+                row["beta_t"] = nw_b["t_stat"]
+            else:
+                row["beta_bar"] = np.nan
+                row["beta_t"] = np.nan
+        else:
+            row["beta_bar"] = np.nan
+            row["beta_t"] = np.nan
+
+        if feat in gamma_df.columns:
+            g_series = gamma_df[feat].dropna()
+            if len(g_series) >= 12:
+                nw_g = newey_west_tstat(g_series.values, lags=6)
+                row["gamma_bar"] = nw_g["mean"]
+                row["gamma_t"] = nw_g["t_stat"]
+            else:
+                row["gamma_bar"] = np.nan
+                row["gamma_t"] = np.nan
+        else:
+            row["gamma_bar"] = np.nan
+            row["gamma_t"] = np.nan
+
+        results.append(row)
+
+    coef_table = pd.DataFrame(results)
+
+    # Joint F-test: H0: all γ = 0
+    # Use time-series F-statistic on the monthly γ estimates
+    gamma_mat = gamma_df[focal_features].dropna()
+    if len(gamma_mat) >= 12:
+        gamma_means = gamma_mat.mean().values
+        T = len(gamma_mat)
+        k = len(focal_features)
+        # Covariance of mean estimates (simple, not NW — for F-test)
+        cov_mat = gamma_mat.cov().values / T
+        try:
+            cov_inv = np.linalg.inv(cov_mat)
+            f_stat = float(gamma_means @ cov_inv @ gamma_means / k)
+            from scipy.stats import f as f_dist
+            f_pvalue = float(1 - f_dist.cdf(f_stat, k, T - k))
+        except np.linalg.LinAlgError:
+            f_pvalue = np.nan
+    else:
+        f_pvalue = np.nan
+
+    return {
+        "coef_table": coef_table,
+        "f_test_pvalue": f_pvalue,
+        "n_months": len(beta_df),
+    }
+
+
+def plot_quintile_coefficients(
+    quintile_results: dict,
+    focal_features: list[str],
+    output_path: str | Path,
+) -> None:
+    """3×5 panel of coefficient plots: β̄_j,q by quintile with 95% CI.
+
+    Each subplot shows one focal characteristic.
+    x-axis = quintile (1-5), y-axis = β̄_j,q.
+    Shaded 95% CI bands. Flat = homogeneous, sloping = heterogeneous.
+    """
+    import matplotlib.pyplot as plt
+
+    ct = quintile_results["coef_table"]
+    n = len(focal_features)
+    ncols = 5
+    nrows = (n + ncols - 1) // ncols
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.5 * ncols, 3 * nrows))
+    axes = axes.flatten()
+    quintiles = [1, 2, 3, 4, 5]
+
+    for i, feat in enumerate(focal_features):
+        ax = axes[i]
+        row = ct[ct["feature"] == feat]
+        if row.empty:
+            ax.set_title(feat)
+            continue
+        row = row.iloc[0]
+
+        betas = [row.get(f"beta_Q{q}", np.nan) for q in quintiles]
+        ses = [row.get(f"se_Q{q}", np.nan) for q in quintiles]
+        ci_lo = [b - 1.96 * s for b, s in zip(betas, ses)]
+        ci_hi = [b + 1.96 * s for b, s in zip(betas, ses)]
+
+        ax.plot(quintiles, betas, "o-", color="steelblue", linewidth=1.5, markersize=5)
+        ax.fill_between(quintiles, ci_lo, ci_hi, alpha=0.2, color="steelblue")
+        ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+        ax.set_xticks(quintiles)
+        ax.set_xticklabels(["Q1\n(illiq)", "Q2", "Q3", "Q4", "Q5\n(liq)"], fontsize=7)
+        ax.set_title(feat, fontsize=9, fontweight="bold")
+
+        # Annotate Q5-Q1
+        diff = row.get("beta_Q5-Q1", np.nan)
+        t_diff = row.get("t_Q5-Q1", np.nan)
+        if not np.isnan(diff):
+            sig_marker = "*" if abs(t_diff) > 2 else ""
+            ax.text(
+                0.95, 0.05,
+                f"Q5-Q1={diff:.4f}{sig_marker}\n(t={t_diff:.2f})",
+                transform=ax.transAxes, fontsize=6,
+                ha="right", va="bottom",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="wheat", alpha=0.7),
+            )
+
+    # Hide unused axes
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+
+    fig.suptitle(
+        "Fama-MacBeth Coefficients by Liquidity Quintile\n"
+        "(95% CI bands; Q1 = illiquid, Q5 = liquid)",
+        fontsize=12,
+    )
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved quintile coefficient plots to %s", output_path)
+
+
+def plot_divergence_vs_heterogeneity(
+    divergence_stats: pd.DataFrame,
+    interaction_results: dict,
+    focal_features: list[str],
+    output_path: str | Path,
+) -> float:
+    """Scatter: |d̄_j| (Step 1) vs |γ̄_j| (Step 2) for focal characteristics.
+
+    Returns Spearman rank correlation.
+    """
+    import matplotlib.pyplot as plt
+    from scipy.stats import spearmanr
+
+    int_table = interaction_results["coef_table"]
+
+    points = []
+    for feat in focal_features:
+        div_row = divergence_stats[divergence_stats["feature"] == feat]
+        int_row = int_table[int_table["feature"] == feat]
+        if div_row.empty or int_row.empty:
+            continue
+        d_bar = div_row.iloc[0]["abs_d_bar"]
+        gamma = abs(int_row.iloc[0]["gamma_bar"])
+        points.append({"feature": feat, "abs_d_bar": d_bar, "abs_gamma": gamma})
+
+    if not points:
+        logger.warning("No matching features for divergence vs heterogeneity scatter")
+        return np.nan
+
+    df = pd.DataFrame(points)
+    rho, p_val = spearmanr(df["abs_d_bar"], df["abs_gamma"])
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.scatter(df["abs_d_bar"], df["abs_gamma"], s=60, color="steelblue", zorder=3)
+
+    # Label each point
+    for _, row in df.iterrows():
+        ax.annotate(
+            row["feature"],
+            (row["abs_d_bar"], row["abs_gamma"]),
+            fontsize=8,
+            textcoords="offset points",
+            xytext=(5, 5),
+        )
+
+    ax.set_xlabel("|d̄_j| (distributional divergence, Step 1)", fontsize=11)
+    ax.set_ylabel("|γ̄_j| (predictability heterogeneity, Step 2)", fontsize=11)
+    ax.set_title(
+        "Distributional Divergence vs Predictability Heterogeneity\n"
+        f"(Spearman ρ = {rho:.3f}, p = {p_val:.3f}; N = {len(df)} focal characteristics)",
+        fontsize=11,
+    )
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved divergence vs heterogeneity scatter to %s (ρ=%.3f)", output_path, rho)
+    return rho
