@@ -338,7 +338,7 @@ def main():
 
     filtered_crspm = crspm[crspm["exchcd"].isin([1, 2, 3, -1, -2])]
 
-    crspmsignal = filtered_crspm[["permno", "yyyymm", "ret", "lambda_tc"]].copy()
+    crspmsignal = filtered_crspm[["permno", "yyyymm", "ret", "lambda_tc", "exchcd"]].copy()
 
     # Signed predictors (Chen & Zimmermann convention)
     crspmsignal["STreversal"] = -1 * filtered_crspm["ret"].fillna(0)

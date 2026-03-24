@@ -1,11 +1,14 @@
 """
 01 — Process Data
 ==================
-Load the raw panel from 00_fetch_data.py, normalize features,
+Load the raw panel from 00_fetch_data.py, select features from SignalDoc.csv
+(Clear Predictors, ~142 features), rank-transform to [0, 1],
 compute liquidity weights, and save the analysis-ready panel.
 
 Input:  data/signed_predictors_all_wide.csv  (from 00_fetch_data.py)
+        data/SignalDoc.csv                    (CZ Signal Documentation)
 Output: data/processed_panel.parquet
+        config/feature_categories.json        (feature → category mapping)
 
 Usage:
     python scripts/01_process_data.py
@@ -25,14 +28,13 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_config, get_data_dir
-from src.data.loader import (
-    load_panel,
-    get_feature_names,
-    normalize_features,
-    LIQUIDITY_COLS,
-    NON_FEATURE_COLS,
+from src.data.loader import load_panel, LIQUIDITY_COLS, NON_FEATURE_COLS
+from src.analysis.motivation import (
+    load_signaldoc,
+    get_motivation_features,
+    build_feature_categories,
+    rank_transform_01,
 )
-from src.weighting import compute_all_weights, get_available_schemes
 
 # ── Logging ───────────────────────────────────────────────────
 logging.basicConfig(
@@ -68,9 +70,23 @@ def main() -> None:
         panel["yyyymm"].max(),
     )
 
-    # ── 2. Get feature names ──────────────────────────────────
-    features = get_feature_names(panel)
-    logger.info("Selected features: %d", len(features))
+    # Verify exchcd is present
+    if "exchcd" not in panel.columns:
+        logger.error(
+            "exchcd not in panel! Re-run scripts/00_fetch_data.py "
+            "and delete data/signed_predictors_all_wide.parquet"
+        )
+        sys.exit(1)
+
+    # ── 2. Feature selection from SignalDoc.csv ───────────────
+    logger.info("Loading SignalDoc.csv for feature selection...")
+    signaldoc = load_signaldoc("data/SignalDoc.csv")
+
+    logger.info("Building feature categories...")
+    categories = build_feature_categories(signaldoc, "config/feature_categories.json")
+
+    features = get_motivation_features(signaldoc, panel)
+    logger.info("Selected features: %d (Clear Predictors from SignalDoc)", len(features))
 
     # ── 3. Feature missingness (before normalization) ─────────
     miss = panel[features].isna().mean()
@@ -88,51 +104,37 @@ def main() -> None:
         miss.max() * 100,
     )
 
-    # ── 4. Drop rows with >30% features missing ──────────────
-    frac_missing = panel[features].isna().mean(axis=1)
-    sparse_mask = frac_missing > 0.3
-    n_sparse = sparse_mask.sum()
-    if n_sparse > 0:
-        logger.info("Dropping %d rows with >30%% features missing", n_sparse)
-        panel = panel[~sparse_mask].reset_index(drop=True)
+    # ── 4. Save raw copies of robustness liquidity measures ────
+    # These get rank-transformed below, but NYSE quintile assignment
+    # in 05_step1_divergence.py needs raw values.
+    for col in ["Illiquidity", "BidAskSpread"]:
+        if col in panel.columns:
+            panel[f"raw_{col}"] = panel[col].copy()
+            logger.info("Saved raw copy: raw_%s", col)
 
-    # ── 5. Normalize features ─────────────────────────────────
-    logger.info("Normalizing %d features (cross-sectional rank-quantile)...", len(features))
-    panel = normalize_features(panel, features)
+    # ── 6. Rank-transform features to [0, 1] ─────────────────
+    logger.info("Rank-transforming %d features to [0, 1]...", len(features))
+    panel = rank_transform_01(panel, features)
 
     # Verify range
     feat_min = panel[features].min().min()
     feat_max = panel[features].max().max()
     logger.info(
-        "Normalized feature range: [%.4f, %.4f] (expected [-1.0, 1.0])",
+        "Normalized feature range: [%.4f, %.4f] (expected [0.0, 1.0])",
         feat_min,
         feat_max,
     )
 
-    # ── 6. Fill remaining NaN in features with 0.0 (neutral) ─
+    # ── 6. Fill remaining NaN in features with 0.5 (neutral rank) ─
     n_nan_before = panel[features].isna().sum().sum()
     if n_nan_before > 0:
         logger.info(
-            "Filling %d remaining NaN values in features with 0.0 (neutral)",
+            "Filling %d remaining NaN values in features with 0.5 (neutral rank)",
             n_nan_before,
         )
-        panel[features] = panel[features].fillna(0.0)
+        panel[features] = panel[features].fillna(0.5)
 
-    # ── 7. Compute liquidity weights ────────────────────────
-    logger.info("Computing liquidity weights (4 schemes)...")
-    weights_df = compute_all_weights(panel)
-    panel = pd.concat([panel, weights_df], axis=1)
-
-    weight_cols = [c for c in panel.columns if c.startswith("weight_")]
-    for wc in weight_cols:
-        logger.info(
-            "  %s: mean=%.4f, std=%.4f, min=%.4f, max=%.4f",
-            wc,
-            panel[wc].mean(),
-            panel[wc].std(),
-            panel[wc].min(),
-            panel[wc].max(),
-        )
+    # ── 7. (Weights computed in 05_step1_divergence.py, not here) ──
 
     # ── 8. Save processed panel ───────────────────────────────
     out_path = data_dir / "processed_panel.parquet"
@@ -140,7 +142,20 @@ def main() -> None:
     file_size_mb = out_path.stat().st_size / 1e6
     logger.info("Saved: %s (%.1f MB)", out_path, file_size_mb)
 
-    # ── 9. Summary ────────────────────────────────────────────
+    # ── 9. Save feature list for downstream scripts ──────────
+    import json
+    meta = {
+        "features": features,
+        "n_features": len(features),
+        "normalization": "[0, 1] rank transform",
+        "nan_fill": 0.5,
+    }
+    meta_path = data_dir / "feature_list.json"
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+    logger.info("Saved feature list: %s", meta_path)
+
+    # ── 10. Summary ───────────────────────────────────────────
     liq_cols = [c for c in panel.columns if c.startswith("liq_")]
     elapsed = time.time() - t0
 
@@ -152,13 +167,12 @@ def main() -> None:
     logger.info("  Columns:         %d", len(panel.columns))
     logger.info("  Permnos:         %d", panel["permno"].nunique())
     logger.info("  Date range:      %d – %d", panel["yyyymm"].min(), panel["yyyymm"].max())
-    logger.info("  Features:        %d (normalized to [-1, 1])", len(features))
+    logger.info("  Features:        %d (rank-transformed to [0, 1])", len(features))
     logger.info("  Liquidity cols:  %d (%s)", len(liq_cols), ", ".join(liq_cols))
-    logger.info("  Weight schemes:  %d (%s)", len(weight_cols), ", ".join(weight_cols))
     logger.info("  Target NaN:      %d", panel["excess_ret"].isna().sum())
     logger.info("  Feature NaN:     %d", panel[features].isna().sum().sum())
     logger.info("")
-    logger.info("Next step: python scripts/02_run_experiment.py")
+    logger.info("Next step: python scripts/05_step1_divergence.py")
 
 
 if __name__ == "__main__":

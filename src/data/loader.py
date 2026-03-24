@@ -38,7 +38,7 @@ _WEIGHT_SCHEMES = ["softmax_rank", "linear_dolvol", "bid_ask_spread", "tc_stock"
 NON_FEATURE_COLS: set[str] = {
     "permno", "yyyymm", "ret", "excess_ret",
     "me_raw", "dvol_monthly", "dvol_6m", "dvol_21d", "lambda_tc", "liu_lm",
-    "daily_sigma",
+    "daily_sigma", "exchcd",
 } | {f"liq_{m}" for m in _cfg["liquidity"]["measures"]} | {f"weight_{s}" for s in _WEIGHT_SCHEMES}
 
 
