@@ -4,10 +4,15 @@ Step 3: Standard ML Is Affected
 Shows that standard ML (XGBoost) trained under equal weights allocates
 capacity toward illiquid-stock patterns and is least accurate for liquid stocks.
 
-Self-contained: trains XGBoost with rolling windows from processed_panel.parquet.
-Independent of 02_run_experiment.py.
+Self-contained: trains XGBoost with rolling windows from the RAW panel
+(signed_predictors_all_wide.csv via load_panel()). Per-window rank
+normalization to [0,1] is done inside rolling_xgboost_predict(),
+matching the protocol in 02_run_experiment.py — no look-ahead bias.
 
-Prerequisite: Run scripts/01_process_data.py first.
+The feature list (113 features after 70% missing filter) is read from
+feature_list.json, produced by 01_process_data.py.
+
+Prerequisite: Run scripts/00_fetch_data.py + scripts/01_process_data.py first.
 
 Outputs (saved to outputs/motivation/step3/{liquidity}/):
   3.1  importance_vs_illiquidity.png     Feature importance vs illiquidity-relatedness
@@ -40,6 +45,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_config, get_data_dir, get_output_dir
+from src.data.loader import load_panel
 from src.analysis.motivation import (
     assign_nyse_quintiles,
     compute_implementability_weights,
@@ -95,30 +101,49 @@ def main():
     logger.info("Liquidity: %s (%s)", args.liquidity, liq["label"])
     logger.info("Output: %s", output_dir)
 
-    # ── Load processed panel ──────────────────────────────
-    panel_path = data_dir / "processed_panel.parquet"
-    if not panel_path.exists():
-        logger.error("processed_panel.parquet not found! Run 01_process_data.py first.")
-        sys.exit(1)
+    # ── Load RAW panel (not processed) ──────────────────
+    #   Step 3 trains its own XGBoost with per-window normalization,
+    #   matching the protocol in 02_run_experiment.py. Loading the raw
+    #   panel avoids double rank-transform (processed_panel already has
+    #   features in [0,1]). rolling_xgboost_predict() does per-window
+    #   rank → [0,1] → fillna(0.5) independently for each window.
+    #
+    #   The diagnostic analyses (3.1, 3.2) use Spearman correlations or
+    #   FM t-stats, which are rank-invariant — so raw features are fine.
 
-    logger.info("Loading processed panel...")
-    panel = pd.read_parquet(panel_path)
+    logger.info("Loading raw panel via load_panel()...")
+    panel = load_panel(config)
     logger.info("Panel: %d rows, dates %d–%d", len(panel), panel["yyyymm"].min(), panel["yyyymm"].max())
 
-    # Load feature list
-    with open(data_dir / "feature_list.json") as f:
+    if "exchcd" not in panel.columns:
+        logger.error("exchcd not in panel! Re-run 00_fetch_data.py.")
+        sys.exit(1)
+
+    # Load feature list (113 features that survived 70% missing filter)
+    feature_list_path = data_dir / "feature_list.json"
+    if not feature_list_path.exists():
+        logger.error("feature_list.json not found! Run 01_process_data.py first.")
+        sys.exit(1)
+
+    with open(feature_list_path) as f:
         feature_meta = json.load(f)
     features = feature_meta["features"]
+
+    # Verify features exist in raw panel
+    missing_feats = [f for f in features if f not in panel.columns]
+    if missing_feats:
+        logger.warning("Features in feature_list.json but not in panel: %s", missing_feats)
+        features = [f for f in features if f in panel.columns]
     logger.info("Features: %d", len(features))
     focal = list(FOCAL_CHARACTERISTICS.keys())
 
-    # Assign quintiles + weights
+    # Assign quintiles + weights (using raw liquidity columns)
     logger.info("Assigning NYSE quintiles...")
     panel["liq_quintile"] = assign_nyse_quintiles(
         panel, liq["quintile_col"], ascending=liq["ascending"]
     )
     panel["w_tilde"] = compute_implementability_weights(
-        panel, liq_col=liq["quintile_col"] if liq["ascending"] else liq["quintile_col"]
+        panel, liq_col=liq["quintile_col"]
     )
 
     # ══════════════════════════════════════════════════════
