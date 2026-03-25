@@ -1,9 +1,9 @@
 Category,Avg. |d_bar|,# Significant (|t| > 2),# Characteristics
-Liquidity,0.197,11,13
-Value,0.0647,10,13
-Momentum,0.0541,14,19
-Other,0.0541,18,19
-Risk,0.0497,13,14
-Profitability,0.0455,17,20
-Investment,0.0356,29,31
-Quality,0.029,13,14
+Liquidity,0.2729,10,10
+Value,0.1065,10,10
+Momentum,0.0903,11,15
+Other,0.0893,13,13
+Profitability,0.0825,14,15
+Risk,0.0581,9,11
+Quality,0.0567,11,11
+Investment,0.0548,27,28
