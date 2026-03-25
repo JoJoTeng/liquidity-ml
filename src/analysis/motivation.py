@@ -549,6 +549,26 @@ def fama_macbeth_weight_regression(
 # ═════════════════════════════════════════════════════════════
 
 
+def _set_academic_style():
+    """Set matplotlib rcParams for clean academic figures."""
+    import matplotlib.pyplot as plt
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.serif": ["Computer Modern Roman", "Times New Roman", "DejaVu Serif"],
+        "mathtext.fontset": "cm",
+        "font.size": 12,
+        "axes.linewidth": 0.6,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+    })
+
+
+def _clean_axes(ax):
+    """Remove top and right spines for clean academic style."""
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
 def plot_divergence_bar_chart(
     stats_df: pd.DataFrame,
     broad_categories: dict[str, str],
@@ -569,6 +589,7 @@ def plot_divergence_bar_chart(
     top_n : If set, show only top N features. None = show all.
     """
     import matplotlib.pyplot as plt
+    _set_academic_style()
     from matplotlib.patches import Patch
 
     df = stats_df.copy()
@@ -667,6 +688,7 @@ def plot_divergence_by_category(
         # Characteristics
     """
     import matplotlib.pyplot as plt
+    _set_academic_style()
 
     df = cat_summary.copy()
     df = df.sort_values("Avg. |d_bar|", ascending=True)  # ascending for horizontal bars
@@ -677,15 +699,11 @@ def plot_divergence_by_category(
     n_sig = df["# Significant (|t| > 2)"].values
     n_total = df["# Characteristics"].values
 
-    # Category colors (same palette as individual bar chart)
-    cmap = plt.cm.get_cmap("tab10", n_bars)
-    colors = [cmap(i) for i in range(n_bars)]
-
     fig, ax = plt.subplots(figsize=(8, 5))
 
     bars = ax.barh(
         range(n_bars), avg_d,
-        color=colors, edgecolor="#333333", linewidth=0.5,
+        color="steelblue", edgecolor="none",
     )
 
     # Annotate: "sig/total" at the end of each bar
@@ -718,6 +736,7 @@ def plot_divergence_by_category(
     x_max = avg_d.max() * 1.45
     ax.set_xlim(0, x_max)
 
+
     plt.tight_layout()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -744,6 +763,7 @@ def plot_density_comparison(
     near 0 and 1) that are misleading.
     """
     import matplotlib.pyplot as plt
+    _set_academic_style()
 
     # Define the two panels
     panel_a_label = "Panel A: Liquidity-related characteristics"
@@ -856,6 +876,7 @@ def plot_weight_distribution(
         If provided, its normalized weights are overlaid as a second density.
     """
     import matplotlib.pyplot as plt
+    _set_academic_style()
 
     w = panel[w_col].dropna()
     w = w[w > 0]
@@ -881,8 +902,9 @@ def plot_weight_distribution(
         vw_valid = vw_valid[vw_valid > 0]
         log_vw = np.log10(vw_valid.values)
 
-        ax.hist(log_vw, bins=80, density=True, alpha=0.0, edgecolor="green",
-                linewidth=1.5, histtype="step", label="Value weights (market cap)")
+        ax.hist(log_vw, bins=80, density=True, color="green", alpha=0.2,
+                edgecolor="green", linewidth=1.5, histtype="stepfilled",
+                label="Value weights (market cap)")
 
         # VW percentiles
         vw_pcts = np.percentile(vw_valid.values, pcts)
@@ -1253,6 +1275,7 @@ def plot_quintile_coefficients(
     Shaded 95% CI bands. Flat = homogeneous, sloping = heterogeneous.
     """
     import matplotlib.pyplot as plt
+    _set_academic_style()
 
     ct = quintile_results["coef_table"]
     n = len(focal_features)
@@ -1323,6 +1346,7 @@ def plot_divergence_vs_heterogeneity(
     Returns Spearman rank correlation.
     """
     import matplotlib.pyplot as plt
+    _set_academic_style()
     from scipy.stats import spearmanr
 
     int_table = interaction_results["coef_table"]
@@ -1744,6 +1768,7 @@ def plot_importance_vs_illiquidity(
 ) -> float:
     """Scatter: Ī_j (y) vs -ρ̄_j (x). 143 points, label 15 focal."""
     import matplotlib.pyplot as plt
+    _set_academic_style()
     from scipy.stats import spearmanr
 
     common = avg_importance.index.intersection(illiq_relatedness.index)
@@ -1792,6 +1817,7 @@ def plot_importance_vs_liquid_r2(
 ) -> None:
     """Scatter: Ī_j (y) vs R²_j(liquid) (x). Label 15 focal."""
     import matplotlib.pyplot as plt
+    _set_academic_style()
 
     common = avg_importance.index.intersection(liquid_r2.index)
     imp = avg_importance[common]
@@ -1831,6 +1857,7 @@ def plot_r2_by_quintile(
 ) -> None:
     """Bar chart: OOS R² by liquidity quintile with full-sample reference."""
     import matplotlib.pyplot as plt
+    _set_academic_style()
 
     q_data = quintile_r2[quintile_r2["quintile"] != "Full"]
     full_r2 = quintile_r2[quintile_r2["quintile"] == "Full"]["pooled_r2"].values[0]
