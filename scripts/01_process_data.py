@@ -88,20 +88,31 @@ def main() -> None:
     features = get_motivation_features(signaldoc, panel)
     logger.info("Selected features: %d (Clear Predictors from SignalDoc)", len(features))
 
-    # ── 3. Feature missingness (before normalization) ─────────
+    # ── 3. Feature missingness filter ─────────────────────
+    #   Drop features with >70% missing overall.
+    #   Do NOT fill remaining NaN — downstream functions handle NaN
+    #   by computing on non-missing observations only.
     miss = panel[features].isna().mean()
-    high_miss = miss[miss > 0.3].sort_values(ascending=False)
+    MISS_THRESHOLD = 0.70
+    high_miss = miss[miss > MISS_THRESHOLD].sort_values(ascending=False)
     if len(high_miss) > 0:
         logger.warning(
-            "%d features with >30%% missing:\n%s",
+            "Dropping %d features with >%.0f%% missing:\n%s",
             len(high_miss),
+            MISS_THRESHOLD * 100,
             high_miss.to_string(),
         )
+        features = [f for f in features if miss[f] <= MISS_THRESHOLD]
     logger.info(
-        "Feature missingness: mean=%.1f%%, median=%.1f%%, max=%.1f%%",
-        miss.mean() * 100,
-        miss.median() * 100,
-        miss.max() * 100,
+        "Features after missingness filter (≤%.0f%%): %d",
+        MISS_THRESHOLD * 100,
+        len(features),
+    )
+    logger.info(
+        "Remaining feature missingness: mean=%.1f%%, median=%.1f%%, max=%.1f%%",
+        miss[features].mean() * 100,
+        miss[features].median() * 100,
+        miss[features].max() * 100,
     )
 
     # ── 4. Save raw copies of robustness liquidity measures ────
@@ -125,14 +136,19 @@ def main() -> None:
         feat_max,
     )
 
-    # ── 6. Fill remaining NaN in features with 0.5 (neutral rank) ─
-    n_nan_before = panel[features].isna().sum().sum()
-    if n_nan_before > 0:
-        logger.info(
-            "Filling %d remaining NaN values in features with 0.5 (neutral rank)",
-            n_nan_before,
-        )
-        panel[features] = panel[features].fillna(0.5)
+    # ── 6. NaN handling: keep as NaN (no global fill) ───────
+    #   Do NOT fill missing values with 0.5.
+    #   Each downstream function handles NaN by computing on
+    #   non-missing observations only. This avoids the artificial
+    #   spike at 0.5 in density plots.
+    n_nan = panel[features].isna().sum().sum()
+    n_total = panel[features].size
+    logger.info(
+        "Feature NaN remaining: %d (%.1f%% of all feature-cells). "
+        "These will be handled per-analysis, not filled globally.",
+        n_nan,
+        100 * n_nan / n_total,
+    )
 
     # ── 7. (Weights computed in 05_step1_divergence.py, not here) ──
 
@@ -148,7 +164,8 @@ def main() -> None:
         "features": features,
         "n_features": len(features),
         "normalization": "[0, 1] rank transform",
-        "nan_fill": 0.5,
+        "nan_fill": "none (NaN kept, handled per-analysis)",
+        "missing_threshold": MISS_THRESHOLD,
     }
     meta_path = data_dir / "feature_list.json"
     with open(meta_path, "w") as f:
@@ -170,7 +187,7 @@ def main() -> None:
     logger.info("  Features:        %d (rank-transformed to [0, 1])", len(features))
     logger.info("  Liquidity cols:  %d (%s)", len(liq_cols), ", ".join(liq_cols))
     logger.info("  Target NaN:      %d", panel["excess_ret"].isna().sum())
-    logger.info("  Feature NaN:     %d", panel[features].isna().sum().sum())
+    logger.info("  Feature NaN:     %d (kept as NaN, no global fill)", panel[features].isna().sum().sum())
     logger.info("")
     logger.info("Next step: python scripts/05_step1_divergence.py")
 

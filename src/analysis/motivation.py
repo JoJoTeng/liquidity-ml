@@ -471,7 +471,7 @@ def fama_macbeth_weight_regression(
         if len(good_cols) < 10:
             continue
 
-        X_df = X_df[good_cols].fillna(0.0)
+        X_df = X_df[good_cols].fillna(0.5)  # neutral rank for sparse remaining NaN
         X = np.column_stack([np.ones(len(X_df)), X_df.values])
 
         # OLS via numpy
