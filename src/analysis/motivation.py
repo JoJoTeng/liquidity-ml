@@ -646,57 +646,189 @@ def plot_divergence_bar_chart(
     logger.info("Saved divergence bar chart to %s", output_path)
 
 
+def plot_divergence_by_category(
+    cat_summary: pd.DataFrame,
+    output_path: str | Path,
+) -> None:
+    """Horizontal bar chart of average |d̄| aggregated by economic category.
+
+    This is the main-paper version of Output 1.1. Each bar represents one
+    economic category (8 bars total), showing the average absolute divergence
+    across all characteristics in that category. Annotation shows the fraction
+    of significant characteristics.
+
+    For the full per-characteristic version, see plot_divergence_bar_chart()
+    (intended for the appendix).
+
+    Parameters
+    ----------
+    cat_summary : Output of summarize_divergence_by_category().
+        Expected columns: Category, Avg. |d_bar|, # Significant (|t| > 2),
+        # Characteristics
+    """
+    import matplotlib.pyplot as plt
+
+    df = cat_summary.copy()
+    df = df.sort_values("Avg. |d_bar|", ascending=True)  # ascending for horizontal bars
+
+    n_bars = len(df)
+    categories = df["Category"].values
+    avg_d = df["Avg. |d_bar|"].values
+    n_sig = df["# Significant (|t| > 2)"].values
+    n_total = df["# Characteristics"].values
+
+    # Category colors (same palette as individual bar chart)
+    cmap = plt.cm.get_cmap("tab10", n_bars)
+    colors = [cmap(i) for i in range(n_bars)]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    bars = ax.barh(
+        range(n_bars), avg_d,
+        color=colors, edgecolor="#333333", linewidth=0.5,
+    )
+
+    # Annotate: "sig/total" at the end of each bar
+    for i, (bar, ns, nt) in enumerate(zip(bars, n_sig, n_total)):
+        x_pos = bar.get_width() + 0.003
+        n_nonsig = nt - ns
+        label = f"{ns}/{nt} sig."
+        if n_nonsig > 0:
+            label += f" ({n_nonsig} n.s.)"
+        ax.text(x_pos, bar.get_y() + bar.get_height() / 2,
+                label, va="center", fontsize=9)
+
+    ax.set_yticks(range(n_bars))
+    ax.set_yticklabels(categories, fontsize=11)
+    ax.axvline(0, color="black", linewidth=0.5)
+    ax.set_xlabel("Average |d̄| across characteristics in category", fontsize=11)
+
+    # Summary in title
+    total_sig = int(n_sig.sum())
+    total_feat = int(n_total.sum())
+    total_nonsig = total_feat - total_sig
+    ax.set_title(
+        "Distributional Divergence by Economic Category\n"
+        f"({total_sig}/{total_feat} characteristics significant at |t| > 2; "
+        f"{total_nonsig} not significant)",
+        fontsize=12,
+    )
+
+    # Extend x-axis to fit annotations
+    x_max = avg_d.max() * 1.45
+    ax.set_xlim(0, x_max)
+
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved category divergence bar chart to %s", output_path)
+
+
 def plot_density_comparison(
     panel: pd.DataFrame,
     focal_features: list[str],
     w_col: str,
     output_path: str | Path,
 ) -> None:
-    """2×3 panel of KDE plots: equal-weighted vs volume-weighted densities."""
+    """Two-panel density comparison: training (flat line) vs deployment (KDE).
+
+    Panel A (left):  Characteristics related to size/liquidity
+                     (Illiquidity, BM, STreversal)
+    Panel B (right): Characteristics less obviously related to size
+                     (IdioVol3F, Mom12m, AnnouncementReturn)
+
+    The training distribution is drawn as a flat line at y=1.0 because
+    rank-transforming to [0,1] produces Uniform(0,1) by construction.
+    Using KDE for the training line creates boundary artifacts (drops
+    near 0 and 1) that are misleading.
+    """
     import matplotlib.pyplot as plt
 
-    n_features = len(focal_features)
-    nrows = (n_features + 2) // 3
-    fig, axes = plt.subplots(nrows, 3, figsize=(14, 4 * nrows))
-    axes = axes.flatten()
-    x_grid = np.linspace(0, 1, 200)
+    # Define the two panels
+    panel_a_label = "Panel A: Liquidity-related characteristics"
+    panel_b_label = "Panel B: Non-liquidity characteristics"
 
-    for i, feat in enumerate(focal_features):
-        ax = axes[i]
-        valid = panel[feat].notna() & panel[w_col].notna()
-        vals = panel.loc[valid, feat].values
-        w = panel.loc[valid, w_col].values
+    # Map features to panels — order matters for subplot placement
+    panel_a_features = ["Illiquidity", "BM", "STreversal"]
+    panel_b_features = ["IdioVol3F", "Mom12m", "AnnouncementReturn"]
+
+    # Fall back to whatever is available
+    panel_a = [f for f in panel_a_features if f in focal_features]
+    panel_b = [f for f in panel_b_features if f in focal_features]
+
+    # If the exact features aren't available, fill from remaining
+    used = set(panel_a + panel_b)
+    remaining = [f for f in focal_features if f not in used]
+    while len(panel_a) < 3 and remaining:
+        panel_a.append(remaining.pop(0))
+    while len(panel_b) < 3 and remaining:
+        panel_b.append(remaining.pop(0))
+
+    nrows = max(len(panel_a), len(panel_b))
+    fig, axes = plt.subplots(nrows, 2, figsize=(12, 3.5 * nrows))
+    if nrows == 1:
+        axes = axes.reshape(1, -1)
+
+    x_grid = np.linspace(0, 1, 300)
+
+    def _plot_one(ax, feat, panel_data, w_col_name):
+        valid = panel_data[feat].notna() & panel_data[w_col_name].notna()
+        vals = panel_data.loc[valid, feat].values
+        w = panel_data.loc[valid, w_col_name].values
 
         if len(vals) < 100:
             ax.set_title(f"{feat} (insufficient data)")
-            continue
+            return
 
-        # Equal-weighted KDE
-        kde_ew = gaussian_kde(vals)
-        # Volume-weighted KDE
+        # Training distribution: flat line at y=1.0
+        # (rank-transform to [0,1] is Uniform by construction)
+        ax.axhline(1.0, color="steelblue", linewidth=2.0, label="Training (equal-wt)")
+
+        # Deployment distribution: volume-weighted KDE
         kde_vw = gaussian_kde(vals, weights=w)
+        deploy_y = kde_vw(x_grid)
+        ax.plot(x_grid, deploy_y, "--", color="darkorange", linewidth=2.0,
+                label="Deployment (vol-wt)")
 
-        ax.plot(x_grid, kde_ew(x_grid), "-", linewidth=1.5, label="Training (equal-wt)")
-        ax.plot(
-            x_grid,
-            kde_vw(x_grid),
-            "--",
-            linewidth=1.5,
-            label="Deployment (vol-wt)",
-        )
-        ax.set_title(feat)
+        # Shade the gap between training and deployment
+        ax.fill_between(x_grid, 1.0, deploy_y, alpha=0.15, color="darkorange")
+
+        ax.set_title(feat, fontsize=12, fontweight="bold")
+        ax.set_xlim(-0.02, 1.02)
         ax.set_xlabel("Characteristic rank [0, 1]")
         ax.set_ylabel("Density")
 
-    # Hide unused axes
-    for j in range(i + 1, len(axes)):
-        axes[j].set_visible(False)
+    # Plot Panel A (left column)
+    for i, feat in enumerate(panel_a):
+        _plot_one(axes[i, 0], feat, panel, w_col)
 
-    axes[0].legend(fontsize=9)
+    # Plot Panel B (right column)
+    for i, feat in enumerate(panel_b):
+        _plot_one(axes[i, 1], feat, panel, w_col)
+
+    # Hide unused subplots
+    for i in range(len(panel_a), nrows):
+        axes[i, 0].set_visible(False)
+    for i in range(len(panel_b), nrows):
+        axes[i, 1].set_visible(False)
+
+    # Panel labels
+    axes[0, 0].annotate(
+        panel_a_label, xy=(0.5, 1.15), xycoords="axes fraction",
+        ha="center", fontsize=11, fontstyle="italic",
+    )
+    axes[0, 1].annotate(
+        panel_b_label, xy=(0.5, 1.15), xycoords="axes fraction",
+        ha="center", fontsize=11, fontstyle="italic",
+    )
+
+    # Shared legend from first subplot
+    axes[0, 0].legend(fontsize=9, loc="upper right")
+
     fig.suptitle(
-        "Training vs Deployment Distributions (6 Focal Characteristics)",
-        fontsize=13,
-        y=1.02,
+        "Training vs Deployment Distributions",
+        fontsize=14, y=1.02,
     )
     plt.tight_layout()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -709,13 +841,24 @@ def plot_weight_distribution(
     panel: pd.DataFrame,
     w_col: str,
     output_path: str | Path,
+    vw_col: str | None = None,
 ) -> None:
-    """Histogram of log₁₀(w̃) with percentile annotations."""
+    """Histogram of log₁₀(w̃) with value-weight comparison.
+
+    Shows dollar-volume weights as the main histogram, with an optional
+    overlay of value-weights (market cap) to address the "why not just
+    value-weight?" objection.
+
+    Parameters
+    ----------
+    w_col : Dollar-volume implementability weight column.
+    vw_col : Optional value-weight (market cap) column for comparison.
+        If provided, its normalized weights are overlaid as a second density.
+    """
     import matplotlib.pyplot as plt
 
     w = panel[w_col].dropna()
     w = w[w > 0]
-
     log_w = np.log10(w.values)
 
     # Percentiles of raw w̃ (not log)
@@ -723,28 +866,59 @@ def plot_weight_distribution(
     pct_vals = np.percentile(w.values, pcts)
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.hist(log_w, bins=80, density=True, alpha=0.7, color="steelblue", edgecolor="none")
-    ax.axvline(0, color="red", linestyle="--", linewidth=1.5, label="log₁₀(1) = 0 (average stock)")
 
-    # Percentile annotation
-    pct_text = "Percentiles of w̃:\n" + "\n".join(
+    # Dollar-volume weights
+    ax.hist(log_w, bins=80, density=True, alpha=0.6, color="steelblue",
+            edgecolor="none", label="Dollar volume weights")
+
+    # Value-weight comparison (if provided)
+    if vw_col is not None and vw_col in panel.columns:
+        # Compute normalized VW weights: me / mean(me) per month
+        vw_raw = panel.groupby("yyyymm")[vw_col].transform(
+            lambda x: x / x.mean()
+        )
+        vw_valid = vw_raw.dropna()
+        vw_valid = vw_valid[vw_valid > 0]
+        log_vw = np.log10(vw_valid.values)
+
+        ax.hist(log_vw, bins=80, density=True, alpha=0.0, edgecolor="green",
+                linewidth=1.5, histtype="step", label="Value weights (market cap)")
+
+        # VW percentiles
+        vw_pcts = np.percentile(vw_valid.values, pcts)
+        vw_median_log = np.log10(vw_pcts[2])  # 50th percentile
+
+        ax.axvline(vw_median_log, color="green", linestyle=":", linewidth=1.5,
+                   label=f"VW median = {vw_pcts[2]:.3f}")
+
+    # Equal-weight reference
+    ax.axvline(0, color="red", linestyle="--", linewidth=1.5,
+               label="Equal-weight: log₁₀(1) = 0")
+
+    # DV median
+    dv_median_log = np.log10(pct_vals[2])
+    ax.axvline(dv_median_log, color="steelblue", linestyle=":", linewidth=1.5,
+               label=f"DV median = {pct_vals[2]:.3f}")
+
+    # Percentile annotation box
+    pct_text = "Dollar vol. percentiles:\n" + "\n".join(
         f"  {p}th: {v:.3f}" for p, v in zip(pcts, pct_vals)
     )
+    if vw_col is not None and vw_col in panel.columns:
+        pct_text += "\n\nValue-wt percentiles:\n" + "\n".join(
+            f"  {p}th: {v:.3f}" for p, v in zip(pcts, vw_pcts)
+        )
     ax.text(
-        0.98,
-        0.95,
-        pct_text,
-        transform=ax.transAxes,
-        fontsize=9,
-        verticalalignment="top",
-        horizontalalignment="right",
+        0.98, 0.95, pct_text,
+        transform=ax.transAxes, fontsize=8,
+        verticalalignment="top", horizontalalignment="right",
         bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
     )
 
     ax.set_xlabel("log₁₀(w̃)")
     ax.set_ylabel("Density")
     ax.set_title("Distribution of Implementability Weights (w̃ = dvol / mean(dvol))")
-    ax.legend()
+    ax.legend(fontsize=9, loc="upper left")
 
     plt.tight_layout()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -752,9 +926,14 @@ def plot_weight_distribution(
     plt.close(fig)
     logger.info("Saved weight distribution to %s", output_path)
     logger.info(
-        "Weight percentiles: %s",
+        "DV weight percentiles: %s",
         {p: f"{v:.4f}" for p, v in zip(pcts, pct_vals)},
     )
+    if vw_col is not None and vw_col in panel.columns:
+        logger.info(
+            "VW weight percentiles: %s",
+            {p: f"{v:.4f}" for p, v in zip(pcts, vw_pcts)},
+        )
 
 
 # ═════════════════════════════════════════════════════════════

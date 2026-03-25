@@ -43,6 +43,7 @@ from src.analysis.motivation import (
     summarize_divergence_by_category,
     fama_macbeth_weight_regression,
     plot_divergence_bar_chart,
+    plot_divergence_by_category,
     plot_density_comparison,
     plot_weight_distribution,
     DENSITY_PLOT_FEATURES,
@@ -159,7 +160,8 @@ def main():
     logger.info("=" * 60)
     logger.info("Output 1.5: Weight distribution histogram")
     plot_weight_distribution(
-        panel, "w_tilde", output_dir / "weight_distribution.png"
+        panel, "w_tilde", output_dir / "weight_distribution.png",
+        vw_col="liq_me_raw",
     )
 
     # Sanity check
@@ -206,7 +208,7 @@ def main():
     )
 
     plot_divergence_bar_chart(
-        stats, categories["broad"], output_dir / "divergence_bar_chart.png"
+        stats, categories["broad"], output_dir / "divergence_bar_chart_appendix.png"
     )
 
     # ══════════════════════════════════════════════════════
@@ -217,6 +219,11 @@ def main():
     cat_summary = summarize_divergence_by_category(stats, categories["broad"])
     cat_summary.to_csv(output_dir / "divergence_by_category.csv", index=False)
     logger.info("\n%s", cat_summary.to_string(index=False))
+
+    # Aggregated category bar chart (main paper version of Output 1.1)
+    plot_divergence_by_category(
+        cat_summary, output_dir / "divergence_bar_chart.png"
+    )
 
     # Save LaTeX version for paper
     tex_dir = Path("paper/TablesNew")
