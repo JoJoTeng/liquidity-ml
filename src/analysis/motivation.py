@@ -47,7 +47,7 @@ FOCAL_CHARACTERISTICS = {
     "Illiquidity": ("Liquidity", "Amihud illiquidity"),
     "zerotrade12M": ("Liquidity", "Zero-trading days"),
     "Size": ("Other", "Log market capitalization"),
-    "ChNAnalyst": ("Other", "Analyst coverage"),
+    "AnnouncementReturn": ("Other", "Earnings announcement return"),
     "BidAskSpread": ("Liquidity", "Transaction cost proxy"),
 }
 
@@ -57,7 +57,7 @@ DENSITY_PLOT_FEATURES = [
     "IdioVol3F",
     "Mom12m",
     "BM",
-    "ChNAnalyst",
+    "AnnouncementReturn",
     "STreversal",
 ]
 

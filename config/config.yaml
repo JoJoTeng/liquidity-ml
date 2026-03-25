@@ -16,7 +16,7 @@ data:
   signed_predictors_csv: "signed_predictors_all_wide.csv"
   ff_factors_csv: "FFResearch_Data_Factors.csv"
 
-  start_yyyymm: 197201
+  start_yyyymm: 198901
   end_yyyymm: 202412
 
   id_cols: ["permno", "yyyymm"]
