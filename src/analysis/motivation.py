@@ -1193,3 +1193,493 @@ def plot_divergence_vs_heterogeneity(
     plt.close(fig)
     logger.info("Saved divergence vs heterogeneity scatter to %s (ρ=%.3f)", output_path, rho)
     return rho
+
+
+# ═════════════════════════════════════════════════════════════
+# Step 3: Standard ML Is Affected
+# ═════════════════════════════════════════════════════════════
+
+
+def rolling_xgboost_predict(
+    panel: pd.DataFrame,
+    features: list[str],
+    config: dict | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Train baseline XGBoost with rolling windows, collect OOS predictions.
+
+    Follows the same protocol as 02_run_experiment.py:
+      - 120 months train, 12 months validation, 1 month test
+      - Hyperparameter retune every 24 months (random search)
+      - Per-window rank normalization to [0,1] (no look-ahead)
+      - NaN fill with 0.5 after ranking
+
+    Returns
+    -------
+    predictions : DataFrame [permno, yyyymm, y_true, y_pred]
+    importances : DataFrame rows=yyyymm (test month), cols=features (gain)
+    """
+    from src.models import create_model
+
+    if config is None:
+        config = load_config()
+
+    train_cfg = config["training"]
+    train_months = train_cfg["train_window"]           # 120
+    val_months = train_cfg["validation_window"]        # 12
+    retune_freq = train_cfg["retune_frequency"]        # 24
+    oos_start = train_cfg.get("oos_start", 200001)
+    seed = config["project"]["seed"]
+
+    all_months = sorted(panel["yyyymm"].unique())
+    oos_months = [m for m in all_months if m >= oos_start]
+
+    predictions_list = []
+    import time as _time
+
+    importance_list = []
+    best_params = None
+    months_since_retune = retune_freq  # force retune on first window
+    t_start = _time.time()
+    n_done = 0
+
+    logger.info(
+        "Rolling XGBoost: %d OOS months, retune every %d, grid size %d",
+        len(oos_months), retune_freq,
+        np.prod([len(v) for v in config["models"]["xgboost"].get("search_space", {}).values()]),
+    )
+
+    for i, test_month in enumerate(oos_months):
+        test_idx = all_months.index(test_month)
+
+        if test_idx < train_months + val_months:
+            continue
+
+        train_start = test_idx - train_months - val_months
+        val_start = test_idx - val_months
+
+        train_months_list = all_months[train_start:val_start]
+        val_months_list = all_months[val_start:test_idx]
+
+        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
+        val_df = panel[panel["yyyymm"].isin(val_months_list)].copy()
+        test_df = panel[panel["yyyymm"] == test_month].copy()
+
+        if len(train_df) < 100 or len(test_df) < 50:
+            continue
+
+        # Per-window rank normalization to [0,1] (no look-ahead)
+        for col in features:
+            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
+            val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
+            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
+
+        # Fill NaN with 0.5 (neutral rank)
+        train_df[features] = train_df[features].fillna(0.5)
+        val_df[features] = val_df[features].fillna(0.5)
+        test_df[features] = test_df[features].fillna(0.5)
+
+        X_train = train_df[features].values
+        y_train = train_df["excess_ret"].values
+        X_val = val_df[features].values
+        y_val = val_df["excess_ret"].values
+        X_test = test_df[features].values
+        y_test = test_df["excess_ret"].values
+
+        # Drop NaN targets
+        valid_train = ~np.isnan(y_train)
+        valid_val = ~np.isnan(y_val)
+        valid_test = ~np.isnan(y_test)
+        if valid_train.sum() < 100 or valid_test.sum() < 30:
+            continue
+
+        X_train, y_train = X_train[valid_train], y_train[valid_train]
+        X_val, y_val = X_val[valid_val], y_val[valid_val]
+        X_test, y_test = X_test[valid_test], y_test[valid_test]
+
+        # Retune hyperparameters if due (every retune_freq months)
+        if months_since_retune >= retune_freq:
+            model_tune = create_model("xgboost", seed=seed)
+            best_params = model_tune.tune_hyperparameters(
+                X_train, y_train, X_val, y_val
+            )
+            months_since_retune = 0
+            logger.info(
+                "Month %d: RETUNED XGBoost (best params: %s)",
+                test_month,
+                {k: best_params.get(k) for k in
+                 config["models"]["xgboost"].get("search_space", {}).keys()},
+            )
+
+        # Train XGBoost with best params (equal-weighted, no sample_weight)
+        model = create_model("xgboost", config=best_params, seed=seed)
+        model.fit(X_train, y_train, X_val, y_val)
+
+        # Predict
+        y_pred = model.predict(X_test)
+
+        # Collect predictions
+        test_valid = test_df[valid_test]
+        pred_df = pd.DataFrame({
+            "permno": test_valid["permno"].values,
+            "yyyymm": test_valid["yyyymm"].values,
+            "y_true": y_test,
+            "y_pred": y_pred,
+        })
+        predictions_list.append(pred_df)
+
+        # Feature importance (gain-based)
+        imp = model.get_feature_importance(features)
+        imp_row = {"yyyymm": test_month}
+        imp_row.update(imp.to_dict())
+        importance_list.append(imp_row)
+
+        months_since_retune += 1
+        n_done += 1
+
+        # Progress with ETA
+        elapsed = _time.time() - t_start
+        avg_per_month = elapsed / n_done
+        remaining = avg_per_month * (len(oos_months) - i - 1)
+        remaining_min = remaining / 60
+
+        is_retune_month = months_since_retune == 1  # just retuned
+        if (i + 1) % 6 == 0 or is_retune_month or i == 0:
+            logger.info(
+                "Progress: %d/%d months (%.0f%%) | month %d%s | "
+                "%.1f s/month | ETA: %.0f min",
+                i + 1, len(oos_months), 100 * (i + 1) / len(oos_months),
+                test_month,
+                " [RETUNED]" if is_retune_month else "",
+                avg_per_month, remaining_min,
+            )
+
+    if not predictions_list:
+        logger.warning("No valid OOS months produced")
+        return pd.DataFrame(), pd.DataFrame()
+
+    predictions = pd.concat(predictions_list, ignore_index=True)
+    importances = pd.DataFrame(importance_list).set_index("yyyymm")
+
+    logger.info(
+        "Rolling XGBoost complete: %d OOS months, %d predictions",
+        len(importances), len(predictions),
+    )
+    return predictions, importances
+
+
+def compute_illiquidity_relatedness(
+    panel: pd.DataFrame,
+    features: list[str],
+    liq_col: str = "liq_dvol_21d",
+) -> pd.Series:
+    """Monthly Spearman correlation of each feature with dollar volume.
+
+    Returns Series: ρ̄_j per feature (averaged across months).
+    A large negative ρ̄_j means the feature is associated with illiquid stocks.
+    """
+    from scipy.stats import spearmanr
+
+    months = sorted(panel["yyyymm"].unique())
+    corr_list = []
+
+    for m in months:
+        mdf = panel[panel["yyyymm"] == m]
+        liq = mdf[liq_col].values
+        valid_liq = ~np.isnan(liq)
+
+        row = {}
+        for feat in features:
+            vals = mdf[feat].values
+            valid = valid_liq & ~np.isnan(vals)
+            if valid.sum() < 50:
+                row[feat] = np.nan
+                continue
+            rho, _ = spearmanr(vals[valid], liq[valid])
+            row[feat] = rho
+        corr_list.append(row)
+
+    corr_df = pd.DataFrame(corr_list)
+    return corr_df.mean()
+
+
+def compute_quintile_oos_r2(
+    predictions: pd.DataFrame,
+    panel: pd.DataFrame,
+    quintile_col: str = "liq_quintile",
+) -> pd.DataFrame:
+    """Pooled OOS R² per liquidity quintile (Eq. 8 in document).
+
+    r̄_t = full-sample cross-sectional mean (not within-quintile).
+
+    Returns DataFrame with columns:
+        quintile, pooled_r2, avg_monthly_r2, avg_n_month
+    """
+    pred = predictions.merge(
+        panel[["permno", "yyyymm", quintile_col]],
+        on=["permno", "yyyymm"],
+        how="left",
+    )
+
+    # Full-sample mean return per month (for denominator)
+    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
+    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
+
+    results = []
+    quintiles = sorted(pred[quintile_col].dropna().unique())
+
+    for q in quintiles:
+        qdf = pred[pred[quintile_col] == q].dropna(subset=["y_true", "y_pred"])
+
+        # Pooled R²
+        ss_res = ((qdf["y_true"] - qdf["y_pred"]) ** 2).sum()
+        ss_tot = ((qdf["y_true"] - qdf["r_bar_t"]) ** 2).sum()
+        pooled_r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+        # Average monthly R²
+        monthly_r2 = []
+        for _, mdf in qdf.groupby("yyyymm"):
+            ss_r = ((mdf["y_true"] - mdf["y_pred"]) ** 2).sum()
+            ss_t = ((mdf["y_true"] - mdf["r_bar_t"]) ** 2).sum()
+            if ss_t > 0:
+                monthly_r2.append(1 - ss_r / ss_t)
+        avg_monthly_r2 = np.mean(monthly_r2) if monthly_r2 else np.nan
+
+        avg_n = qdf.groupby("yyyymm").size().mean()
+
+        results.append({
+            "quintile": int(q),
+            "pooled_r2": pooled_r2,
+            "avg_monthly_r2": avg_monthly_r2,
+            "avg_n_month": avg_n,
+        })
+
+    # Full sample
+    ss_res_all = ((pred["y_true"] - pred["y_pred"]) ** 2).sum()
+    ss_tot_all = ((pred["y_true"] - pred["r_bar_t"]) ** 2).sum()
+    full_r2 = 1 - ss_res_all / ss_tot_all if ss_tot_all > 0 else np.nan
+
+    results.append({
+        "quintile": "Full",
+        "pooled_r2": full_r2,
+        "avg_monthly_r2": np.nan,
+        "avg_n_month": pred.groupby("yyyymm").size().mean(),
+    })
+
+    return pd.DataFrame(results)
+
+
+def compute_utility_weighted_r2(
+    predictions: pd.DataFrame,
+    panel: pd.DataFrame,
+    w_col: str = "w_tilde",
+) -> dict:
+    """Utility-weighted R² (Eq. 9 in document).
+
+    R²_w = 1 − Σ w̃(r−r̂)² / Σ w̃(r−r̄_t)²
+    """
+    pred = predictions.merge(
+        panel[["permno", "yyyymm", w_col]],
+        on=["permno", "yyyymm"],
+        how="left",
+    )
+    pred = pred.dropna(subset=["y_true", "y_pred", w_col])
+
+    # Full-sample mean per month
+    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
+    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
+
+    w = pred[w_col].values
+    r = pred["y_true"].values
+    r_hat = pred["y_pred"].values
+    r_bar = pred["r_bar_t"].values
+
+    # Weighted R²
+    ss_res_w = np.sum(w * (r - r_hat) ** 2)
+    ss_tot_w = np.sum(w * (r - r_bar) ** 2)
+    r2_w = 1 - ss_res_w / ss_tot_w if ss_tot_w > 0 else np.nan
+
+    # Standard (equal-weighted) R²
+    ss_res = np.sum((r - r_hat) ** 2)
+    ss_tot = np.sum((r - r_bar) ** 2)
+    r2_std = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+    return {
+        "r2_standard": r2_std,
+        "r2_weighted": r2_w,
+        "gap": r2_std - r2_w,
+    }
+
+
+def compute_univariate_liquid_r2(
+    panel: pd.DataFrame,
+    features: list[str],
+    quintile_col: str = "liq_quintile",
+    return_col: str = "excess_ret",
+) -> pd.Series:
+    """Per-feature univariate predictive R² among liquid stocks (Q4-Q5).
+
+    Uses FM slope within Q4-Q5, then R² ≈ t²/(t²+T-1).
+    """
+    liquid = panel[panel[quintile_col].isin([4, 5])].copy()
+    months = sorted(liquid["yyyymm"].unique())
+
+    slopes = {feat: [] for feat in features}
+
+    for m in months:
+        mdf = liquid[liquid["yyyymm"] == m]
+        y = mdf[return_col].values
+
+        for feat in features:
+            x = mdf[feat].values
+            valid = ~np.isnan(y) & ~np.isnan(x)
+            if valid.sum() < 30:
+                continue
+            xv, yv = x[valid], y[valid]
+            xv_dm = xv - xv.mean()
+            var_x = np.sum(xv_dm ** 2)
+            if var_x < 1e-12:
+                continue
+            beta = np.sum(xv_dm * (yv - yv.mean())) / var_x
+            slopes[feat].append(beta)
+
+    r2_dict = {}
+    for feat in features:
+        s = np.array(slopes[feat])
+        s = s[~np.isnan(s)]
+        if len(s) < 12:
+            r2_dict[feat] = np.nan
+            continue
+        nw = newey_west_tstat(s, lags=6)
+        t = nw["t_stat"]
+        T = nw["n_obs"]
+        r2_dict[feat] = t ** 2 / (t ** 2 + T - 1)
+
+    return pd.Series(r2_dict)
+
+
+def plot_importance_vs_illiquidity(
+    avg_importance: pd.Series,
+    illiq_relatedness: pd.Series,
+    focal_features: list[str],
+    output_path: str | Path,
+) -> float:
+    """Scatter: Ī_j (y) vs -ρ̄_j (x). 143 points, label 15 focal."""
+    import matplotlib.pyplot as plt
+    from scipy.stats import spearmanr
+
+    common = avg_importance.index.intersection(illiq_relatedness.index)
+    imp = avg_importance[common]
+    rho_neg = -illiq_relatedness[common]
+
+    valid = ~(imp.isna() | rho_neg.isna())
+    imp = imp[valid]
+    rho_neg = rho_neg[valid]
+
+    spearman_rho, _ = spearmanr(imp.values, rho_neg.values)
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    ax.scatter(rho_neg.values, imp.values, s=20, alpha=0.5, color="steelblue")
+
+    for feat in focal_features:
+        if feat in imp.index:
+            ax.annotate(
+                feat,
+                (rho_neg[feat], imp[feat]),
+                fontsize=7, fontweight="bold", color="red",
+                textcoords="offset points", xytext=(4, 4),
+            )
+
+    ax.set_xlabel("-ρ̄_j (illiquidity-relatedness; higher = more illiquid-stock related)")
+    ax.set_ylabel("Ī_j (average XGBoost gain importance)")
+    ax.set_title(
+        "Feature Importance vs Illiquidity-Relatedness\n"
+        f"(Spearman ρ = {spearman_rho:.3f}; N = {len(imp)} features)",
+    )
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved importance vs illiquidity scatter (ρ=%.3f)", spearman_rho)
+    return spearman_rho
+
+
+def plot_importance_vs_liquid_r2(
+    avg_importance: pd.Series,
+    liquid_r2: pd.Series,
+    focal_features: list[str],
+    output_path: str | Path,
+) -> None:
+    """Scatter: Ī_j (y) vs R²_j(liquid) (x). Label 15 focal."""
+    import matplotlib.pyplot as plt
+
+    common = avg_importance.index.intersection(liquid_r2.index)
+    imp = avg_importance[common]
+    r2 = liquid_r2[common]
+
+    valid = ~(imp.isna() | r2.isna())
+    imp = imp[valid]
+    r2 = r2[valid]
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    ax.scatter(r2.values, imp.values, s=20, alpha=0.5, color="steelblue")
+
+    for feat in focal_features:
+        if feat in imp.index:
+            ax.annotate(
+                feat,
+                (r2[feat], imp[feat]),
+                fontsize=7, fontweight="bold", color="red",
+                textcoords="offset points", xytext=(4, 4),
+            )
+
+    ax.set_xlabel("R²_j(liquid) — univariate predictive R² among Q4-Q5 stocks")
+    ax.set_ylabel("Ī_j (average XGBoost gain importance)")
+    ax.set_title("Feature Importance vs Liquid-Stock Predictive R²")
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved importance vs liquid R² scatter")
+
+
+def plot_r2_by_quintile(
+    quintile_r2: pd.DataFrame,
+    output_path: str | Path,
+) -> None:
+    """Bar chart: OOS R² by liquidity quintile with full-sample reference."""
+    import matplotlib.pyplot as plt
+
+    q_data = quintile_r2[quintile_r2["quintile"] != "Full"]
+    full_r2 = quintile_r2[quintile_r2["quintile"] == "Full"]["pooled_r2"].values[0]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(
+        [f"Q{int(q)}" for q in q_data["quintile"]],
+        q_data["pooled_r2"].values * 100,
+        color="steelblue", edgecolor="black", linewidth=0.5,
+    )
+    ax.axhline(
+        full_r2 * 100, color="red", linestyle="--", linewidth=1.5,
+        label=f"Full sample R² = {full_r2*100:.2f}%",
+    )
+
+    ax.set_xlabel("Liquidity Quintile (Q1=illiquid, Q5=liquid)")
+    ax.set_ylabel("Pooled OOS R² (%)")
+    ax.set_title("Out-of-Sample R² by Liquidity Quintile")
+    ax.legend()
+
+    for bar, val in zip(bars, q_data["pooled_r2"].values):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, bar.get_height(),
+            f"{val*100:.2f}%", ha="center", va="bottom", fontsize=9,
+        )
+
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved R² by quintile bar chart")

@@ -405,7 +405,7 @@ models:
       n_estimators: [300, 500, 800]
       min_child_weight: [1, 5, 10]
       reg_lambda: [0.01, 0.1, 1.0]
-    n_random_search: 80
+    n_random_search: 150  # random search (150 of 243 combos, ~62%)
 
   random_forest:
     n_estimators: 300
