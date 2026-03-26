@@ -229,10 +229,16 @@ def main():
     tex_dir = Path("paper/TablesNew")
     tex_dir.mkdir(parents=True, exist_ok=True)
     tex_path = tex_dir / "DivergenceByCategory.tex"
-    cat_summary.to_latex(
+    cat_tex = cat_summary.rename(columns={
+        "Avg. |d_bar|": r"Avg.\ $|\bar{d}|$",
+        "# Significant (|t| > 2)": r"\# Significant ($|t|>2$)",
+        "# Characteristics": r"\# Characteristics",
+    })
+    cat_tex.to_latex(
         tex_path,
         index=False,
         float_format="%.4f",
+        escape=False,
         caption="Distributional Divergence by Category",
         label="tab:divergence_by_category",
     )

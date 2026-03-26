@@ -643,7 +643,7 @@ def plot_divergence_bar_chart(
             label.set_color("#999999")
 
     ax.axvline(0, color="black", linewidth=0.5)
-    ax.set_xlabel("Mean divergence d̄ (deploy − train)")
+    ax.set_xlabel(r"Mean divergence $\bar{d}$ (deploy $-$ train)")
 
     n_sig = df["significant"].sum()
     n_total = len(df)
@@ -696,45 +696,31 @@ def plot_divergence_by_category(
     n_bars = len(df)
     categories = df["Category"].values
     avg_d = df["Avg. |d_bar|"].values
-    n_sig = df["# Significant (|t| > 2)"].values
-    n_total = df["# Characteristics"].values
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(8, 8))
 
-    bars = ax.barh(
+    # Gradient color: darker = larger divergence
+    norm_vals = avg_d / avg_d.max()
+    colors = [plt.cm.Blues(0.35 + 0.55 * v) for v in norm_vals]
+
+    ax.barh(
         range(n_bars), avg_d,
-        color="steelblue", edgecolor="none",
+        color=colors, edgecolor="white", linewidth=0.3,
     )
-
-    # Annotate: "sig/total" at the end of each bar
-    for i, (bar, ns, nt) in enumerate(zip(bars, n_sig, n_total)):
-        x_pos = bar.get_width() + 0.003
-        n_nonsig = nt - ns
-        label = f"{ns}/{nt} sig."
-        if n_nonsig > 0:
-            label += f" ({n_nonsig} n.s.)"
-        ax.text(x_pos, bar.get_y() + bar.get_height() / 2,
-                label, va="center", fontsize=9)
 
     ax.set_yticks(range(n_bars))
     ax.set_yticklabels(categories, fontsize=11)
-    ax.axvline(0, color="black", linewidth=0.5)
-    ax.set_xlabel("Average |d̄| across characteristics in category", fontsize=11)
+    ax.set_xlabel(r"Average $|\bar{d}|$ across characteristics in category", fontsize=11)
 
-    # Summary in title
+    n_sig = df["# Significant (|t| > 2)"].values
+    n_total = df["# Characteristics"].values
     total_sig = int(n_sig.sum())
     total_feat = int(n_total.sum())
-    total_nonsig = total_feat - total_sig
     ax.set_title(
         "Distributional Divergence by Economic Category\n"
-        f"({total_sig}/{total_feat} characteristics significant at |t| > 2; "
-        f"{total_nonsig} not significant)",
-        fontsize=12,
+        f"({total_sig}/{total_feat} characteristics significant at $|t| > 2$)",
+        fontsize=13,
     )
-
-    # Extend x-axis to fit annotations
-    x_max = avg_d.max() * 1.45
-    ax.set_xlim(0, x_max)
 
 
     plt.tight_layout()
@@ -886,7 +872,7 @@ def plot_weight_distribution(
     pcts = [5, 25, 50, 75, 95]
     pct_vals = np.percentile(w.values, pcts)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(8, 8))
 
     # Dollar-volume weights
     ax.hist(log_w, bins=80, density=True, alpha=0.6, color="steelblue",
@@ -915,7 +901,7 @@ def plot_weight_distribution(
 
     # Equal-weight reference
     ax.axvline(0, color="red", linestyle="--", linewidth=1.5,
-               label="Equal-weight: log₁₀(1) = 0")
+               label=r"Equal-weight: $\log_{10}(1) = 0$")
 
     # DV median
     dv_median_log = np.log10(pct_vals[2])
@@ -937,9 +923,9 @@ def plot_weight_distribution(
         bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
     )
 
-    ax.set_xlabel("log₁₀(w̃)")
+    ax.set_xlabel(r"$\log_{10}(\tilde{w})$")
     ax.set_ylabel("Density")
-    ax.set_title("Distribution of Implementability Weights (w̃ = dvol / mean(dvol))")
+    ax.set_title("Distribution of Normalized Weights: Dollar Volume vs Value")
     ax.legend(fontsize=9, loc="upper left")
 
     plt.tight_layout()
@@ -1368,7 +1354,7 @@ def plot_divergence_vs_heterogeneity(
     df = pd.DataFrame(points)
     rho, p_val = spearmanr(df["abs_d_bar"], df["abs_gamma"])
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(8, 8))
     ax.scatter(df["abs_d_bar"], df["abs_gamma"], s=60, color="steelblue", zorder=3)
 
     # Label each point
@@ -1381,8 +1367,8 @@ def plot_divergence_vs_heterogeneity(
             xytext=(5, 5),
         )
 
-    ax.set_xlabel("|d̄_j| (distributional divergence, Step 1)", fontsize=11)
-    ax.set_ylabel("|γ̄_j| (predictability heterogeneity, Step 2)", fontsize=11)
+    ax.set_xlabel(r"$|\bar{d}_j|$ (distributional divergence)", fontsize=11)
+    ax.set_ylabel(r"$|\bar{\gamma}_j|$ (predictability heterogeneity)", fontsize=11)
     ax.set_title(
         "Distributional Divergence vs Predictability Heterogeneity\n"
         f"(Spearman ρ = {rho:.3f}; N = {len(df)} focal characteristics)",
@@ -1781,7 +1767,7 @@ def plot_importance_vs_illiquidity(
 
     spearman_rho, _ = spearmanr(imp.values, rho_neg.values)
 
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(8, 8))
     ax.scatter(rho_neg.values, imp.values, s=20, alpha=0.5, color="steelblue")
 
     for feat in focal_features:
@@ -1793,7 +1779,7 @@ def plot_importance_vs_illiquidity(
                 textcoords="offset points", xytext=(4, 4),
             )
 
-    ax.set_xlabel("-ρ̄_j (illiquidity-relatedness; higher = more illiquid-stock related)")
+    ax.set_xlabel(r"$-\bar{\rho}_j$ (illiquidity-relatedness; higher = more illiquid-stock related)")
     ax.set_ylabel("Ī_j (average XGBoost gain importance)")
     ax.set_title(
         "Feature Importance vs Illiquidity-Relatedness\n"
@@ -1827,7 +1813,7 @@ def plot_importance_vs_liquid_r2(
     imp = imp[valid]
     r2 = r2[valid]
 
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(8, 8))
     ax.scatter(r2.values, imp.values, s=20, alpha=0.5, color="steelblue")
 
     for feat in focal_features:
@@ -1839,9 +1825,9 @@ def plot_importance_vs_liquid_r2(
                 textcoords="offset points", xytext=(4, 4),
             )
 
-    ax.set_xlabel("R²_j(liquid) — univariate predictive R² among Q4-Q5 stocks")
+    ax.set_xlabel(r"$R^2_j$(liquid) — univariate predictive $R^2$ among Q4--Q5 stocks")
     ax.set_ylabel("Ī_j (average XGBoost gain importance)")
-    ax.set_title("Feature Importance vs Liquid-Stock Predictive R²")
+    ax.set_title(r"Feature Importance vs Liquid-Stock Predictive $R^2$")
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -1862,7 +1848,7 @@ def plot_r2_by_quintile(
     q_data = quintile_r2[quintile_r2["quintile"] != "Full"]
     full_r2 = quintile_r2[quintile_r2["quintile"] == "Full"]["pooled_r2"].values[0]
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(8, 8))
     bars = ax.bar(
         [f"Q{int(q)}" for q in q_data["quintile"]],
         q_data["pooled_r2"].values * 100,
@@ -1875,7 +1861,7 @@ def plot_r2_by_quintile(
 
     ax.set_xlabel("Liquidity Quintile (Q1=illiquid, Q5=liquid)")
     ax.set_ylabel("Pooled OOS R² (%)")
-    ax.set_title("Out-of-Sample R² by Liquidity Quintile")
+    ax.set_title(r"Out-of-Sample $R^2$ by Liquidity Quintile")
     ax.legend()
 
     for bar, val in zip(bars, q_data["pooled_r2"].values):
