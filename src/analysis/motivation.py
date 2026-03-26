@@ -1487,7 +1487,8 @@ def rolling_xgboost_predict(
 
         # Retune hyperparameters if due (every retune_freq months)
         if months_since_retune >= retune_freq:
-            model_tune = create_model("xgboost", seed=seed)
+            xgb_cfg = config["models"]["xgboost"]
+            model_tune = create_model("xgboost", config=xgb_cfg, seed=seed)
             best_params = model_tune.tune_hyperparameters(
                 X_train, y_train, X_val, y_val
             )
@@ -1496,7 +1497,7 @@ def rolling_xgboost_predict(
                 "Month %d: RETUNED XGBoost (best params: %s)",
                 test_month,
                 {k: best_params.get(k) for k in
-                 config["models"]["xgboost"].get("search_space", {}).keys()},
+                 xgb_cfg.get("search_space", {}).keys()},
             )
 
         # Train XGBoost with best params (equal-weighted, no sample_weight)
@@ -1609,9 +1610,9 @@ def compute_quintile_oos_r2(
         how="left",
     )
 
-    # Full-sample mean return per month (for denominator)
-    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
-    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
+    # Benchmark: zero (Campbell & Thompson 2008, GKX 2020)
+    # For excess returns, the null is E[r_excess] = 0 (no predictability).
+    # R² = 1 - Σ(r - r̂)² / Σ r²
 
     results = []
     quintiles = sorted(pred[quintile_col].dropna().unique())
@@ -1619,16 +1620,16 @@ def compute_quintile_oos_r2(
     for q in quintiles:
         qdf = pred[pred[quintile_col] == q].dropna(subset=["y_true", "y_pred"])
 
-        # Pooled R²
+        # Pooled R² (zero benchmark)
         ss_res = ((qdf["y_true"] - qdf["y_pred"]) ** 2).sum()
-        ss_tot = ((qdf["y_true"] - qdf["r_bar_t"]) ** 2).sum()
+        ss_tot = (qdf["y_true"] ** 2).sum()
         pooled_r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
 
-        # Average monthly R²
+        # Average monthly R² (zero benchmark)
         monthly_r2 = []
         for _, mdf in qdf.groupby("yyyymm"):
             ss_r = ((mdf["y_true"] - mdf["y_pred"]) ** 2).sum()
-            ss_t = ((mdf["y_true"] - mdf["r_bar_t"]) ** 2).sum()
+            ss_t = (mdf["y_true"] ** 2).sum()
             if ss_t > 0:
                 monthly_r2.append(1 - ss_r / ss_t)
         avg_monthly_r2 = np.mean(monthly_r2) if monthly_r2 else np.nan
@@ -1644,7 +1645,7 @@ def compute_quintile_oos_r2(
 
     # Full sample
     ss_res_all = ((pred["y_true"] - pred["y_pred"]) ** 2).sum()
-    ss_tot_all = ((pred["y_true"] - pred["r_bar_t"]) ** 2).sum()
+    ss_tot_all = (pred["y_true"] ** 2).sum()
     full_r2 = 1 - ss_res_all / ss_tot_all if ss_tot_all > 0 else np.nan
 
     results.append({
@@ -1664,7 +1665,8 @@ def compute_utility_weighted_r2(
 ) -> dict:
     """Utility-weighted R² (Eq. 9 in document).
 
-    R²_w = 1 − Σ w̃(r−r̂)² / Σ w̃(r−r̄_t)²
+    R²_w = 1 − Σ w̃(r−r̂)² / Σ w̃·r²
+    Zero benchmark (GKX 2020, Campbell & Thompson 2008).
     """
     pred = predictions.merge(
         panel[["permno", "yyyymm", w_col]],
@@ -1673,23 +1675,18 @@ def compute_utility_weighted_r2(
     )
     pred = pred.dropna(subset=["y_true", "y_pred", w_col])
 
-    # Full-sample mean per month
-    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
-    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
-
     w = pred[w_col].values
     r = pred["y_true"].values
     r_hat = pred["y_pred"].values
-    r_bar = pred["r_bar_t"].values
 
-    # Weighted R²
+    # Weighted R² (zero benchmark)
     ss_res_w = np.sum(w * (r - r_hat) ** 2)
-    ss_tot_w = np.sum(w * (r - r_bar) ** 2)
+    ss_tot_w = np.sum(w * r ** 2)
     r2_w = 1 - ss_res_w / ss_tot_w if ss_tot_w > 0 else np.nan
 
-    # Standard (equal-weighted) R²
+    # Standard (equal-weighted) R² (zero benchmark)
     ss_res = np.sum((r - r_hat) ** 2)
-    ss_tot = np.sum((r - r_bar) ** 2)
+    ss_tot = np.sum(r ** 2)
     r2_std = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
 
     return {
