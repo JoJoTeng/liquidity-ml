@@ -179,15 +179,13 @@ def normalize_features(
     df: pd.DataFrame,
     features: list[str],
 ) -> pd.DataFrame:
-    """Cross-sectional rank-quantile normalization.
+    """Cross-sectional rank normalization to [0, 1].
 
     For each feature and each month (yyyymm cross-section):
-        1. Rank non-NaN values (average ties)
-        2. Percentile = (rank - 1) / (N - 1)    → [0, 1]
-        3. Rescale = percentile * 2 - 1          → [-1, 1]
+        rank non-NaN values → percentile rank in [0, 1].
 
-    Following GKX (2020, footnote 29). Missing values filled with 0.0
-    after normalization (midpoint = median rank).
+    Following GKX (2020). NaN values remain NaN (neutral fill = 0.5
+    is done downstream, not here).
 
     This function is intentionally separate from load_panel so that the
     rolling-window framework can normalize each train/val/test split
@@ -201,14 +199,9 @@ def normalize_features(
     Returns
     -------
     DataFrame with normalized feature columns; other columns unchanged.
-    NaN values remain NaN. Cross-sections with < 2 valid observations
-    produce NaN (correct behavior).
+    NaN values remain NaN.
     """
     out = df.copy()
     for col in features:
-        ranked = out.groupby("yyyymm")[col].rank(
-            method="average", na_option="keep"
-        )
-        n_valid = out.groupby("yyyymm")[col].transform("count")
-        out[col] = (ranked - 1) / (n_valid - 1) * 2 - 1
+        out[col] = out.groupby("yyyymm")[col].rank(pct=True)
     return out
