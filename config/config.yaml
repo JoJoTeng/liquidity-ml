@@ -392,20 +392,21 @@ models:
 
   xgboost:
     n_estimators: 1000
-    max_depth: 2                    # GKX (2020): shallow weak learners
-    learning_rate: 0.01
+    max_depth: 6                    # Deeper trees → wider prediction spread
+    learning_rate: 0.1              # Aggressive — each tree contributes more
     subsample: 0.8
-    colsample_bytree: 0.3           # Each tree sees ~1/3 of features (decorrelation)
-    min_child_weight: 5
+    colsample_bytree: 0.5           # More features per tree
+    min_child_weight: 1             # Smallest leaves → most extreme predictions
     reg_alpha: 0.0
-    reg_lambda: 0.1
+    reg_lambda: 0.0                 # No L2 shrinkage — let leaves be extreme
     search_space:
-      max_depth: [1, 2, 3]
-      learning_rate: [0.005, 0.01, 0.05]
+      max_depth: [4, 6, 8]          # Deep trees for complex interactions
+      learning_rate: [0.05, 0.1, 0.2]  # Aggressive learning rates
       n_estimators: [500, 1000, 2000]
-      min_child_weight: [1, 5, 10]
-      colsample_bytree: [0.2, 0.3, 0.5]
-    n_random_search: 150  # random search (150 of 243 combos)
+      min_child_weight: [1, 3, 5]
+      reg_lambda: [0.0, 0.01, 0.1]
+      colsample_bytree: [0.5, 0.8, 1.0]  # Up to all features per tree
+    n_random_search: 200  # more samples for 3^6=729 grid
 
   random_forest:
     n_estimators: 300
