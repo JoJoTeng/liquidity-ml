@@ -206,7 +206,8 @@ def main():
 
     # LaTeX table — format to match document Table 3 template
     q_r2_tex = q_r2.copy()
-    q_r2_tex["pooled_r2"] = (q_r2_tex["pooled_r2"] * 100).round(3)
+    q_r2_tex["pooled_r2_cs"] = (q_r2_tex["pooled_r2_cs"] * 100).round(3)
+    q_r2_tex["pooled_r2_zero"] = (q_r2_tex["pooled_r2_zero"] * 100).round(3)
     q_r2_tex["avg_monthly_r2"] = (q_r2_tex["avg_monthly_r2"] * 100).round(3)
     q_r2_tex["avg_n_month"] = q_r2_tex["avg_n_month"].round(0)
 
@@ -219,7 +220,8 @@ def main():
 
     q_r2_tex = q_r2_tex.rename(columns={
         "quintile": "Quintile",
-        "pooled_r2": r"Pooled $R^2$ (\%)",
+        "pooled_r2_cs": r"Pooled $R^2_{CS}$ (\%)",
+        "pooled_r2_zero": r"Pooled $R^2_{0}$ (\%)",
         "avg_monthly_r2": r"Avg.\ Monthly $R^2$ (\%)",
         "avg_n_month": r"Avg.\ $N$/month",
     })
@@ -236,10 +238,16 @@ def main():
     logger.info("Output 3.5: Utility-weighted R²")
     r2_results = compute_utility_weighted_r2(predictions, panel)
     logger.info(
-        "Standard R²: %.4f%%  Weighted R²: %.4f%%  Gap: %.4f pp",
-        r2_results["r2_standard"] * 100,
-        r2_results["r2_weighted"] * 100,
-        r2_results["gap"] * 100,
+        "CS-mean benchmark:  Standard R²: %.4f%%  Weighted R²: %.4f%%  Gap: %.4f pp",
+        r2_results["r2_standard_cs"] * 100,
+        r2_results["r2_weighted_cs"] * 100,
+        r2_results["gap_cs"] * 100,
+    )
+    logger.info(
+        "Zero benchmark:     Standard R²: %.4f%%  Weighted R²: %.4f%%  Gap: %.4f pp",
+        r2_results["r2_standard_zero"] * 100,
+        r2_results["r2_weighted_zero"] * 100,
+        r2_results["gap_zero"] * 100,
     )
 
     with open(output_dir / "utility_weighted_r2.json", "w") as f:
@@ -248,9 +256,10 @@ def main():
     # ── Save summary metadata ──
     meta = {
         "spearman_rho_importance_illiq": rho_31,
-        "r2_standard": r2_results["r2_standard"],
-        "r2_weighted": r2_results["r2_weighted"],
-        "r2_gap": r2_results["gap"],
+        "r2_standard_cs": r2_results["r2_standard_cs"],
+        "r2_weighted_cs": r2_results["r2_weighted_cs"],
+        "r2_standard_zero": r2_results["r2_standard_zero"],
+        "r2_weighted_zero": r2_results["r2_weighted_zero"],
         "n_oos_months": len(importances),
         "n_predictions": len(predictions),
         "n_features": len(features),
@@ -266,12 +275,18 @@ def main():
     logger.info("  3.1  importance_vs_illiquidity.png (ρ=%.3f)", rho_31)
     logger.info("  3.2  importance_vs_liquid_r2.png")
     logger.info("  3.3  r2_by_quintile.png")
-    logger.info("  3.4  r2_by_quintile.csv")
+    logger.info("  3.4  r2_by_quintile.csv (both CS-mean and zero benchmarks)")
     logger.info(
-        "  3.5  Standard R²=%.4f%%, Weighted R²=%.4f%%, Gap=%.4f pp",
-        r2_results["r2_standard"] * 100,
-        r2_results["r2_weighted"] * 100,
-        r2_results["gap"] * 100,
+        "  3.5  CS-mean: Std R²=%.4f%%, Wtd R²=%.4f%%, Gap=%.4f pp",
+        r2_results["r2_standard_cs"] * 100,
+        r2_results["r2_weighted_cs"] * 100,
+        r2_results["gap_cs"] * 100,
+    )
+    logger.info(
+        "       Zero:    Std R²=%.4f%%, Wtd R²=%.4f%%, Gap=%.4f pp",
+        r2_results["r2_standard_zero"] * 100,
+        r2_results["r2_weighted_zero"] * 100,
+        r2_results["gap_zero"] * 100,
     )
 
 

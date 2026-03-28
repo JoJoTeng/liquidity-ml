@@ -1602,7 +1602,7 @@ def compute_quintile_oos_r2(
     r̄_t = full-sample cross-sectional mean (not within-quintile).
 
     Returns DataFrame with columns:
-        quintile, pooled_r2, avg_monthly_r2, avg_n_month
+        quintile, pooled_r2_cs, pooled_r2_zero, avg_monthly_r2, avg_n_month
     """
     pred = predictions.merge(
         panel[["permno", "yyyymm", quintile_col]],
@@ -1622,12 +1622,17 @@ def compute_quintile_oos_r2(
     for q in quintiles:
         qdf = pred[pred[quintile_col] == q].dropna(subset=["y_true", "y_pred"])
 
-        # Pooled R² (cross-sectional mean benchmark)
         ss_res = ((qdf["y_true"] - qdf["y_pred"]) ** 2).sum()
-        ss_tot = ((qdf["y_true"] - qdf["r_bar_t"]) ** 2).sum()
-        pooled_r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
 
-        # Average monthly R²
+        # Cross-sectional mean benchmark
+        ss_tot_cs = ((qdf["y_true"] - qdf["r_bar_t"]) ** 2).sum()
+        r2_cs = 1 - ss_res / ss_tot_cs if ss_tot_cs > 0 else np.nan
+
+        # Zero benchmark
+        ss_tot_zero = (qdf["y_true"] ** 2).sum()
+        r2_zero = 1 - ss_res / ss_tot_zero if ss_tot_zero > 0 else np.nan
+
+        # Average monthly R² (CS mean)
         monthly_r2 = []
         for _, mdf in qdf.groupby("yyyymm"):
             ss_r = ((mdf["y_true"] - mdf["y_pred"]) ** 2).sum()
@@ -1640,19 +1645,21 @@ def compute_quintile_oos_r2(
 
         results.append({
             "quintile": int(q),
-            "pooled_r2": pooled_r2,
+            "pooled_r2_cs": r2_cs,
+            "pooled_r2_zero": r2_zero,
             "avg_monthly_r2": avg_monthly_r2,
             "avg_n_month": avg_n,
         })
 
     # Full sample
     ss_res_all = ((pred["y_true"] - pred["y_pred"]) ** 2).sum()
-    ss_tot_all = ((pred["y_true"] - pred["r_bar_t"]) ** 2).sum()
-    full_r2 = 1 - ss_res_all / ss_tot_all if ss_tot_all > 0 else np.nan
+    ss_tot_cs_all = ((pred["y_true"] - pred["r_bar_t"]) ** 2).sum()
+    ss_tot_zero_all = (pred["y_true"] ** 2).sum()
 
     results.append({
         "quintile": "Full",
-        "pooled_r2": full_r2,
+        "pooled_r2_cs": 1 - ss_res_all / ss_tot_cs_all if ss_tot_cs_all > 0 else np.nan,
+        "pooled_r2_zero": 1 - ss_res_all / ss_tot_zero_all if ss_tot_zero_all > 0 else np.nan,
         "avg_monthly_r2": np.nan,
         "avg_n_month": pred.groupby("yyyymm").size().mean(),
     })
@@ -1686,20 +1693,28 @@ def compute_utility_weighted_r2(
     r_hat = pred["y_pred"].values
     r_bar = pred["r_bar_t"].values
 
-    # Weighted R² (cross-sectional mean benchmark)
     ss_res_w = np.sum(w * (r - r_hat) ** 2)
-    ss_tot_w = np.sum(w * (r - r_bar) ** 2)
-    r2_w = 1 - ss_res_w / ss_tot_w if ss_tot_w > 0 else np.nan
-
-    # Standard (equal-weighted) R² (cross-sectional mean benchmark)
     ss_res = np.sum((r - r_hat) ** 2)
-    ss_tot = np.sum((r - r_bar) ** 2)
-    r2_std = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+    # Cross-sectional mean benchmark
+    ss_tot_w_cs = np.sum(w * (r - r_bar) ** 2)
+    ss_tot_cs = np.sum((r - r_bar) ** 2)
+    r2_w_cs = 1 - ss_res_w / ss_tot_w_cs if ss_tot_w_cs > 0 else np.nan
+    r2_std_cs = 1 - ss_res / ss_tot_cs if ss_tot_cs > 0 else np.nan
+
+    # Zero benchmark
+    ss_tot_w_zero = np.sum(w * r ** 2)
+    ss_tot_zero = np.sum(r ** 2)
+    r2_w_zero = 1 - ss_res_w / ss_tot_w_zero if ss_tot_w_zero > 0 else np.nan
+    r2_std_zero = 1 - ss_res / ss_tot_zero if ss_tot_zero > 0 else np.nan
 
     return {
-        "r2_standard": r2_std,
-        "r2_weighted": r2_w,
-        "gap": r2_std - r2_w,
+        "r2_standard_cs": r2_std_cs,
+        "r2_weighted_cs": r2_w_cs,
+        "gap_cs": r2_std_cs - r2_w_cs,
+        "r2_standard_zero": r2_std_zero,
+        "r2_weighted_zero": r2_w_zero,
+        "gap_zero": r2_std_zero - r2_w_zero,
     }
 
 
@@ -1849,13 +1864,15 @@ def plot_r2_by_quintile(
     import matplotlib.pyplot as plt
     _set_academic_style()
 
+    # Use CS-mean benchmark for the bar chart (primary)
+    r2_col = "pooled_r2_cs"
     q_data = quintile_r2[quintile_r2["quintile"] != "Full"]
-    full_r2 = quintile_r2[quintile_r2["quintile"] == "Full"]["pooled_r2"].values[0]
+    full_r2 = quintile_r2[quintile_r2["quintile"] == "Full"][r2_col].values[0]
 
     fig, ax = plt.subplots(figsize=(8, 8))
     bars = ax.bar(
         [f"Q{int(q)}" for q in q_data["quintile"]],
-        q_data["pooled_r2"].values * 100,
+        q_data[r2_col].values * 100,
         color="steelblue", edgecolor="black", linewidth=0.5,
     )
     ax.axhline(
@@ -1864,11 +1881,11 @@ def plot_r2_by_quintile(
     )
 
     ax.set_xlabel("Liquidity Quintile (Q1=illiquid, Q5=liquid)")
-    ax.set_ylabel("Pooled OOS R² (%)")
-    ax.set_title(r"Out-of-Sample $R^2$ by Liquidity Quintile")
+    ax.set_ylabel(r"Pooled OOS $R^2$ (%)")
+    ax.set_title(r"Out-of-Sample $R^2$ by Liquidity Quintile (CS-mean benchmark)")
     ax.legend()
 
-    for bar, val in zip(bars, q_data["pooled_r2"].values):
+    for bar, val in zip(bars, q_data[r2_col].values):
         ax.text(
             bar.get_x() + bar.get_width() / 2, bar.get_height(),
             f"{val*100:.2f}%", ha="center", va="bottom", fontsize=9,
