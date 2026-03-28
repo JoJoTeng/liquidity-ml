@@ -208,7 +208,8 @@ def main():
     q_r2_tex = q_r2.copy()
     q_r2_tex["pooled_r2_cs"] = (q_r2_tex["pooled_r2_cs"] * 100).round(3)
     q_r2_tex["pooled_r2_zero"] = (q_r2_tex["pooled_r2_zero"] * 100).round(3)
-    q_r2_tex["avg_monthly_r2"] = (q_r2_tex["avg_monthly_r2"] * 100).round(3)
+    q_r2_tex["avg_monthly_r2_cs"] = (q_r2_tex["avg_monthly_r2_cs"] * 100).round(3)
+    q_r2_tex["avg_monthly_r2_zero"] = (q_r2_tex["avg_monthly_r2_zero"] * 100).round(3)
     q_r2_tex["avg_n_month"] = q_r2_tex["avg_n_month"].round(0)
 
     # Format quintile labels to match document
@@ -222,7 +223,8 @@ def main():
         "quintile": "Quintile",
         "pooled_r2_cs": r"Pooled $R^2_{CS}$ (\%)",
         "pooled_r2_zero": r"Pooled $R^2_{0}$ (\%)",
-        "avg_monthly_r2": r"Avg.\ Monthly $R^2$ (\%)",
+        "avg_monthly_r2_cs": r"Avg.\ Monthly $R^2_{CS}$ (\%)",
+        "avg_monthly_r2_zero": r"Avg.\ Monthly $R^2_{0}$ (\%)",
         "avg_n_month": r"Avg.\ $N$/month",
     })
     q_r2_tex.to_latex(

@@ -1632,14 +1632,19 @@ def compute_quintile_oos_r2(
         ss_tot_zero = (qdf["y_true"] ** 2).sum()
         r2_zero = 1 - ss_res / ss_tot_zero if ss_tot_zero > 0 else np.nan
 
-        # Average monthly R² (CS mean)
-        monthly_r2 = []
+        # Average monthly R²
+        monthly_r2_cs = []
+        monthly_r2_zero = []
         for _, mdf in qdf.groupby("yyyymm"):
             ss_r = ((mdf["y_true"] - mdf["y_pred"]) ** 2).sum()
-            ss_t = ((mdf["y_true"] - mdf["r_bar_t"]) ** 2).sum()
-            if ss_t > 0:
-                monthly_r2.append(1 - ss_r / ss_t)
-        avg_monthly_r2 = np.mean(monthly_r2) if monthly_r2 else np.nan
+            ss_t_cs = ((mdf["y_true"] - mdf["r_bar_t"]) ** 2).sum()
+            ss_t_zero = (mdf["y_true"] ** 2).sum()
+            if ss_t_cs > 0:
+                monthly_r2_cs.append(1 - ss_r / ss_t_cs)
+            if ss_t_zero > 0:
+                monthly_r2_zero.append(1 - ss_r / ss_t_zero)
+        avg_monthly_r2_cs = np.mean(monthly_r2_cs) if monthly_r2_cs else np.nan
+        avg_monthly_r2_zero = np.mean(monthly_r2_zero) if monthly_r2_zero else np.nan
 
         avg_n = qdf.groupby("yyyymm").size().mean()
 
@@ -1647,7 +1652,8 @@ def compute_quintile_oos_r2(
             "quintile": int(q),
             "pooled_r2_cs": r2_cs,
             "pooled_r2_zero": r2_zero,
-            "avg_monthly_r2": avg_monthly_r2,
+            "avg_monthly_r2_cs": avg_monthly_r2_cs,
+            "avg_monthly_r2_zero": avg_monthly_r2_zero,
             "avg_n_month": avg_n,
         })
 
@@ -1660,7 +1666,8 @@ def compute_quintile_oos_r2(
         "quintile": "Full",
         "pooled_r2_cs": 1 - ss_res_all / ss_tot_cs_all if ss_tot_cs_all > 0 else np.nan,
         "pooled_r2_zero": 1 - ss_res_all / ss_tot_zero_all if ss_tot_zero_all > 0 else np.nan,
-        "avg_monthly_r2": np.nan,
+        "avg_monthly_r2_cs": np.nan,
+        "avg_monthly_r2_zero": np.nan,
         "avg_n_month": pred.groupby("yyyymm").size().mean(),
     })
 
