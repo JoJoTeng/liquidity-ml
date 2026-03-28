@@ -1393,6 +1393,7 @@ def rolling_xgboost_predict(
     panel: pd.DataFrame,
     features: list[str],
     config: dict | None = None,
+    return_col: str = "ret",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train baseline XGBoost with rolling windows, collect OOS predictions.
 
