@@ -72,7 +72,7 @@ def main():
 
     config = load_config()
     data_dir = get_data_dir()
-    output_dir = Path(get_output_dir()) / "motivation" / "step2" / args.liquidity
+    output_dir = Path(get_output_dir()) / "motivation_raw" / "step2" / args.liquidity
     output_dir.mkdir(parents=True, exist_ok=True)
     tex_dir = Path("paper/TablesNew")
     tex_dir.mkdir(parents=True, exist_ok=True)
@@ -225,7 +225,7 @@ def main():
     logger.info("=" * 60)
     logger.info("Output 2.4: Divergence vs heterogeneity scatter")
 
-    step1_dir = Path(get_output_dir()) / "motivation" / "step1" / args.liquidity
+    step1_dir = Path(get_output_dir()) / "motivation_raw" / "step1" / args.liquidity
     div_stats_path = step1_dir / "divergence_stats.csv"
     if not div_stats_path.exists():
         logger.warning(

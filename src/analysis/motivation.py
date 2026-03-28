@@ -953,7 +953,7 @@ def quintile_fama_macbeth(
     panel: pd.DataFrame,
     focal_features: list[str],
     quintile_col: str = "liq_quintile",
-    return_col: str = "excess_ret",
+    return_col: str = "ret",
 ) -> dict:
     """Quintile-specific Fama-MacBeth regressions (Eq. 5-6 in document).
 
@@ -1107,7 +1107,7 @@ def interaction_fama_macbeth(
     panel: pd.DataFrame,
     focal_features: list[str],
     liq_col: str = "liq_rank",
-    return_col: str = "excess_ret",
+    return_col: str = "ret",
     use_dummy: bool = False,
 ) -> dict:
     """Interaction Fama-MacBeth regression (Eq. 7 in document).
@@ -1468,11 +1468,11 @@ def rolling_xgboost_predict(
         test_df[features] = test_df[features].fillna(0.5)
 
         X_train = train_df[features].values
-        y_train = train_df["excess_ret"].values
+        y_train = train_df[return_col].values
         X_val = val_df[features].values
-        y_val = val_df["excess_ret"].values
+        y_val = val_df[return_col].values
         X_test = test_df[features].values
-        y_test = test_df["excess_ret"].values
+        y_test = test_df[return_col].values
 
         # Drop NaN targets
         valid_train = ~np.isnan(y_train)
@@ -1729,7 +1729,7 @@ def compute_univariate_liquid_r2(
     panel: pd.DataFrame,
     features: list[str],
     quintile_col: str = "liq_quintile",
-    return_col: str = "excess_ret",
+    return_col: str = "ret",
 ) -> pd.Series:
     """Per-feature univariate predictive R² among liquid stocks (Q4-Q5).
 

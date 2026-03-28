@@ -94,7 +94,7 @@ def main():
 
     config = load_config()
     data_dir = get_data_dir()
-    output_dir = Path(get_output_dir()) / "motivation" / "step3" / args.liquidity
+    output_dir = Path(get_output_dir()) / "motivation_raw" / "step3" / args.liquidity
     output_dir.mkdir(parents=True, exist_ok=True)
     tex_dir = Path("paper/TablesNew")
     tex_dir.mkdir(parents=True, exist_ok=True)

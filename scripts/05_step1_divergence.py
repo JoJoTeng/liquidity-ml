@@ -87,7 +87,7 @@ def main():
 
     config = load_config()
     data_dir = get_data_dir()
-    output_dir = Path(get_output_dir()) / "motivation" / "step1" / args.liquidity
+    output_dir = Path(get_output_dir()) / "motivation_raw" / "step1" / args.liquidity
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Liquidity measure: %s (%s)", args.liquidity, liq["label"])
     logger.info("Output directory: %s", output_dir)
