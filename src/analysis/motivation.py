@@ -1558,6 +1558,186 @@ def rolling_xgboost_predict(
     return predictions, importances
 
 
+def rolling_elasticnet_predict(
+    panel: pd.DataFrame,
+    features: list[str],
+    config: dict | None = None,
+    return_col: str = "ret",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Train ElasticNet with rolling windows, matching XGBoost protocol.
+
+    Same structure as rolling_xgboost_predict():
+      - 120 months train, 12 months validation, 1 month test
+      - Retune every 24 months (grid search over alpha × l1_ratio)
+      - Per-window rank normalization to [0,1], fillna(0.5)
+
+    Returns
+    -------
+    predictions : DataFrame [permno, yyyymm, y_true, y_pred]
+    importances : DataFrame rows=yyyymm (test month), cols=features (|coef|)
+    """
+    import time as _time
+    from sklearn.linear_model import ElasticNet
+
+    if config is None:
+        from src.config import load_config
+        config = load_config()
+
+    train_cfg = config["training"]
+    train_months_n = train_cfg["train_window"]           # 120
+    val_months_n = train_cfg["validation_window"]        # 12
+    retune_freq = train_cfg["retune_frequency"]          # 24
+    oos_start = train_cfg.get("oos_start", 200001)
+    seed = config["project"]["seed"]
+
+    # ElasticNet search space
+    alpha_grid = [0.0001, 0.001, 0.01, 0.1]
+    l1_ratio_grid = [0.5, 0.7, 0.9, 0.95, 1.0]
+    grid_size = len(alpha_grid) * len(l1_ratio_grid)
+
+    all_months = sorted(panel["yyyymm"].unique())
+    oos_months = [m for m in all_months if m >= oos_start]
+
+    logger.info(
+        "Rolling ElasticNet: %d OOS months, retune every %d, grid size %d",
+        len(oos_months), retune_freq, grid_size,
+    )
+
+    predictions_list = []
+    importance_list = []
+    best_params = {"alpha": 0.01, "l1_ratio": 0.9}  # defaults
+    months_since_retune = retune_freq  # force retune on first month
+    t_start = _time.time()
+
+    for i, test_month in enumerate(oos_months):
+        test_idx = all_months.index(test_month)
+        train_start = test_idx - train_months_n - val_months_n
+        val_start = test_idx - val_months_n
+
+        if train_start < 0:
+            continue
+
+        train_months_list = all_months[train_start:val_start]
+        val_months_list = all_months[val_start:test_idx]
+
+        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
+        val_df = panel[panel["yyyymm"].isin(val_months_list)].copy()
+        test_df = panel[panel["yyyymm"] == test_month].copy()
+
+        if len(train_df) < 100 or len(test_df) < 50:
+            continue
+
+        # Per-window rank normalization to [0,1]
+        for col in features:
+            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
+            val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
+            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
+
+        # Fill NaN with 0.5 (ElasticNet cannot handle NaN)
+        train_df[features] = train_df[features].fillna(0.5)
+        val_df[features] = val_df[features].fillna(0.5)
+        test_df[features] = test_df[features].fillna(0.5)
+
+        X_train = train_df[features].values
+        y_train = train_df[return_col].values
+        X_val = val_df[features].values
+        y_val = val_df[return_col].values
+        X_test = test_df[features].values
+        y_test = test_df[return_col].values
+
+        # Drop NaN targets
+        valid_train = ~np.isnan(y_train)
+        valid_val = ~np.isnan(y_val)
+        valid_test = ~np.isnan(y_test)
+        if valid_train.sum() < 100 or valid_test.sum() < 30:
+            continue
+
+        X_train, y_train = X_train[valid_train], y_train[valid_train]
+        X_val, y_val = X_val[valid_val], y_val[valid_val]
+        X_test, y_test = X_test[valid_test], y_test[valid_test]
+
+        months_since_retune += 1
+
+        # Retune every retune_freq months
+        if months_since_retune >= retune_freq:
+            best_val_mse = np.inf
+            for alpha in alpha_grid:
+                for l1 in l1_ratio_grid:
+                    model = ElasticNet(
+                        alpha=alpha, l1_ratio=l1,
+                        max_iter=5000, random_state=seed,
+                    )
+                    model.fit(X_train, y_train)
+                    val_pred = model.predict(X_val)
+                    val_mse = np.mean((y_val - val_pred) ** 2)
+                    if val_mse < best_val_mse:
+                        best_val_mse = val_mse
+                        best_params = {"alpha": alpha, "l1_ratio": l1}
+
+            months_since_retune = 0
+            logger.info(
+                "Month %d: RETUNED ElasticNet (alpha=%.4f, l1=%.2f)",
+                test_month, best_params["alpha"], best_params["l1_ratio"],
+            )
+
+        # Train with best params
+        model = ElasticNet(
+            alpha=best_params["alpha"],
+            l1_ratio=best_params["l1_ratio"],
+            max_iter=5000,
+            random_state=seed,
+        )
+        model.fit(X_train, y_train)
+
+        # Predict
+        y_pred = model.predict(X_test)
+
+        # Store predictions
+        test_valid = test_df.iloc[valid_test]
+        pred_df = pd.DataFrame({
+            "permno": test_valid["permno"].values,
+            "yyyymm": test_valid["yyyymm"].values,
+            "y_true": y_test,
+            "y_pred": y_pred,
+        })
+        predictions_list.append(pred_df)
+
+        # Feature importance = |coefficients|
+        imp = pd.Series(np.abs(model.coef_), index=features)
+        imp_row = {"yyyymm": test_month}
+        imp_row.update(imp.to_dict())
+        importance_list.append(imp_row)
+
+        n_done = i + 1
+        elapsed = _time.time() - t_start
+        avg_per_month = elapsed / n_done
+        remaining_min = avg_per_month * (len(oos_months) - n_done) / 60
+
+        is_retune_month = months_since_retune == 1
+        if (n_done) % 12 == 0 or is_retune_month or i == 0:
+            logger.info(
+                "Progress: %d/%d months (%.0f%%) | month %d%s | "
+                "%.1f s/month | ETA: %.0f min",
+                n_done, len(oos_months), 100 * n_done / len(oos_months),
+                test_month,
+                " [RETUNED]" if is_retune_month else "",
+                avg_per_month, remaining_min,
+            )
+
+    if not predictions_list:
+        logger.warning("No valid OOS months produced")
+        return pd.DataFrame(), pd.DataFrame()
+
+    predictions = pd.concat(predictions_list, ignore_index=True)
+    importances = pd.DataFrame(importance_list).set_index("yyyymm")
+
+    logger.info(
+        "Rolling ElasticNet complete: %d OOS months, %d predictions",
+        len(importances), len(predictions),
+    )
+    return predictions, importances
+
+
 def compute_illiquidity_relatedness(
     panel: pd.DataFrame,
     features: list[str],
