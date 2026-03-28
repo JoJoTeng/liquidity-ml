@@ -82,6 +82,12 @@ def main():
         action="store_true",
         help="Skip training; use saved predictions.parquet and feature_importance.csv",
     )
+    parser.add_argument(
+        "--benchmark",
+        default="cs",
+        choices=["cs", "zero"],
+        help="R² benchmark for bar chart: cs (cross-sectional mean) or zero (default: cs)",
+    )
     args = parser.parse_args()
 
     LIQ_CONFIG = {
@@ -202,7 +208,8 @@ def main():
     q_r2.to_csv(output_dir / "r2_by_quintile.csv", index=False)
     logger.info("\n%s", q_r2.to_string(index=False))
 
-    plot_r2_by_quintile(q_r2, output_dir / "r2_by_quintile.png")
+    r2_col = "pooled_r2_cs" if args.benchmark == "cs" else "pooled_r2_zero"
+    plot_r2_by_quintile(q_r2, output_dir / "r2_by_quintile.png", r2_col=r2_col)
 
     # LaTeX table — format to match document Table 3 template
     q_r2_tex = q_r2.copy()

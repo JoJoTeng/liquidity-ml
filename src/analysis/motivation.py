@@ -1866,13 +1866,13 @@ def plot_importance_vs_liquid_r2(
 def plot_r2_by_quintile(
     quintile_r2: pd.DataFrame,
     output_path: str | Path,
+    r2_col: str = "pooled_r2_cs",
 ) -> None:
     """Bar chart: OOS R² by liquidity quintile with full-sample reference."""
     import matplotlib.pyplot as plt
     _set_academic_style()
 
-    # Use CS-mean benchmark for the bar chart (primary)
-    r2_col = "pooled_r2_cs"
+    benchmark_label = "CS-mean" if "cs" in r2_col else "Zero"
     q_data = quintile_r2[quintile_r2["quintile"] != "Full"]
     full_r2 = quintile_r2[quintile_r2["quintile"] == "Full"][r2_col].values[0]
 
@@ -1889,7 +1889,7 @@ def plot_r2_by_quintile(
 
     ax.set_xlabel("Liquidity Quintile (Q1=illiquid, Q5=liquid)")
     ax.set_ylabel(r"Pooled OOS $R^2$ (%)")
-    ax.set_title(r"Out-of-Sample $R^2$ by Liquidity Quintile (CS-mean benchmark)")
+    ax.set_title(rf"Out-of-Sample $R^2$ by Liquidity Quintile ({benchmark_label} benchmark)")
     ax.legend()
 
     for bar, val in zip(bars, q_data[r2_col].values):
