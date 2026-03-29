@@ -1408,6 +1408,7 @@ def rolling_xgboost_predict(
     predictions : DataFrame [permno, yyyymm, y_true, y_pred]
     importances : DataFrame rows=yyyymm (test month), cols=features (gain)
     """
+    import itertools
     from src.models import create_model
 
     if config is None:
@@ -1487,23 +1488,53 @@ def rolling_xgboost_predict(
         X_test, y_test = X_test[valid_test], y_test[valid_test]
 
         # Retune hyperparameters if due (every retune_freq months)
+        # Uses TimeSeriesSplit CV on training data (no val set leakage)
         if months_since_retune >= retune_freq:
+            from sklearn.model_selection import TimeSeriesSplit
             xgb_cfg = config["models"]["xgboost"]
-            model_tune = create_model("xgboost", config=xgb_cfg, seed=seed)
-            best_params = model_tune.tune_hyperparameters(
-                X_train, y_train, X_val, y_val
-            )
+            search_space = xgb_cfg.get("search_space", {})
+            keys = list(search_space.keys())
+            values = list(search_space.values())
+            n_trials = xgb_cfg.get("n_random_search", 150)
+
+            full_grid_size = 1
+            for v in values:
+                full_grid_size *= len(v)
+
+            rng = np.random.RandomState(seed)
+            if full_grid_size <= n_trials:
+                param_grid = [dict(zip(keys, v)) for v in itertools.product(*values)]
+            else:
+                param_grid = []
+                for _ in range(n_trials):
+                    combo = {k: v[rng.randint(len(v))] for k, v in zip(keys, values)}
+                    param_grid.append(combo)
+
+            tscv = TimeSeriesSplit(n_splits=5)
+            best_mse = np.inf
+            for params in param_grid:
+                trial_cfg = {**xgb_cfg, **params}
+                cv_mses = []
+                for tr_idx, va_idx in tscv.split(X_train):
+                    m = create_model("xgboost", config=trial_cfg, seed=seed)
+                    m.fit(X_train[tr_idx], y_train[tr_idx])
+                    preds = m.predict(X_train[va_idx])
+                    cv_mses.append(np.mean((y_train[va_idx] - preds) ** 2))
+                avg_mse = np.mean(cv_mses)
+                if avg_mse < best_mse:
+                    best_mse = avg_mse
+                    best_params = trial_cfg
+
             months_since_retune = 0
             logger.info(
-                "Month %d: RETUNED XGBoost (best params: %s)",
+                "Month %d: RETUNED XGBoost via TimeSeriesSplit CV (best params: %s)",
                 test_month,
-                {k: best_params.get(k) for k in
-                 xgb_cfg.get("search_space", {}).keys()},
+                {k: best_params.get(k) for k in keys},
             )
 
-        # Train XGBoost with best params (equal-weighted, no sample_weight)
+        # Train XGBoost with best params on full train set
         model = create_model("xgboost", config=best_params, seed=seed)
-        model.fit(X_train, y_train, X_val, y_val)
+        model.fit(X_train, y_train)
 
         # Predict
         y_pred = model.predict(X_test)

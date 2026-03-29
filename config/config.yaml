@@ -442,7 +442,7 @@ training:
   train_window: 120 # months (10 years, rolling)
   validation_window: 12 # months (1 year, for hyperparameter selection)
   test_window: 1 # month (out-of-sample prediction)
-  retune_frequency: 24 # months
+  retune_frequency: 12 # months
   oos_start: 200001 # January 2000
   oos_end: 202412   # December 2024
 
