@@ -1649,10 +1649,11 @@ def rolling_elasticnet_predict(
         X_val, y_val = X_val[valid_val], y_val[valid_val]
         X_test, y_test = X_test[valid_test], y_test[valid_test]
 
-        # ElasticNetCV: auto-tunes alpha via 5-fold CV each month
+        # ElasticNetCV: auto-tunes alpha via TimeSeriesSplit CV
+        from sklearn.model_selection import TimeSeriesSplit
         model = ElasticNetCV(
             l1_ratio=[0.5, 0.7, 0.9, 0.95, 1.0],
-            cv=5,
+            cv=TimeSeriesSplit(n_splits=5),
             max_iter=5000,
             random_state=seed,
         )
