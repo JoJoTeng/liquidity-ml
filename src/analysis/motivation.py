@@ -953,7 +953,7 @@ def quintile_fama_macbeth(
     panel: pd.DataFrame,
     focal_features: list[str],
     quintile_col: str = "liq_quintile",
-    return_col: str = "ret",
+    return_col: str = "excess_ret",
 ) -> dict:
     """Quintile-specific Fama-MacBeth regressions (Eq. 5-6 in document).
 
@@ -1107,7 +1107,7 @@ def interaction_fama_macbeth(
     panel: pd.DataFrame,
     focal_features: list[str],
     liq_col: str = "liq_rank",
-    return_col: str = "ret",
+    return_col: str = "excess_ret",
     use_dummy: bool = False,
 ) -> dict:
     """Interaction Fama-MacBeth regression (Eq. 7 in document).
@@ -1393,7 +1393,7 @@ def rolling_xgboost_predict(
     panel: pd.DataFrame,
     features: list[str],
     config: dict | None = None,
-    return_col: str = "ret",
+    return_col: str = "excess_ret",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train baseline XGBoost with rolling windows, collect OOS predictions.
 
@@ -1562,7 +1562,7 @@ def rolling_elasticnet_predict(
     panel: pd.DataFrame,
     features: list[str],
     config: dict | None = None,
-    return_col: str = "ret",
+    return_col: str = "excess_ret",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train ElasticNetCV with rolling windows.
 
@@ -1878,7 +1878,7 @@ def compute_univariate_liquid_r2(
     panel: pd.DataFrame,
     features: list[str],
     quintile_col: str = "liq_quintile",
-    return_col: str = "ret",
+    return_col: str = "excess_ret",
 ) -> pd.Series:
     """Per-feature univariate predictive R² among liquid stocks (Q4-Q5).
 
