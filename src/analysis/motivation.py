@@ -1564,12 +1564,13 @@ def rolling_elasticnet_predict(
     config: dict | None = None,
     return_col: str = "ret",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Train ElasticNet with rolling windows, matching XGBoost protocol.
+    """Train ElasticNetCV with rolling windows.
 
-    Same structure as rolling_xgboost_predict():
+    Same window structure as rolling_xgboost_predict():
       - 120 months train, 12 months validation, 1 month test
-      - Retune every 24 months (grid search over alpha × l1_ratio)
       - Per-window rank normalization to [0,1], fillna(0.5)
+      - ElasticNetCV auto-tunes alpha via 5-fold CV every month
+        (l1_ratio searched over [0.5, 0.7, 0.9, 0.95, 1.0])
 
     Returns
     -------
@@ -1577,7 +1578,7 @@ def rolling_elasticnet_predict(
     importances : DataFrame rows=yyyymm (test month), cols=features (|coef|)
     """
     import time as _time
-    from sklearn.linear_model import ElasticNet
+    from sklearn.linear_model import ElasticNetCV
 
     if config is None:
         from src.config import load_config
@@ -1586,27 +1587,19 @@ def rolling_elasticnet_predict(
     train_cfg = config["training"]
     train_months_n = train_cfg["train_window"]           # 120
     val_months_n = train_cfg["validation_window"]        # 12
-    retune_freq = train_cfg["retune_frequency"]          # 24
     oos_start = train_cfg.get("oos_start", 200001)
     seed = config["project"]["seed"]
-
-    # ElasticNet search space
-    alpha_grid = [0.0001, 0.001, 0.01, 0.1]
-    l1_ratio_grid = [0.5, 0.7, 0.9, 0.95, 1.0]
-    grid_size = len(alpha_grid) * len(l1_ratio_grid)
 
     all_months = sorted(panel["yyyymm"].unique())
     oos_months = [m for m in all_months if m >= oos_start]
 
     logger.info(
-        "Rolling ElasticNet: %d OOS months, retune every %d, grid size %d",
-        len(oos_months), retune_freq, grid_size,
+        "Rolling ElasticNetCV: %d OOS months, auto-tune every month",
+        len(oos_months),
     )
 
     predictions_list = []
     importance_list = []
-    best_params = {"alpha": 0.01, "l1_ratio": 0.9}  # defaults
-    months_since_retune = retune_freq  # force retune on first month
     t_start = _time.time()
 
     for i, test_month in enumerate(oos_months):
@@ -1656,34 +1649,10 @@ def rolling_elasticnet_predict(
         X_val, y_val = X_val[valid_val], y_val[valid_val]
         X_test, y_test = X_test[valid_test], y_test[valid_test]
 
-        months_since_retune += 1
-
-        # Retune every retune_freq months
-        if months_since_retune >= retune_freq:
-            best_val_mse = np.inf
-            for alpha in alpha_grid:
-                for l1 in l1_ratio_grid:
-                    model = ElasticNet(
-                        alpha=alpha, l1_ratio=l1,
-                        max_iter=5000, random_state=seed,
-                    )
-                    model.fit(X_train, y_train)
-                    val_pred = model.predict(X_val)
-                    val_mse = np.mean((y_val - val_pred) ** 2)
-                    if val_mse < best_val_mse:
-                        best_val_mse = val_mse
-                        best_params = {"alpha": alpha, "l1_ratio": l1}
-
-            months_since_retune = 0
-            logger.info(
-                "Month %d: RETUNED ElasticNet (alpha=%.4f, l1=%.2f)",
-                test_month, best_params["alpha"], best_params["l1_ratio"],
-            )
-
-        # Train with best params
-        model = ElasticNet(
-            alpha=best_params["alpha"],
-            l1_ratio=best_params["l1_ratio"],
+        # ElasticNetCV: auto-tunes alpha via 5-fold CV each month
+        model = ElasticNetCV(
+            l1_ratio=[0.5, 0.7, 0.9, 0.95, 1.0],
+            cv=5,
             max_iter=5000,
             random_state=seed,
         )
@@ -1713,14 +1682,12 @@ def rolling_elasticnet_predict(
         avg_per_month = elapsed / n_done
         remaining_min = avg_per_month * (len(oos_months) - n_done) / 60
 
-        is_retune_month = months_since_retune == 1
-        if (n_done) % 12 == 0 or is_retune_month or i == 0:
+        if (n_done) % 12 == 0 or i == 0:
             logger.info(
-                "Progress: %d/%d months (%.0f%%) | month %d%s | "
+                "Progress: %d/%d months (%.0f%%) | month %d | "
                 "%.1f s/month | ETA: %.0f min",
                 n_done, len(oos_months), 100 * n_done / len(oos_months),
                 test_month,
-                " [RETUNED]" if is_retune_month else "",
                 avg_per_month, remaining_min,
             )
 
@@ -1732,7 +1699,7 @@ def rolling_elasticnet_predict(
     importances = pd.DataFrame(importance_list).set_index("yyyymm")
 
     logger.info(
-        "Rolling ElasticNet complete: %d OOS months, %d predictions",
+        "Rolling ElasticNetCV complete: %d OOS months, %d predictions",
         len(importances), len(predictions),
     )
     return predictions, importances
