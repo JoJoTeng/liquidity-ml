@@ -3,8 +3,8 @@ Step 3: Standard ML Is Affected (ElasticNet version)
 ======================================================
 Same as 07_step3_ml_diagnostics.py but uses ElasticNet instead of XGBoost.
 Matches the same rolling-window protocol:
-  - 120 months train, 12 months validation, 1 month test
-  - Retune every 24 months (grid search: alpha × l1_ratio)
+  - 120 months train, 1 month test (no validation gap)
+  - ElasticNetCV auto-tunes alpha every month (TimeSeriesSplit CV)
   - Per-window rank normalization to [0,1], fillna(0.5)
 
 Outputs (saved to outputs/motivation_raw/step3_elasticnet/{liquidity}/):
@@ -37,7 +37,9 @@ from src.analysis.motivation import (
     rolling_elasticnet_predict,
     compute_illiquidity_relatedness,
     compute_quintile_oos_r2,
+    compute_monthly_quintile_r2,
     compute_utility_weighted_r2,
+    compute_monthly_utility_weighted_r2,
     compute_univariate_liquid_r2,
     plot_importance_vs_illiquidity,
     plot_importance_vs_liquid_r2,
@@ -79,7 +81,7 @@ def main():
 
     config = load_config()
     data_dir = get_data_dir()
-    output_dir = Path(get_output_dir()) / "motivation_raw" / "step3_elasticnet" / args.liquidity
+    output_dir = Path(get_output_dir()) / "motivation" / "step3_elasticnet" / args.liquidity
     output_dir.mkdir(parents=True, exist_ok=True)
     tex_dir = Path("paper/TablesNew")
     tex_dir.mkdir(parents=True, exist_ok=True)
@@ -176,6 +178,11 @@ def main():
     q_r2.to_csv(output_dir / "r2_by_quintile.csv", index=False)
     logger.info("\n%s", q_r2.to_string(index=False))
 
+    # Monthly R² time series per quintile
+    monthly_r2 = compute_monthly_quintile_r2(predictions, panel, "liq_quintile")
+    monthly_r2.to_csv(output_dir / "r2_monthly_by_quintile.csv", index=False)
+    logger.info("Saved monthly R² time series: %d months", len(monthly_r2))
+
     plot_r2_by_quintile(q_r2, output_dir / "r2_by_quintile_cs.png", r2_col="pooled_r2_cs")
     plot_r2_by_quintile(q_r2, output_dir / "r2_by_quintile_zero.png", r2_col="pooled_r2_zero")
 
@@ -227,6 +234,11 @@ def main():
 
     with open(output_dir / "utility_weighted_r2.json", "w") as f:
         json.dump(r2_results, f, indent=2)
+
+    # Monthly utility-weighted R² time series
+    monthly_uw_r2 = compute_monthly_utility_weighted_r2(predictions, panel)
+    monthly_uw_r2.to_csv(output_dir / "r2_monthly_utility_weighted.csv", index=False)
+    logger.info("Saved monthly utility-weighted R² time series: %d months", len(monthly_uw_r2))
 
     # ── Summary metadata ──
     meta = {

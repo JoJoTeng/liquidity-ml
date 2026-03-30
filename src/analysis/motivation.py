@@ -1397,9 +1397,10 @@ def rolling_xgboost_predict(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train baseline XGBoost with rolling windows, collect OOS predictions.
 
-    Follows the same protocol as 02_run_experiment.py:
-      - 120 months train, 12 months validation, 1 month test
-      - Hyperparameter retune every 24 months (random search)
+    Protocol:
+      - 120 months train, 1 month test (no validation gap)
+      - Hyperparameter retune every 12 months (TimeSeriesSplit CV on train)
+      - Between retunes, refit with fixed best params on updated train data
       - Per-window rank normalization to [0,1] (no look-ahead)
       - NaN fill with 0.5 after ranking
 
@@ -1409,24 +1410,23 @@ def rolling_xgboost_predict(
     importances : DataFrame rows=yyyymm (test month), cols=features (gain)
     """
     import itertools
+    import time as _time
     from src.models import create_model
 
     if config is None:
         config = load_config()
 
     train_cfg = config["training"]
-    train_months = train_cfg["train_window"]           # 120
-    val_months = train_cfg["validation_window"]        # 12
-    retune_freq = train_cfg["retune_frequency"]        # 24
+    train_window = train_cfg["train_window"]           # 120
     oos_start = train_cfg.get("oos_start", 200001)
     seed = config["project"]["seed"]
 
     all_months = sorted(panel["yyyymm"].unique())
     oos_months = [m for m in all_months if m >= oos_start]
 
-    predictions_list = []
-    import time as _time
+    retune_freq = 12
 
+    predictions_list = []
     importance_list = []
     best_params = None
     months_since_retune = retune_freq  # force retune on first window
@@ -1434,7 +1434,7 @@ def rolling_xgboost_predict(
     n_done = 0
 
     logger.info(
-        "Rolling XGBoost: %d OOS months, retune every %d, grid size %d",
+        "Rolling XGBoost: %d OOS months, retune every %d months, grid size %d",
         len(oos_months), retune_freq,
         np.prod([len(v) for v in config["models"]["xgboost"].get("search_space", {}).values()]),
     )
@@ -1442,17 +1442,13 @@ def rolling_xgboost_predict(
     for i, test_month in enumerate(oos_months):
         test_idx = all_months.index(test_month)
 
-        if test_idx < train_months + val_months:
+        if test_idx < train_window:
             continue
 
-        train_start = test_idx - train_months - val_months
-        val_start = test_idx - val_months
-
-        train_months_list = all_months[train_start:val_start]
-        val_months_list = all_months[val_start:test_idx]
+        train_start = test_idx - train_window
+        train_months_list = all_months[train_start:test_idx]
 
         train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
-        val_df = panel[panel["yyyymm"].isin(val_months_list)].copy()
         test_df = panel[panel["yyyymm"] == test_month].copy()
 
         if len(train_df) < 100 or len(test_df) < 50:
@@ -1461,34 +1457,27 @@ def rolling_xgboost_predict(
         # Per-window rank normalization to [0,1] (no look-ahead)
         for col in features:
             train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
-            val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
             test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
 
         # Fill NaN with 0.5 (neutral rank)
         train_df[features] = train_df[features].fillna(0.5)
-        val_df[features] = val_df[features].fillna(0.5)
         test_df[features] = test_df[features].fillna(0.5)
 
         X_train = train_df[features].values
         y_train = train_df[return_col].values
-        X_val = val_df[features].values
-        y_val = val_df[return_col].values
         X_test = test_df[features].values
         y_test = test_df[return_col].values
 
         # Drop NaN targets
         valid_train = ~np.isnan(y_train)
-        valid_val = ~np.isnan(y_val)
         valid_test = ~np.isnan(y_test)
         if valid_train.sum() < 100 or valid_test.sum() < 30:
             continue
 
         X_train, y_train = X_train[valid_train], y_train[valid_train]
-        X_val, y_val = X_val[valid_val], y_val[valid_val]
         X_test, y_test = X_test[valid_test], y_test[valid_test]
 
-        # Retune hyperparameters if due (every retune_freq months)
-        # Uses TimeSeriesSplit CV on training data (no val set leakage)
+        # Retune hyperparameters every 12 months
         if months_since_retune >= retune_freq:
             from sklearn.model_selection import TimeSeriesSplit
             xgb_cfg = config["models"]["xgboost"]
@@ -1564,14 +1553,13 @@ def rolling_xgboost_predict(
         remaining = avg_per_month * (len(oos_months) - i - 1)
         remaining_min = remaining / 60
 
-        is_retune_month = months_since_retune == 1  # just retuned
-        if (i + 1) % 6 == 0 or is_retune_month or i == 0:
+        if (i + 1) % 6 == 0 or i == 0 or months_since_retune == 1:
             logger.info(
                 "Progress: %d/%d months (%.0f%%) | month %d%s | "
                 "%.1f s/month | ETA: %.0f min",
                 i + 1, len(oos_months), 100 * (i + 1) / len(oos_months),
                 test_month,
-                " [RETUNED]" if is_retune_month else "",
+                " [RETUNED]" if months_since_retune == 1 else "",
                 avg_per_month, remaining_min,
             )
 
@@ -1597,10 +1585,10 @@ def rolling_elasticnet_predict(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train ElasticNetCV with rolling windows.
 
-    Same window structure as rolling_xgboost_predict():
-      - 120 months train, 12 months validation, 1 month test
+    Protocol:
+      - 120 months train, 1 month test (no validation gap)
       - Per-window rank normalization to [0,1], fillna(0.5)
-      - ElasticNetCV auto-tunes alpha via 5-fold CV every month
+      - ElasticNetCV auto-tunes alpha + l1_ratio every month via TimeSeriesSplit CV
         (l1_ratio searched over [0.5, 0.7, 0.9, 0.95, 1.0])
 
     Returns
@@ -1616,8 +1604,7 @@ def rolling_elasticnet_predict(
         config = load_config()
 
     train_cfg = config["training"]
-    train_months_n = train_cfg["train_window"]           # 120
-    val_months_n = train_cfg["validation_window"]        # 12
+    train_window = train_cfg["train_window"]           # 120
     oos_start = train_cfg.get("oos_start", 200001)
     seed = config["project"]["seed"]
 
@@ -1635,17 +1622,14 @@ def rolling_elasticnet_predict(
 
     for i, test_month in enumerate(oos_months):
         test_idx = all_months.index(test_month)
-        train_start = test_idx - train_months_n - val_months_n
-        val_start = test_idx - val_months_n
 
-        if train_start < 0:
+        if test_idx < train_window:
             continue
 
-        train_months_list = all_months[train_start:val_start]
-        val_months_list = all_months[val_start:test_idx]
+        train_start = test_idx - train_window
+        train_months_list = all_months[train_start:test_idx]
 
         train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
-        val_df = panel[panel["yyyymm"].isin(val_months_list)].copy()
         test_df = panel[panel["yyyymm"] == test_month].copy()
 
         if len(train_df) < 100 or len(test_df) < 50:
@@ -1654,33 +1638,27 @@ def rolling_elasticnet_predict(
         # Per-window rank normalization to [0,1]
         for col in features:
             train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
-            val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
             test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
 
         # Fill NaN with 0.5 (ElasticNet cannot handle NaN)
         train_df[features] = train_df[features].fillna(0.5)
-        val_df[features] = val_df[features].fillna(0.5)
         test_df[features] = test_df[features].fillna(0.5)
 
         X_train = train_df[features].values
         y_train = train_df[return_col].values
-        X_val = val_df[features].values
-        y_val = val_df[return_col].values
         X_test = test_df[features].values
         y_test = test_df[return_col].values
 
         # Drop NaN targets
         valid_train = ~np.isnan(y_train)
-        valid_val = ~np.isnan(y_val)
         valid_test = ~np.isnan(y_test)
         if valid_train.sum() < 100 or valid_test.sum() < 30:
             continue
 
         X_train, y_train = X_train[valid_train], y_train[valid_train]
-        X_val, y_val = X_val[valid_val], y_val[valid_val]
         X_test, y_test = X_test[valid_test], y_test[valid_test]
 
-        # ElasticNetCV: auto-tunes alpha via TimeSeriesSplit CV
+        # ElasticNetCV: auto-tunes alpha + l1_ratio via TimeSeriesSplit CV
         from sklearn.model_selection import TimeSeriesSplit
         model = ElasticNetCV(
             l1_ratio=[0.5, 0.7, 0.9, 0.95, 1.0],
@@ -1732,6 +1710,311 @@ def rolling_elasticnet_predict(
 
     logger.info(
         "Rolling ElasticNetCV complete: %d OOS months, %d predictions",
+        len(importances), len(predictions),
+    )
+    return predictions, importances
+
+
+def expanding_xgboost_predict(
+    panel: pd.DataFrame,
+    features: list[str],
+    config: dict | None = None,
+    return_col: str = "excess_ret",
+    train_start: int = 199001,
+    oos_start: int = 200001,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Train baseline XGBoost with expanding windows (GKX-style).
+
+    Protocol:
+      - Expanding training: starts at train_start, grows by 12 months each year
+      - No validation gap; retune via TimeSeriesSplit(5) CV on train each year
+      - Test = 12 months (yearly), starting from oos_start
+      - Per-window rank normalization to [0,1], fillna(0.5)
+
+    Returns
+    -------
+    predictions : DataFrame [permno, yyyymm, y_true, y_pred]
+    importances : DataFrame rows=yyyymm (test month), cols=features (gain)
+    """
+    import itertools
+    import time as _time
+    from src.models import create_model
+
+    if config is None:
+        config = load_config()
+
+    seed = config["project"]["seed"]
+    all_months = sorted(panel["yyyymm"].unique())
+
+    # Build yearly test blocks: [200001..200012], [200101..200112], ...
+    oos_months = [m for m in all_months if m >= oos_start]
+    test_years = sorted(set(m // 100 for m in oos_months))
+
+    predictions_list = []
+    importance_list = []
+    t_start = _time.time()
+
+    logger.info(
+        "Expanding XGBoost: %d test years (%d-%d), train starts %d, grid size %d",
+        len(test_years), test_years[0], test_years[-1], train_start,
+        np.prod([len(v) for v in config["models"]["xgboost"].get("search_space", {}).values()]),
+    )
+
+    for yi, test_year in enumerate(test_years):
+        test_months_list = [m for m in all_months if m // 100 == test_year]
+        if not test_months_list:
+            continue
+
+        # Expanding train: train_start up to (but not including) first test month
+        first_test = test_months_list[0]
+        train_months_list = [m for m in all_months if train_start <= m < first_test]
+
+        if len(train_months_list) < 60:
+            continue
+
+        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
+        test_df = panel[panel["yyyymm"].isin(test_months_list)].copy()
+
+        if len(train_df) < 100 or len(test_df) < 50:
+            continue
+
+        # Per-window rank normalization to [0,1]
+        for col in features:
+            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
+            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
+
+        train_df[features] = train_df[features].fillna(0.5)
+        test_df[features] = test_df[features].fillna(0.5)
+
+        X_train = train_df[features].values
+        y_train = train_df[return_col].values
+        X_test = test_df[features].values
+        y_test = test_df[return_col].values
+
+        valid_train = ~np.isnan(y_train)
+        valid_test = ~np.isnan(y_test)
+        if valid_train.sum() < 100 or valid_test.sum() < 30:
+            continue
+
+        X_train, y_train = X_train[valid_train], y_train[valid_train]
+        X_test, y_test = X_test[valid_test], y_test[valid_test]
+
+        # Retune hyperparameters each year via TimeSeriesSplit CV
+        from sklearn.model_selection import TimeSeriesSplit
+        xgb_cfg = config["models"]["xgboost"]
+        search_space = xgb_cfg.get("search_space", {})
+        keys = list(search_space.keys())
+        values = list(search_space.values())
+        n_trials = xgb_cfg.get("n_random_search", 150)
+
+        full_grid_size = 1
+        for v in values:
+            full_grid_size *= len(v)
+
+        rng = np.random.RandomState(seed)
+        if full_grid_size <= n_trials:
+            param_grid = [dict(zip(keys, v)) for v in itertools.product(*values)]
+        else:
+            param_grid = []
+            for _ in range(n_trials):
+                combo = {k: v[rng.randint(len(v))] for k, v in zip(keys, values)}
+                param_grid.append(combo)
+
+        tscv = TimeSeriesSplit(n_splits=5)
+        best_mse = np.inf
+        best_params = None
+        for params in param_grid:
+            trial_cfg = {**xgb_cfg, **params}
+            cv_mses = []
+            for tr_idx, va_idx in tscv.split(X_train):
+                m = create_model("xgboost", config=trial_cfg, seed=seed)
+                m.fit(X_train[tr_idx], y_train[tr_idx])
+                preds = m.predict(X_train[va_idx])
+                cv_mses.append(np.mean((y_train[va_idx] - preds) ** 2))
+            avg_mse = np.mean(cv_mses)
+            if avg_mse < best_mse:
+                best_mse = avg_mse
+                best_params = trial_cfg
+
+        # Train on full expanding train set
+        model = create_model("xgboost", config=best_params, seed=seed)
+        model.fit(X_train, y_train)
+
+        y_pred = model.predict(X_test)
+
+        test_valid = test_df[valid_test]
+        pred_df = pd.DataFrame({
+            "permno": test_valid["permno"].values,
+            "yyyymm": test_valid["yyyymm"].values,
+            "y_true": y_test,
+            "y_pred": y_pred,
+        })
+        predictions_list.append(pred_df)
+
+        # Feature importance (gain-based)
+        imp = model.get_feature_importance(features)
+        for tm in test_months_list:
+            imp_row = {"yyyymm": tm}
+            imp_row.update(imp.to_dict())
+            importance_list.append(imp_row)
+
+        elapsed = _time.time() - t_start
+        avg_per_year = elapsed / (yi + 1)
+        remaining_min = avg_per_year * (len(test_years) - yi - 1) / 60
+
+        logger.info(
+            "Year %d/%d | test %d | train %d-%d (%d months) | "
+            "%.1f s/year | ETA: %.0f min",
+            yi + 1, len(test_years), test_year,
+            train_months_list[0], train_months_list[-1], len(train_months_list),
+            avg_per_year, remaining_min,
+        )
+
+    if not predictions_list:
+        logger.warning("No valid OOS years produced")
+        return pd.DataFrame(), pd.DataFrame()
+
+    predictions = pd.concat(predictions_list, ignore_index=True)
+    importances = pd.DataFrame(importance_list).set_index("yyyymm")
+
+    logger.info(
+        "Expanding XGBoost complete: %d OOS months, %d predictions",
+        len(importances), len(predictions),
+    )
+    return predictions, importances
+
+
+def expanding_elasticnet_predict(
+    panel: pd.DataFrame,
+    features: list[str],
+    config: dict | None = None,
+    return_col: str = "excess_ret",
+    train_start: int = 199001,
+    oos_start: int = 200001,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Train ElasticNet with expanding windows (GKX-style).
+
+    Protocol:
+      - Expanding training: starts at train_start, grows by 12 months each year
+      - No validation gap; retune via TimeSeriesSplit(5) CV on train each year
+      - Test = 12 months (yearly), starting from oos_start
+      - Per-window rank normalization to [0,1], fillna(0.5)
+      - ElasticNetCV auto-tunes alpha + l1_ratio each year
+
+    Returns
+    -------
+    predictions : DataFrame [permno, yyyymm, y_true, y_pred]
+    importances : DataFrame rows=yyyymm (test month), cols=features (|coef|)
+    """
+    import time as _time
+    from sklearn.linear_model import ElasticNetCV
+
+    if config is None:
+        from src.config import load_config
+        config = load_config()
+
+    seed = config["project"]["seed"]
+    all_months = sorted(panel["yyyymm"].unique())
+
+    oos_months = [m for m in all_months if m >= oos_start]
+    test_years = sorted(set(m // 100 for m in oos_months))
+
+    predictions_list = []
+    importance_list = []
+    t_start = _time.time()
+
+    logger.info(
+        "Expanding ElasticNetCV: %d test years (%d-%d), train starts %d",
+        len(test_years), test_years[0], test_years[-1], train_start,
+    )
+
+    for yi, test_year in enumerate(test_years):
+        test_months_list = [m for m in all_months if m // 100 == test_year]
+        if not test_months_list:
+            continue
+
+        first_test = test_months_list[0]
+        train_months_list = [m for m in all_months if train_start <= m < first_test]
+
+        if len(train_months_list) < 60:
+            continue
+
+        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
+        test_df = panel[panel["yyyymm"].isin(test_months_list)].copy()
+
+        if len(train_df) < 100 or len(test_df) < 50:
+            continue
+
+        # Per-window rank normalization to [0,1]
+        for col in features:
+            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
+            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
+
+        train_df[features] = train_df[features].fillna(0.5)
+        test_df[features] = test_df[features].fillna(0.5)
+
+        X_train = train_df[features].values
+        y_train = train_df[return_col].values
+        X_test = test_df[features].values
+        y_test = test_df[return_col].values
+
+        valid_train = ~np.isnan(y_train)
+        valid_test = ~np.isnan(y_test)
+        if valid_train.sum() < 100 or valid_test.sum() < 30:
+            continue
+
+        X_train, y_train = X_train[valid_train], y_train[valid_train]
+        X_test, y_test = X_test[valid_test], y_test[valid_test]
+
+        # ElasticNetCV: auto-tunes alpha + l1_ratio via TimeSeriesSplit CV
+        from sklearn.model_selection import TimeSeriesSplit
+        model = ElasticNetCV(
+            l1_ratio=[0.5, 0.7, 0.9, 0.95, 1.0],
+            cv=TimeSeriesSplit(n_splits=5),
+            max_iter=5000,
+            random_state=seed,
+        )
+        model.fit(X_train, y_train)
+
+        y_pred = model.predict(X_test)
+
+        test_valid = test_df.iloc[valid_test]
+        pred_df = pd.DataFrame({
+            "permno": test_valid["permno"].values,
+            "yyyymm": test_valid["yyyymm"].values,
+            "y_true": y_test,
+            "y_pred": y_pred,
+        })
+        predictions_list.append(pred_df)
+
+        # Feature importance = |coefficients|
+        imp = pd.Series(np.abs(model.coef_), index=features)
+        for tm in test_months_list:
+            imp_row = {"yyyymm": tm}
+            imp_row.update(imp.to_dict())
+            importance_list.append(imp_row)
+
+        elapsed = _time.time() - t_start
+        avg_per_year = elapsed / (yi + 1)
+        remaining_min = avg_per_year * (len(test_years) - yi - 1) / 60
+
+        logger.info(
+            "Year %d/%d | test %d | train %d-%d (%d months) | "
+            "%.1f s/year | ETA: %.0f min",
+            yi + 1, len(test_years), test_year,
+            train_months_list[0], train_months_list[-1], len(train_months_list),
+            avg_per_year, remaining_min,
+        )
+
+    if not predictions_list:
+        logger.warning("No valid OOS years produced")
+        return pd.DataFrame(), pd.DataFrame()
+
+    predictions = pd.concat(predictions_list, ignore_index=True)
+    importances = pd.DataFrame(importance_list).set_index("yyyymm")
+
+    logger.info(
+        "Expanding ElasticNetCV complete: %d OOS months, %d predictions",
         len(importances), len(predictions),
     )
     return predictions, importances
@@ -1854,6 +2137,57 @@ def compute_quintile_oos_r2(
     return pd.DataFrame(results)
 
 
+def compute_monthly_quintile_r2(
+    predictions: pd.DataFrame,
+    panel: pd.DataFrame,
+    quintile_col: str = "liq_quintile",
+) -> pd.DataFrame:
+    """Monthly OOS R² per liquidity quintile + full sample.
+
+    Returns DataFrame with columns:
+        yyyymm, Q1_cs, Q2_cs, ..., Q5_cs, Full_cs,
+                Q1_zero, Q2_zero, ..., Q5_zero, Full_zero
+    """
+    pred = predictions.merge(
+        panel[["permno", "yyyymm", quintile_col]],
+        on=["permno", "yyyymm"],
+        how="left",
+    )
+    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
+    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
+
+    quintiles = sorted(pred[quintile_col].dropna().unique())
+    months = sorted(pred["yyyymm"].unique())
+
+    rows = []
+    for m in months:
+        mdf = pred[pred["yyyymm"] == m].dropna(subset=["y_true", "y_pred"])
+        row = {"yyyymm": m}
+
+        for q in quintiles:
+            qdf = mdf[mdf[quintile_col] == q]
+            if len(qdf) < 10:
+                row[f"Q{int(q)}_cs"] = np.nan
+                row[f"Q{int(q)}_zero"] = np.nan
+                continue
+            ss_res = ((qdf["y_true"] - qdf["y_pred"]) ** 2).sum()
+            ss_tot_cs = ((qdf["y_true"] - qdf["r_bar_t"]) ** 2).sum()
+            ss_tot_zero = (qdf["y_true"] ** 2).sum()
+            row[f"Q{int(q)}_cs"] = 1 - ss_res / ss_tot_cs if ss_tot_cs > 0 else np.nan
+            row[f"Q{int(q)}_zero"] = 1 - ss_res / ss_tot_zero if ss_tot_zero > 0 else np.nan
+
+        # Full sample
+        ss_res_all = ((mdf["y_true"] - mdf["y_pred"]) ** 2).sum()
+        ss_tot_cs_all = ((mdf["y_true"] - mdf["r_bar_t"]) ** 2).sum()
+        ss_tot_zero_all = (mdf["y_true"] ** 2).sum()
+        row["Full_cs"] = 1 - ss_res_all / ss_tot_cs_all if ss_tot_cs_all > 0 else np.nan
+        row["Full_zero"] = 1 - ss_res_all / ss_tot_zero_all if ss_tot_zero_all > 0 else np.nan
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 def compute_utility_weighted_r2(
     predictions: pd.DataFrame,
     panel: pd.DataFrame,
@@ -1905,6 +2239,52 @@ def compute_utility_weighted_r2(
     }
 
 
+def compute_monthly_utility_weighted_r2(
+    predictions: pd.DataFrame,
+    panel: pd.DataFrame,
+    w_col: str = "w_tilde",
+) -> pd.DataFrame:
+    """Monthly utility-weighted R² time series.
+
+    Returns DataFrame with columns:
+        yyyymm, r2_std_cs, r2_wtd_cs, r2_std_zero, r2_wtd_zero
+    """
+    pred = predictions.merge(
+        panel[["permno", "yyyymm", w_col]],
+        on=["permno", "yyyymm"],
+        how="left",
+    )
+    pred = pred.dropna(subset=["y_true", "y_pred", w_col])
+
+    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
+    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
+
+    rows = []
+    for m, mdf in pred.groupby("yyyymm"):
+        w = mdf[w_col].values
+        r = mdf["y_true"].values
+        r_hat = mdf["y_pred"].values
+        r_bar = mdf["r_bar_t"].values
+
+        ss_res = np.sum((r - r_hat) ** 2)
+        ss_res_w = np.sum(w * (r - r_hat) ** 2)
+
+        ss_tot_cs = np.sum((r - r_bar) ** 2)
+        ss_tot_w_cs = np.sum(w * (r - r_bar) ** 2)
+        ss_tot_zero = np.sum(r ** 2)
+        ss_tot_w_zero = np.sum(w * r ** 2)
+
+        rows.append({
+            "yyyymm": m,
+            "r2_std_cs": 1 - ss_res / ss_tot_cs if ss_tot_cs > 0 else np.nan,
+            "r2_wtd_cs": 1 - ss_res_w / ss_tot_w_cs if ss_tot_w_cs > 0 else np.nan,
+            "r2_std_zero": 1 - ss_res / ss_tot_zero if ss_tot_zero > 0 else np.nan,
+            "r2_wtd_zero": 1 - ss_res_w / ss_tot_w_zero if ss_tot_w_zero > 0 else np.nan,
+        })
+
+    return pd.DataFrame(rows)
+
+
 def compute_univariate_liquid_r2(
     panel: pd.DataFrame,
     features: list[str],
@@ -1930,9 +2310,10 @@ def compute_univariate_liquid_r2(
             if valid.sum() < 30:
                 continue
             xv, yv = x[valid], y[valid]
-            xv_dm = xv - xv.mean()
-            var_x = np.sum(xv_dm ** 2)
-            if var_x < 1e-12:
+            with np.errstate(invalid="ignore"):
+                xv_dm = xv - xv.mean()
+                var_x = np.sum(xv_dm ** 2)
+            if var_x < 1e-12 or np.isnan(var_x):
                 continue
             beta = np.sum(xv_dm * (yv - yv.mean())) / var_x
             slopes[feat].append(beta)
