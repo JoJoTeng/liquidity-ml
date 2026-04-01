@@ -58,8 +58,8 @@ Thumbs.db
 # Claude Code (local session state)
 # =========================
 .claude/
-outputs/motivation/
 outputs/motivation_raw/
 outputs/motivation_gkx/
+outputs/motivation/**/*.parquet
 data/feature_list_filter.json
 paper/
