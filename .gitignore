@@ -60,6 +60,5 @@ Thumbs.db
 .claude/
 outputs/motivation_raw/
 outputs/motivation_gkx/
-outputs/motivation/**/*.parquet
 data/feature_list_filter.json
 paper/
