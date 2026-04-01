@@ -142,8 +142,12 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
     logger.info("Dropped %d rows with NaN target", n_before - len(panel))
 
     # ── Summary ─────────────────────────────────────────────
-    features = get_feature_names(panel)
+    non_feature_cols = {"permno", "yyyymm", "ret", "excess_ret", "exchcd",
+                        "me_raw", "dvol_monthly", "dvol_21d", "dvol_6m",
+                        "lambda_tc", "liu_lm", "daily_sigma", "BidAskSpread"}
     liq_cols = [c for c in panel.columns if c.startswith("liq_")]
+    non_feature_cols.update(liq_cols)
+    features = [c for c in panel.columns if c not in non_feature_cols]
     logger.info(
         "Panel ready: %d rows, %d permnos, dates %d–%d, "
         "%d features, %d liq_ columns",

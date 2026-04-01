@@ -1398,9 +1398,10 @@ def rolling_xgboost_predict(
     """Train baseline XGBoost with rolling windows, collect OOS predictions.
 
     Protocol:
-      - 120 months train, 1 month test (no validation gap)
-      - Hyperparameter retune every 12 months (TimeSeriesSplit CV on train)
-      - Between retunes, refit with fixed best params on updated train data
+      - 120 months train + 12 months validation + 1 month test (rolling)
+      - Train starts from 198901
+      - Retune every 12 months using validation set MSE
+      - Between retunes, refit with fixed best params on train set
       - Per-window rank normalization to [0,1] (no look-ahead)
       - NaN fill with 0.5 after ranking
 
@@ -1418,13 +1419,14 @@ def rolling_xgboost_predict(
 
     train_cfg = config["training"]
     train_window = train_cfg["train_window"]           # 120
+    val_window = train_cfg["validation_window"]        # 12
     oos_start = train_cfg.get("oos_start", 200001)
     seed = config["project"]["seed"]
 
     all_months = sorted(panel["yyyymm"].unique())
     oos_months = [m for m in all_months if m >= oos_start]
 
-    retune_freq = 12
+    retune_freq = 12  # retune every year
 
     predictions_list = []
     importance_list = []
@@ -1434,21 +1436,26 @@ def rolling_xgboost_predict(
     n_done = 0
 
     logger.info(
-        "Rolling XGBoost: %d OOS months, retune every %d months, grid size %d",
-        len(oos_months), retune_freq,
+        "Rolling XGBoost: %d OOS months, retune every %d months, "
+        "train %d + val %d months, grid size %d",
+        len(oos_months), retune_freq, train_window, val_window,
         np.prod([len(v) for v in config["models"]["xgboost"].get("search_space", {}).values()]),
     )
 
     for i, test_month in enumerate(oos_months):
         test_idx = all_months.index(test_month)
 
-        if test_idx < train_window:
+        if test_idx < train_window + val_window:
             continue
 
-        train_start = test_idx - train_window
-        train_months_list = all_months[train_start:test_idx]
+        train_start = test_idx - train_window - val_window
+        val_start = test_idx - val_window
+
+        train_months_list = all_months[train_start:val_start]
+        val_months_list = all_months[val_start:test_idx]
 
         train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
+        val_df = panel[panel["yyyymm"].isin(val_months_list)].copy()
         test_df = panel[panel["yyyymm"] == test_month].copy()
 
         if len(train_df) < 100 or len(test_df) < 50:
@@ -1457,29 +1464,34 @@ def rolling_xgboost_predict(
         # Per-window rank normalization to [0,1] (no look-ahead)
         for col in features:
             train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
+            val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
             test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
 
         # Fill NaN with 0.5 (neutral rank)
         train_df[features] = train_df[features].fillna(0.5)
+        val_df[features] = val_df[features].fillna(0.5)
         test_df[features] = test_df[features].fillna(0.5)
 
         X_train = train_df[features].values
         y_train = train_df[return_col].values
+        X_val = val_df[features].values
+        y_val = val_df[return_col].values
         X_test = test_df[features].values
         y_test = test_df[return_col].values
 
         # Drop NaN targets
         valid_train = ~np.isnan(y_train)
+        valid_val = ~np.isnan(y_val)
         valid_test = ~np.isnan(y_test)
         if valid_train.sum() < 100 or valid_test.sum() < 30:
             continue
 
         X_train, y_train = X_train[valid_train], y_train[valid_train]
+        X_val, y_val = X_val[valid_val], y_val[valid_val]
         X_test, y_test = X_test[valid_test], y_test[valid_test]
 
-        # Retune hyperparameters every 12 months
+        # Retune hyperparameters every 12 months using validation set
         if months_since_retune >= retune_freq:
-            from sklearn.model_selection import TimeSeriesSplit
             xgb_cfg = config["models"]["xgboost"]
             search_space = xgb_cfg.get("search_space", {})
             keys = list(search_space.keys())
@@ -1499,24 +1511,20 @@ def rolling_xgboost_predict(
                     combo = {k: v[rng.randint(len(v))] for k, v in zip(keys, values)}
                     param_grid.append(combo)
 
-            tscv = TimeSeriesSplit(n_splits=5)
             best_mse = np.inf
             for params in param_grid:
                 trial_cfg = {**xgb_cfg, **params}
-                cv_mses = []
-                for tr_idx, va_idx in tscv.split(X_train):
-                    m = create_model("xgboost", config=trial_cfg, seed=seed)
-                    m.fit(X_train[tr_idx], y_train[tr_idx])
-                    preds = m.predict(X_train[va_idx])
-                    cv_mses.append(np.mean((y_train[va_idx] - preds) ** 2))
-                avg_mse = np.mean(cv_mses)
-                if avg_mse < best_mse:
-                    best_mse = avg_mse
+                m = create_model("xgboost", config=trial_cfg, seed=seed)
+                m.fit(X_train, y_train)
+                preds = m.predict(X_val)
+                mse = np.mean((y_val - preds) ** 2)
+                if mse < best_mse:
+                    best_mse = mse
                     best_params = trial_cfg
 
             months_since_retune = 0
             logger.info(
-                "Month %d: RETUNED XGBoost via TimeSeriesSplit CV (best params: %s)",
+                "Month %d: RETUNED XGBoost via validation set (best params: %s)",
                 test_month,
                 {k: best_params.get(k) for k in keys},
             )

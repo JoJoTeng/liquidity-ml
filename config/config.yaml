@@ -16,7 +16,7 @@ data:
   signed_predictors_csv: "signed_predictors_all_wide.csv"
   ff_factors_csv: "FFResearch_Data_Factors.csv"
 
-  start_yyyymm: 199001
+  start_yyyymm: 198901
   end_yyyymm: 202412
 
   id_cols: ["permno", "yyyymm"]
@@ -76,28 +76,28 @@ data:
     - DolVol
     - Size
     - Price
-    - Illiquidity        # Amihud (2002) illiquidity
-    - std_turn           # turnover volatility
-    - ShareVol           # share volume
-    - PriceDelayRsq      # price delay (Hou & Moskowitz 2005)
+    - Illiquidity # Amihud (2002) illiquidity
+    - std_turn # turnover volatility
+    - ShareVol # share volume
+    - PriceDelayRsq # price delay (Hou & Moskowitz 2005)
     # Volatility / tail risk
     - ReturnSkew
     - ReturnSkew3F
-    - RealizedVol        # realized volatility
-    - betaVIX            # systematic volatility beta
-    - Beta               # CAPM beta
-    - BetaTailRisk       # tail risk beta
-    - CoskewACX          # coskewness
-    - Coskewness         # Harvey & Siddique coskewness
-    - SmileSlope         # options implied vol skew
-    - OptionVolume1      # option-to-stock volume
+    - RealizedVol # realized volatility
+    - betaVIX # systematic volatility beta
+    - Beta # CAPM beta
+    - BetaTailRisk # tail risk beta
+    - CoskewACX # coskewness
+    - Coskewness # Harvey & Siddique coskewness
+    - SmileSlope # options implied vol skew
+    - OptionVolume1 # option-to-stock volume
     # Institutional / information frictions
     - RIO_Disp
     - RIO_MB
     - RIO_Turnover
     - RIO_Volatility
-    - DelBreadth         # breadth of ownership change
-    - ChNAnalyst         # change in analyst coverage
+    - DelBreadth # breadth of ownership change
+    - ChNAnalyst # change in analyst coverage
     - ForecastDispersion # analyst disagreement
     # Industry concentration
     - Herf
@@ -124,7 +124,7 @@ data:
     - LRreversal
     - STreversal
     - MomRev
-    - High52              # 52-week high (George & Hwang 2004)
+    - High52 # 52-week high (George & Hwang 2004)
     - Mom6mJunk
     - MomVol
     - FirmAgeMom
@@ -354,15 +354,15 @@ liquidity:
 # Weighting Schemes (Equations 11–14)
 # ----------------------------------------------------------
 weighting:
-  primary: "softmax_rank"            # Scheme A: softmax on liquidity rank, λ=2.0
+  primary: "softmax_rank" # Scheme A: softmax on liquidity rank, λ=2.0
 
   bid_ask_spread: # Eq. 13 (Robustness — spread only)
     spread_col: "BidAskSpread" # from CZ predictors (Corwin-Schultz, raw scale)
-    spread_scale: 1.0          # Use raw CZ spread for training weights (no downscaling)
+    spread_scale: 1.0 # Use raw CZ spread for training weights (no downscaling)
 
   tc_stock: # Eq. 13 extended — full TC_stock (spread + volatility + volume)
-    kappa: 1.0                 # scaling: w_i = 1/(1 + kappa * TC_stock_i)
-    lambda_market_impact: 0.1  # Frazzini et al. (2018)
+    kappa: 1.0 # scaling: w_i = 1/(1 + kappa * TC_stock_i)
+    lambda_market_impact: 0.1 # Frazzini et al. (2018)
     spread_col: "BidAskSpread"
     sigma_col: "daily_sigma"
     adv_col: "dvol_21d"
@@ -392,19 +392,19 @@ models:
 
   xgboost:
     n_estimators: 1000
-    max_depth: 2                    # GKX (2020): shallow weak learners
+    max_depth: 2 # GKX (2020): shallow weak learners
     learning_rate: 0.01
     subsample: 0.8
-    colsample_bytree: 0.3           # Each tree sees ~1/3 of features (decorrelation)
+    colsample_bytree: 0.3 # Each tree sees ~1/3 of features (decorrelation)
     min_child_weight: 5
     reg_alpha: 0.0
     reg_lambda: 0.1
     search_space:
-      max_depth: [2, 3, 4]
-      learning_rate: [0.01, 0.05, 0.1]
-      n_estimators: [500, 1000, 2000]
-      min_child_weight: [5, 10]
-    n_random_search: 150  # full grid = 54 combos, all evaluated
+      max_depth: [2, 4, 6, 8]
+      learning_rate: [0.001, 0.01, 0.05]
+      n_estimators: [500, 1000, 2000, 4000]
+      min_child_weight: [50, 100, 200]
+    n_random_search: 86  # ~60% of 144 combos
 
   random_forest:
     n_estimators: 300
@@ -443,7 +443,7 @@ training:
   test_window: 1 # month (out-of-sample prediction)
   retune_frequency: 12 # months
   oos_start: 200001 # January 2000
-  oos_end: 202412   # December 2024
+  oos_end: 202412 # December 2024
 
   preprocessing:
     normalization: "rank_quantile" # rank → [-1, 1] (GKX 2020 convention)
@@ -459,18 +459,18 @@ portfolio:
   position_cap: 0.05
   min_liquidity_pctile: 0.40
   rebalance_frequency: "monthly"
-  buffer_quantiles: 0             # No buffer — full rebalance each month
+  buffer_quantiles: 0 # No buffer — full rebalance each month
 
 # ----------------------------------------------------------
 # Transaction Cost Model
 # ----------------------------------------------------------
 transaction_costs:
   spread_col: "BidAskSpread"
-  spread_scale: 1.0               # Use raw CZ Corwin-Schultz spread (no downscaling)
-  spread_cap: 0.05               # Cap spread at 5% (clip outliers)
-  lambda_market_impact: 0.1       # Frazzini et al. (2018) Eq. 12
-  sigma_col: "daily_sigma"        # 21-day rolling daily return volatility
-  adv_col: "dvol_21d"            # average daily dollar volume
+  spread_scale: 1.0 # Use raw CZ Corwin-Schultz spread (no downscaling)
+  spread_cap: 0.05 # Cap spread at 5% (clip outliers)
+  lambda_market_impact: 0.1 # Frazzini et al. (2018) Eq. 12
+  sigma_col: "daily_sigma" # 21-day rolling daily return volatility
+  adv_col: "dvol_21d" # average daily dollar volume
   aum_scenarios:
     - 100_000_000
     - 500_000_000
@@ -485,8 +485,8 @@ inference:
   bootstrap_samples: 5000
   significance_level: 0.05
   one_sided_test: true
-  calibrate_block_length: false   # LW (2008) Algorithm 3.1 — true is very expensive
-  block_grid: [2, 4, 6, 8, 10]   # block sizes for bootstrap Sharpe test
+  calibrate_block_length: false # LW (2008) Algorithm 3.1 — true is very expensive
+  block_grid: [2, 4, 6, 8, 10] # block sizes for bootstrap Sharpe test
   factor_models:
     capm: ["Mkt-RF"]
     ff3: ["Mkt-RF", "SMB", "HML"]
@@ -496,7 +496,7 @@ inference:
 # SHAP Analysis (Hypothesis 2)
 # ----------------------------------------------------------
 shap:
-  compute_shap: true              # Master switch (set false for fast runs)
-  background_samples: 100         # Background data size for NN explainer
-  max_test_samples: 500           # Cap test stocks for NN KernelExplainer speed
-  tree_check_additivity: false    # Skip slow consistency check for TreeExplainer
+  compute_shap: true # Master switch (set false for fast runs)
+  background_samples: 100 # Background data size for NN explainer
+  max_test_samples: 500 # Cap test stocks for NN KernelExplainer speed
+  tree_check_additivity: false # Skip slow consistency check for TreeExplainer
