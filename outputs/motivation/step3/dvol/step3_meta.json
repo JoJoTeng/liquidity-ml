@@ -1,8 +1,9 @@
 {
-  "spearman_rho_importance_illiq": 0.13129616075587197,
-  "r2_standard": 0.0006679640137862153,
-  "r2_weighted": -0.0027958461057833173,
-  "r2_gap": 0.0034638101195695326,
+  "spearman_rho_importance_illiq": 0.07101270876305808,
+  "r2_standard_cs": -0.1024717346900752,
+  "r2_weighted_cs": -0.2367907757361507,
+  "r2_standard_zero": 0.00297375140965217,
+  "r2_weighted_zero": -0.0035059991178763017,
   "n_oos_months": 299,
   "n_predictions": 1894464,
   "n_features": 113
