@@ -1426,7 +1426,7 @@ def rolling_xgboost_predict(
     all_months = sorted(panel["yyyymm"].unique())
     oos_months = [m for m in all_months if m >= oos_start]
 
-    retune_freq = 24  # retune every 2 years
+    retune_freq = 12  # retune every year
 
     predictions_list = []
     importance_list = []

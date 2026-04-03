@@ -400,11 +400,11 @@ models:
     reg_alpha: 0.0
     reg_lambda: 0.1
     search_space:
-      max_depth: [2, 4, 6, 8]
+      max_depth: [2, 3, 4]
       learning_rate: [0.001, 0.01, 0.05]
-      n_estimators: [500, 1000, 2000]
-      min_child_weight: [10, 50, 100, 200]
-    n_random_search: 86  # ~60% of 144 combos
+      n_estimators: [300, 500, 1000]
+      min_child_weight: [10, 50, 100]
+    n_random_search: 108  # full grid = 108 combos, all evaluated
 
   random_forest:
     n_estimators: 300
