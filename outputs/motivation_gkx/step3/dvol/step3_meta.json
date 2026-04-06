@@ -1,5 +1,8 @@
 {
   "spearman_rho_importance_illiq": 0.10087164814691597,
+  "spearman_rho_topk_frequency": 0.21765670493585287,
+  "spearman_rho_aligned": 0.08425377603300287,
+  "spearman_rho_topk_aligned": 0.20445517070063188,
   "r2_standard_cs": -0.1033249264156062,
   "r2_weighted_cs": -0.23681066776273263,
   "r2_standard_zero": 0.002202162879381464,

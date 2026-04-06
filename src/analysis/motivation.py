@@ -2028,6 +2028,88 @@ def expanding_elasticnet_predict(
     return predictions, importances
 
 
+def compute_topk_frequency(
+    importances: pd.DataFrame,
+    K: int = 10,
+) -> pd.Series:
+    """Fraction of rolling windows in which feature j is among the top K by gain.
+
+    More robust than mean gain because it captures persistent capacity
+    allocation rather than being diluted by noisy small splits.
+
+    Parameters
+    ----------
+    importances : DataFrame with rows=yyyymm, cols=features, values=gain
+    K : number of top features to count per window
+
+    Returns
+    -------
+    Series indexed by feature name, values in [0, 1].
+    """
+    def _topk_row(row):
+        return (row.rank(ascending=False) <= K).astype(float)
+
+    topk_flags = importances.apply(_topk_row, axis=1)
+    return topk_flags.mean()
+
+
+def compute_illiquidity_relatedness_aligned(
+    panel: pd.DataFrame,
+    features: list[str],
+    importances: pd.DataFrame,
+    liq_col: str = "liq_dvol_21d",
+    train_window: int = 120,
+    val_window: int = 12,
+) -> pd.Series:
+    """Illiquidity-relatedness computed on the same transformed inputs the model saw.
+
+    For each OOS month in importances.index, reconstructs the train window,
+    applies the same rank normalization and fillna(0.5), then computes
+    Spearman correlation between each transformed feature and liquidity.
+
+    Returns Series: average relatedness per feature across windows.
+    """
+    from scipy.stats import spearmanr
+
+    all_months = sorted(panel["yyyymm"].unique())
+    oos_months = sorted(importances.index.unique())
+
+    corr_list = []
+    for test_month in oos_months:
+        test_idx = all_months.index(test_month)
+        if test_idx < train_window + val_window:
+            continue
+
+        train_start = test_idx - train_window - val_window
+        val_start = test_idx - val_window
+        train_months_list = all_months[train_start:val_start]
+
+        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
+
+        # Apply same transformation as the model
+        for col in features:
+            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
+        train_df[features] = train_df[features].fillna(0.5)
+
+        # Compute relatedness on transformed features
+        liq_vals = train_df[liq_col].values
+        valid_liq = ~np.isnan(liq_vals)
+
+        row = {}
+        for feat in features:
+            vals = train_df[feat].values
+            valid = valid_liq & ~np.isnan(vals)
+            if valid.sum() < 50:
+                row[feat] = np.nan
+                continue
+            rho, _ = spearmanr(vals[valid], liq_vals[valid])
+            row[feat] = rho
+        corr_list.append(row)
+
+    corr_df = pd.DataFrame(corr_list)
+    return corr_df.mean()
+
+
 def compute_illiquidity_relatedness(
     panel: pd.DataFrame,
     features: list[str],

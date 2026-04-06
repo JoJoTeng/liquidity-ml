@@ -51,6 +51,8 @@ from src.analysis.motivation import (
     compute_implementability_weights,
     rolling_xgboost_predict,
     compute_illiquidity_relatedness,
+    compute_illiquidity_relatedness_aligned,
+    compute_topk_frequency,
     compute_quintile_oos_r2,
     compute_monthly_quintile_r2,
     compute_utility_weighted_r2,
@@ -190,7 +192,38 @@ def main():
         avg_importance, illiq_rho, focal,
         output_dir / "importance_vs_illiquidity.png",
     )
-    logger.info("Spearman ρ (importance vs illiquidity): %.3f", rho_31)
+    logger.info("Spearman ρ (mean gain vs raw relatedness): %.3f", rho_31)
+
+    # ── Output 3.1b: Top-K frequency importance vs illiquidity ──
+    logger.info("Output 3.1b: Top-K frequency importance vs illiquidity-relatedness")
+    topk_importance = compute_topk_frequency(importances, K=10)
+    topk_importance.to_csv(output_dir / "topk_frequency.csv")
+
+    rho_31_topk = plot_importance_vs_illiquidity(
+        topk_importance, illiq_rho, focal,
+        output_dir / "importance_vs_illiquidity_topk.png",
+    )
+    logger.info("Spearman ρ (top-10 frequency vs raw relatedness): %.3f", rho_31_topk)
+
+    # ── Output 3.1c: Aligned illiquidity-relatedness ──
+    logger.info("Output 3.1c: Aligned illiquidity-relatedness (model inputs)")
+    illiq_rho_aligned = compute_illiquidity_relatedness_aligned(
+        panel, features, importances, liq_col=liq["quintile_col"],
+    )
+    illiq_rho_aligned.to_csv(output_dir / "illiquidity_relatedness_aligned.csv")
+
+    rho_31_aligned = plot_importance_vs_illiquidity(
+        avg_importance, illiq_rho_aligned, focal,
+        output_dir / "importance_vs_illiquidity_aligned.png",
+    )
+    logger.info("Spearman ρ (mean gain vs aligned relatedness): %.3f", rho_31_aligned)
+
+    # ── Output 3.1d: Top-K frequency + aligned relatedness ──
+    rho_31_topk_aligned = plot_importance_vs_illiquidity(
+        topk_importance, illiq_rho_aligned, focal,
+        output_dir / "importance_vs_illiquidity_topk_aligned.png",
+    )
+    logger.info("Spearman ρ (top-10 frequency vs aligned relatedness): %.3f", rho_31_topk_aligned)
 
     # ── Output 3.2: Importance vs liquid-stock R² ──
     logger.info("=" * 60)
@@ -278,6 +311,9 @@ def main():
     # ── Save summary metadata ──
     meta = {
         "spearman_rho_importance_illiq": rho_31,
+        "spearman_rho_topk_frequency": rho_31_topk,
+        "spearman_rho_aligned": rho_31_aligned,
+        "spearman_rho_topk_aligned": rho_31_topk_aligned,
         "r2_standard_cs": r2_results["r2_standard_cs"],
         "r2_weighted_cs": r2_results["r2_weighted_cs"],
         "r2_standard_zero": r2_results["r2_standard_zero"],
