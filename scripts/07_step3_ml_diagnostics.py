@@ -236,12 +236,63 @@ def main():
         output_dir / "importance_vs_liquid_r2.png",
     )
 
-    # ── Output 3.3 + 3.4: R² by quintile ──
+    # ── Output 3.3: Illiquidity cluster importance aggregate ──
     logger.info("=" * 60)
-    logger.info("Output 3.3/3.4: OOS R² by liquidity quintile")
+    logger.info("Output 3.3: Illiquidity cluster importance aggregate")
+    illiq_threshold = 0.3
+    illiq_mask = illiq_rho.abs() > illiq_threshold
+    total_importance = avg_importance.sum()
+    illiq_importance = avg_importance[illiq_mask].sum()
+    illiq_imp_share = illiq_importance / total_importance if total_importance > 0 else 0
+
+    total_liquid_r2 = liquid_r2.abs().sum()
+    illiq_liquid_r2 = liquid_r2[illiq_mask].abs().sum()
+    illiq_r2_share = illiq_liquid_r2 / total_liquid_r2 if total_liquid_r2 > 0 else 0
+
+    cluster_summary = pd.DataFrame([{
+        "threshold": illiq_threshold,
+        "n_illiq_features": int(illiq_mask.sum()),
+        "n_total_features": len(illiq_mask),
+        "illiq_importance_share": illiq_imp_share,
+        "illiq_liquid_r2_share": illiq_r2_share,
+        "ratio": illiq_imp_share / illiq_r2_share if illiq_r2_share > 0 else np.nan,
+    }])
+    cluster_summary.to_csv(output_dir / "illiquidity_cluster_summary.csv", index=False)
+    logger.info(
+        "Illiquidity cluster (|rho|>%.1f): %d features, %.1f%% of importance, %.1f%% of liquid R2",
+        illiq_threshold, illiq_mask.sum(),
+        illiq_imp_share * 100, illiq_r2_share * 100,
+    )
+
+    # ── Output 3.4 + 3.5: R² by quintile ──
+    logger.info("=" * 60)
+    logger.info("Output 3.4/3.5: OOS R² by liquidity quintile")
     q_r2 = compute_quintile_oos_r2(predictions, panel, "liq_quintile")
     q_r2.to_csv(output_dir / "r2_by_quintile.csv", index=False)
     logger.info("\n%s", q_r2.to_string(index=False))
+
+    # Historical mean benchmark (expanding-window per stock)
+    logger.info("Computing historical mean benchmark (expanding-window per stock)...")
+    pred_with_q = predictions.merge(
+        panel[["permno", "yyyymm", "liq_quintile"]], on=["permno", "yyyymm"], how="left",
+    )
+    pred_with_q = pred_with_q.sort_values(["permno", "yyyymm"])
+    pred_with_q["r_hist"] = pred_with_q.groupby("permno")["y_true"].expanding().mean().reset_index(level=0, drop=True)
+    pred_with_q["r_hist"] = pred_with_q.groupby("permno")["r_hist"].shift(1)
+    pred_with_hist = pred_with_q.dropna(subset=["r_hist"])
+    hist_results = []
+    for q_val in sorted(pred_with_hist["liq_quintile"].dropna().unique()):
+        qdf = pred_with_hist[pred_with_hist["liq_quintile"] == q_val]
+        ss_res = ((qdf["y_true"] - qdf["y_pred"]) ** 2).sum()
+        ss_tot = ((qdf["y_true"] - qdf["r_hist"]) ** 2).sum()
+        hist_results.append({"quintile": int(q_val), "pooled_r2_hist": 1 - ss_res / ss_tot if ss_tot > 0 else np.nan})
+    ss_res_all = ((pred_with_hist["y_true"] - pred_with_hist["y_pred"]) ** 2).sum()
+    ss_tot_all = ((pred_with_hist["y_true"] - pred_with_hist["r_hist"]) ** 2).sum()
+    hist_results.append({"quintile": "Full", "pooled_r2_hist": 1 - ss_res_all / ss_tot_all if ss_tot_all > 0 else np.nan})
+    hist_r2_df = pd.DataFrame(hist_results)
+    q_r2 = q_r2.merge(hist_r2_df, on="quintile", how="left")
+    q_r2.to_csv(output_dir / "r2_by_quintile.csv", index=False)
+    logger.info("R² with historical mean benchmark added")
 
     # Monthly R² time series per quintile
     monthly_r2 = compute_monthly_quintile_r2(predictions, panel, "liq_quintile")
@@ -298,6 +349,23 @@ def main():
         r2_results["r2_standard_zero"] * 100,
         r2_results["r2_weighted_zero"] * 100,
         r2_results["gap_zero"] * 100,
+    )
+
+    # Market-cap weighted R² (robustness)
+    logger.info("Computing market-cap weighted R²...")
+    panel_mcap = panel.copy()
+    panel_mcap["w_tilde_mcap"] = panel_mcap.groupby("yyyymm")["liq_me_raw"].transform(
+        lambda x: x / x.mean()
+    )
+    r2_mcap = compute_utility_weighted_r2(predictions, panel_mcap, w_col="w_tilde_mcap")
+    r2_results["r2_weighted_mcap_cs"] = r2_mcap["r2_weighted_cs"]
+    r2_results["r2_weighted_mcap_zero"] = r2_mcap["r2_weighted_zero"]
+    r2_results["gap_mcap_cs"] = r2_results["r2_standard_cs"] - r2_mcap["r2_weighted_cs"]
+    r2_results["gap_mcap_zero"] = r2_results["r2_standard_zero"] - r2_mcap["r2_weighted_zero"]
+    logger.info(
+        "Market-cap weighted: Zero R²=%.4f%%, Gap=%.4f pp",
+        r2_mcap["r2_weighted_zero"] * 100,
+        r2_results["gap_mcap_zero"] * 100,
     )
 
     with open(output_dir / "utility_weighted_r2.json", "w") as f:

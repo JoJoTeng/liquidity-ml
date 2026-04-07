@@ -1,0 +1,175 @@
+"""
+Step 3d: Progressive Universe Restriction (Section 5.2d)
+=========================================================
+Trains 4 additional XGBoost models with restricted training universes.
+Uses SAME hyperparameters as baseline (no retuning).
+Test set includes ALL stocks. Primary metric: R²(Q4-Q5).
+
+Models: MQ2+ (drop Q1), MQ3+ (drop Q1-Q2), MQ4+ (drop Q1-Q3), MQ5 (Q5 only)
+
+Outputs (to outputs/motivation_raw/step3_restriction/{liquidity}/):
+  - predictions_MQ{2,3,4,5}.parquet
+  - restriction_curve.png       (Output 3.7)
+  - restriction_comparison.csv  (Output 3.8)
+  - restriction_by_quintile.csv (Output 3.9)
+  - meta.json
+
+Usage:
+  python scripts/12_progressive_restriction.py
+  python scripts/12_progressive_restriction.py --min-quintile 2
+  python scripts/12_progressive_restriction.py --recompute
+"""
+from __future__ import annotations
+import argparse, json, logging, sys
+from pathlib import Path
+import numpy as np, pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.config import load_config, get_data_dir, get_output_dir
+from src.analysis.motivation import (
+    assign_nyse_quintiles, rolling_xgboost_predict_restricted,
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger(__name__)
+
+
+def pooled_r2_zero(preds):
+    ss_res = (preds["y_true"] - preds["y_pred"]).pow(2).sum()
+    ss_tot = preds["y_true"].pow(2).sum()
+    return float(1 - ss_res / ss_tot) if ss_tot > 0 else np.nan
+
+
+def r2_for_quintiles(preds, panel, q_list):
+    """R² for stocks in specified quintiles."""
+    qmap = panel[["permno", "yyyymm", "liq_quintile"]].drop_duplicates()
+    merged = preds.merge(qmap, on=["permno", "yyyymm"], how="left")
+    sub = merged[merged["liq_quintile"].isin(q_list)].dropna(subset=["y_true", "y_pred"])
+    return pooled_r2_zero(sub) if len(sub) > 0 else np.nan
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Step 3d: Progressive Universe Restriction")
+    parser.add_argument("--liquidity", type=str, default="dvol", choices=["dvol", "mcap"])
+    parser.add_argument("--min-quintile", type=int, default=None, choices=[2,3,4,5],
+                        help="Run single restriction level (for parallel runs)")
+    parser.add_argument("--recompute", action="store_true")
+    args = parser.parse_args()
+
+    LIQ = {"dvol": {"col": "liq_dvol_21d", "asc": True}, "mcap": {"col": "liq_me_raw", "asc": True}}
+    liq = LIQ[args.liquidity]
+    config = load_config()
+    data_dir = get_data_dir()
+    output_dir = Path(get_output_dir()) / "motivation_raw" / "step3_restriction" / args.liquidity
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pooled_dir = Path(get_output_dir()) / "motivation" / "step3" / args.liquidity
+
+    # Load data
+    panel_path = data_dir / "processed_panel.parquet"
+    if not panel_path.exists():
+        logger.error("processed_panel.parquet not found."); sys.exit(1)
+    panel = pd.read_parquet(panel_path)
+    logger.info("Panel: %d rows", len(panel))
+
+    # Features — must match pooled model
+    feat_path = data_dir / "feature_list.json"
+    if not feat_path.exists():
+        logger.error("feature_list.json not found at %s. Run 07_step3_ml_diagnostics.py first.", feat_path)
+        sys.exit(1)
+    with open(feat_path) as f:
+        feat_meta = json.load(f)
+    features = feat_meta["features"] if isinstance(feat_meta, dict) else feat_meta
+    logger.info("Features: %d", len(features))
+
+    # Quintiles
+    panel["liq_quintile"] = assign_nyse_quintiles(panel, liq["col"], ascending=liq["asc"])
+
+    # Fixed baseline params (no retuning per document spec)
+    fixed_params = config["models"]["xgboost"]
+    levels = [args.min_quintile] if args.min_quintile else [2, 3, 4, 5]
+
+    # Train restricted models
+    if not args.recompute:
+        for mq in levels:
+            label = f"MQ{mq}+"
+            pred_path = output_dir / f"predictions_{label}.parquet"
+            logger.info("=" * 60)
+            logger.info("Training %s (quintile >= %d)...", label, mq)
+            preds = rolling_xgboost_predict_restricted(
+                panel, features, min_quintile=mq, quintile_col="liq_quintile",
+                config=config, fixed_params=fixed_params,
+            )
+            if len(preds) > 0:
+                preds.to_parquet(pred_path, index=False)
+                logger.info("%s: %d predictions saved", label, len(preds))
+
+    # Comparison
+    logger.info("=" * 60)
+    logger.info("Computing restriction curve...")
+
+    # Load baseline (Mall) predictions
+    models = {"Mall": pooled_dir / "predictions.parquet"}
+    for mq in [2, 3, 4, 5]:
+        models[f"MQ{mq}+"] = output_dir / f"predictions_MQ{mq}+.parquet"
+
+    # Output 3.8: R² by training universe evaluated on Q4-Q5
+    rows_38 = []
+    for model_name, pred_path in models.items():
+        if not pred_path.exists():
+            rows_38.append({"model": model_name, "r2_q45_pct": np.nan, "r2_q4_pct": np.nan,
+                            "r2_q5_pct": np.nan, "r2_full_pct": np.nan})
+            continue
+        preds = pd.read_parquet(pred_path)
+        r2_q45 = r2_for_quintiles(preds, panel, [4, 5])
+        r2_q4 = r2_for_quintiles(preds, panel, [4])
+        r2_q5 = r2_for_quintiles(preds, panel, [5])
+        r2_full = pooled_r2_zero(preds)
+        rows_38.append({"model": model_name, "r2_q45_pct": r2_q45*100, "r2_q4_pct": r2_q4*100,
+                         "r2_q5_pct": r2_q5*100, "r2_full_pct": r2_full*100})
+        logger.info("%s: R²(Q4-Q5)=%.3f%%", model_name, r2_q45*100 if not np.isnan(r2_q45) else 0)
+
+    comp38 = pd.DataFrame(rows_38)
+    comp38.to_csv(output_dir / "restriction_comparison.csv", index=False)
+
+    # Output 3.9: R² by quintile × training universe
+    rows_39 = []
+    for model_name, pred_path in models.items():
+        if not pred_path.exists(): continue
+        preds = pd.read_parquet(pred_path)
+        for q in range(1, 6):
+            r2_q = r2_for_quintiles(preds, panel, [q])
+            rows_39.append({"model": model_name, "quintile": f"Q{q}", "r2_pct": r2_q * 100})
+        r2_q45 = r2_for_quintiles(preds, panel, [4, 5])
+        rows_39.append({"model": model_name, "quintile": "Q4-Q5", "r2_pct": r2_q45 * 100})
+
+    comp39 = pd.DataFrame(rows_39)
+    comp39.to_csv(output_dir / "restriction_by_quintile.csv", index=False)
+    if len(comp39) > 0:
+        pivot = comp39.pivot(index="quintile", columns="model", values="r2_pct")
+        logger.info("R² by quintile × model:\n%s", pivot.to_string())
+
+    # Output 3.7: Restriction curve
+    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    plt.rcParams.update({"font.family": "serif", "font.size": 11})
+    valid = comp38.dropna(subset=["r2_q45_pct"])
+    if len(valid) > 1:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        x_labels = valid["model"].tolist()
+        x = np.arange(len(x_labels))
+        ax.plot(x, valid["r2_q45_pct"], "o-", color="steelblue", linewidth=2, markersize=8)
+        for xi, yi, lab in zip(x, valid["r2_q45_pct"], x_labels):
+            ax.annotate(f"{yi:.3f}%", (xi, yi), textcoords="offset points", xytext=(0, 10), ha="center", fontsize=9)
+        ax.axhline(0, color="black", linewidth=0.8, linestyle="-")
+        ax.set_xticks(x); ax.set_xticklabels(x_labels)
+        ax.set_xlabel("Training Universe"); ax.set_ylabel("OOS R² on Q4-Q5 (%)")
+        ax.set_title("Restriction Curve: Liquid-Stock R² as Training Universe Narrows")
+        plt.tight_layout()
+        fig.savefig(output_dir / "restriction_curve.png", dpi=150, bbox_inches="tight"); plt.close(fig)
+        logger.info("Saved restriction_curve.png")
+
+    with open(output_dir / "meta.json", "w") as f:
+        json.dump({"levels_run": levels, "n_features": len(features)}, f, indent=2, default=str)
+    logger.info("Step 3d complete. Outputs: %s", output_dir)
+
+if __name__ == "__main__":
+    main()

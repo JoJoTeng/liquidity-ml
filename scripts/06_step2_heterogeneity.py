@@ -60,6 +60,11 @@ def main():
         choices=["dvol", "mcap", "amihud", "spread"],
         help="Primary liquidity measure (default: dvol)",
     )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Also run interaction regression on all ~113 characteristics (not just 15 focal)",
+    )
     args = parser.parse_args()
 
     LIQ_CONFIG = {
@@ -242,6 +247,64 @@ def main():
         meta["spearman_rho"] = rho
         with open(output_dir / "interaction_meta.json", "w") as f:
             json.dump(meta, f, indent=2)
+
+    # ══════════════════════════════════════════════════════
+    # Output 2.3b/2.1b: Full Interaction Regression (all ~113 chars)
+    # ══════════════════════════════════════════════════════
+    if args.full:
+        from src.analysis.motivation import (
+            get_motivation_features, load_signaldoc, build_feature_categories,
+        )
+
+        logger.info("=" * 60)
+        logger.info("Loading full feature set for --full mode...")
+        signaldoc = load_signaldoc()
+        all_features = get_motivation_features(signaldoc, panel)
+        missing_full = [f for f in all_features if f not in panel.columns]
+        if missing_full:
+            logger.warning("Missing from panel (%d): %s", len(missing_full), missing_full)
+            all_features = [f for f in all_features if f in panel.columns]
+        logger.info("Full feature set: %d characteristics", len(all_features))
+
+        # 2.3b: Full interaction regression
+        logger.info("Output 2.3b: Full interaction regression (%d features)", len(all_features))
+        int_full = interaction_fama_macbeth(panel, all_features, "liq_rank")
+        int_full["coef_table"].to_csv(output_dir / "interaction_regression_full.csv", index=False)
+        n_sig_full = int((int_full["coef_table"]["gamma_t"].abs() > 2).sum())
+        logger.info("Full: %d/%d sig γ, F-test p=%.6f", n_sig_full, len(all_features), int_full["f_test_pvalue"])
+
+        # Category summary
+        cat_info = build_feature_categories(signaldoc)
+        broad_map = cat_info["broad"]
+        ct_full = int_full["coef_table"].copy()
+        ct_full["category"] = ct_full["feature"].map(broad_map).fillna("Other")
+        cat_summary = ct_full.groupby("category").agg(
+            n_features=("feature", "count"),
+            n_sig_gamma=("gamma_t", lambda x: int((x.abs() > 2).sum())),
+            avg_abs_gamma=("gamma_bar", lambda x: x.abs().mean()),
+        ).reset_index().sort_values("n_sig_gamma", ascending=False)
+        cat_summary.to_csv(output_dir / "interaction_by_category.csv", index=False)
+        logger.info("Category summary:\n%s", cat_summary.to_string(index=False))
+
+        # Robustness: dummy
+        int_full_dummy = interaction_fama_macbeth(panel, all_features, "liq_rank", use_dummy=True)
+        int_full_dummy["coef_table"].to_csv(output_dir / "interaction_regression_full_dummy.csv", index=False)
+
+        # 2.1b: Full quintile FM
+        logger.info("Output 2.1b: Full quintile FM (%d features)", len(all_features))
+        q_full = quintile_fama_macbeth(panel, all_features, "liq_quintile")
+        q_full["coef_table"].to_csv(output_dir / "quintile_fm_coefficients_full_raw.csv", index=False)
+
+        # Update metadata
+        meta["f_test_stat_full"] = int_full["f_test_stat"]
+        meta["f_test_pvalue_full"] = int_full["f_test_pvalue"]
+        meta["n_sig_gamma_full"] = n_sig_full
+        meta["n_features_full"] = len(all_features)
+        meta["f_test_stat_full_dummy"] = int_full_dummy["f_test_stat"]
+        meta["f_test_pvalue_full_dummy"] = int_full_dummy["f_test_pvalue"]
+        with open(output_dir / "interaction_meta.json", "w") as f:
+            json.dump(meta, f, indent=2)
+        logger.info("Full-feature outputs saved.")
 
     # ══════════════════════════════════════════════════════
     # Summary

@@ -735,6 +735,8 @@ def plot_density_comparison(
     focal_features: list[str],
     w_col: str,
     output_path: str | Path,
+    vw_col: str | None = None,
+    title_suffix: str = "",
 ) -> None:
     """Two-panel density comparison: training (flat line) vs deployment (KDE).
 
@@ -747,6 +749,11 @@ def plot_density_comparison(
     rank-transforming to [0,1] produces Uniform(0,1) by construction.
     Using KDE for the training line creates boundary artifacts (drops
     near 0 and 1) that are misleading.
+
+    Parameters
+    ----------
+    vw_col : Optional column for value-weight (market cap) KDE overlay.
+    title_suffix : Optional suffix for the figure title (e.g., " — Recession").
     """
     import matplotlib.pyplot as plt
     _set_academic_style()
@@ -778,7 +785,7 @@ def plot_density_comparison(
 
     x_grid = np.linspace(0, 1, 300)
 
-    def _plot_one(ax, feat, panel_data, w_col_name):
+    def _plot_one(ax, feat, panel_data, w_col_name, vw_col_name=None):
         valid = panel_data[feat].notna() & panel_data[w_col_name].notna()
         vals = panel_data.loc[valid, feat].values
         w = panel_data.loc[valid, w_col_name].values
@@ -788,7 +795,6 @@ def plot_density_comparison(
             return
 
         # Training distribution: flat line at y=1.0
-        # (rank-transform to [0,1] is Uniform by construction)
         ax.axhline(1.0, color="steelblue", linewidth=2.0, label="Training (equal-wt)")
 
         # Deployment distribution: volume-weighted KDE
@@ -800,6 +806,18 @@ def plot_density_comparison(
         # Shade the gap between training and deployment
         ax.fill_between(x_grid, 1.0, deploy_y, alpha=0.15, color="darkorange")
 
+        # Value-weighted density (market cap) — optional third line
+        if vw_col_name is not None and vw_col_name in panel_data.columns:
+            valid_vw = valid & panel_data[vw_col_name].notna()
+            vals_vw = panel_data.loc[valid_vw, feat].values
+            w_vw_raw = panel_data.loc[valid_vw, vw_col_name].values
+            if len(vals_vw) >= 100 and w_vw_raw.sum() > 0:
+                w_vw = w_vw_raw / w_vw_raw.mean()
+                kde_mcap = gaussian_kde(vals_vw, weights=w_vw)
+                mcap_y = kde_mcap(x_grid)
+                ax.plot(x_grid, mcap_y, ":", color="seagreen", linewidth=2.0,
+                        label="Value-weighted")
+
         ax.set_title(feat, fontsize=12, fontweight="bold")
         ax.set_xlim(-0.02, 1.02)
         ax.set_xlabel("Characteristic rank [0, 1]")
@@ -807,11 +825,11 @@ def plot_density_comparison(
 
     # Plot Panel A (left column)
     for i, feat in enumerate(panel_a):
-        _plot_one(axes[i, 0], feat, panel, w_col)
+        _plot_one(axes[i, 0], feat, panel, w_col, vw_col_name=vw_col)
 
     # Plot Panel B (right column)
     for i, feat in enumerate(panel_b):
-        _plot_one(axes[i, 1], feat, panel, w_col)
+        _plot_one(axes[i, 1], feat, panel, w_col, vw_col_name=vw_col)
 
     # Hide unused subplots
     for i in range(len(panel_a), nrows):
@@ -833,7 +851,7 @@ def plot_density_comparison(
     axes[0, 0].legend(fontsize=9, loc="upper right")
 
     fig.suptitle(
-        "Training vs Deployment Distributions",
+        f"Training vs Deployment Distributions{title_suffix}",
         fontsize=14, y=1.02,
     )
     plt.tight_layout()
@@ -848,6 +866,7 @@ def plot_weight_distribution(
     w_col: str,
     output_path: str | Path,
     vw_col: str | None = None,
+    title_suffix: str = "",
 ) -> None:
     """Histogram of log₁₀(w̃) with value-weight comparison.
 
@@ -858,6 +877,7 @@ def plot_weight_distribution(
     Parameters
     ----------
     w_col : Dollar-volume implementability weight column.
+    title_suffix : Optional suffix for the plot title.
     vw_col : Optional value-weight (market cap) column for comparison.
         If provided, its normalized weights are overlaid as a second density.
     """
@@ -925,7 +945,7 @@ def plot_weight_distribution(
 
     ax.set_xlabel(r"$\log_{10}(\tilde{w})$")
     ax.set_ylabel("Density")
-    ax.set_title("Distribution of Normalized Weights: Dollar Volume vs Value")
+    ax.set_title(f"Distribution of Normalized Weights: Dollar Volume vs Value{title_suffix}")
     ax.legend(fontsize=9, loc="upper left")
 
     plt.tight_layout()
@@ -1583,6 +1603,269 @@ def rolling_xgboost_predict(
         len(importances), len(predictions),
     )
     return predictions, importances
+
+
+def _rolling_xgboost_core(
+    panel: pd.DataFrame,
+    features: list[str],
+    config: dict,
+    return_col: str,
+    train_filter_fn,
+    test_filter_fn,
+    fixed_params: dict | None = None,
+    label: str = "XGB",
+) -> pd.DataFrame:
+    """Shared rolling-window XGBoost core for restricted/quintile models.
+
+    Parameters
+    ----------
+    train_filter_fn : callable(train_df, val_df, all_months, train_months, val_months)
+        Returns filtered (train_df, val_df).
+    test_filter_fn : callable(test_df)
+        Returns filtered test_df.
+    fixed_params : If provided, skip retuning and use these params.
+    """
+    import itertools
+    import time as _time
+    from src.models import create_model
+
+    train_cfg = config["training"]
+    train_window = train_cfg["train_window"]
+    val_window = train_cfg["validation_window"]
+    oos_start = train_cfg.get("oos_start", 200001)
+    seed = config["project"]["seed"]
+
+    all_months = sorted(panel["yyyymm"].unique())
+    oos_months = [m for m in all_months if m >= oos_start]
+
+    retune_freq = 12
+    predictions_list = []
+    best_params = fixed_params
+    months_since_retune = retune_freq
+    t_start = _time.time()
+    n_done = 0
+
+    for i, test_month in enumerate(oos_months):
+        test_idx = all_months.index(test_month)
+        if test_idx < train_window + val_window:
+            continue
+
+        train_start = test_idx - train_window - val_window
+        val_start = test_idx - val_window
+
+        train_months_list = all_months[train_start:val_start]
+        val_months_list = all_months[val_start:test_idx]
+
+        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
+        val_df = panel[panel["yyyymm"].isin(val_months_list)].copy()
+        test_df = panel[panel["yyyymm"] == test_month].copy()
+
+        # Apply train/test filters (quintile restriction)
+        train_df, val_df = train_filter_fn(
+            train_df, val_df, all_months, train_months_list, val_months_list
+        )
+        test_df = test_filter_fn(test_df)
+
+        if len(train_df) < 100 or len(test_df) < 20:
+            continue
+
+        # Per-window rank normalization
+        for col in features:
+            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
+            val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
+            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
+
+        train_df[features] = train_df[features].fillna(0.5)
+        val_df[features] = val_df[features].fillna(0.5)
+        test_df[features] = test_df[features].fillna(0.5)
+
+        X_train = train_df[features].values
+        y_train = train_df[return_col].values
+        X_val = val_df[features].values
+        y_val = val_df[return_col].values
+        X_test = test_df[features].values
+        y_test = test_df[return_col].values
+
+        valid_train = ~np.isnan(y_train)
+        valid_val = ~np.isnan(y_val)
+        valid_test = ~np.isnan(y_test)
+        if valid_train.sum() < 100 or valid_test.sum() < 10:
+            continue
+
+        X_train, y_train = X_train[valid_train], y_train[valid_train]
+        X_val, y_val = X_val[valid_val], y_val[valid_val]
+        X_test, y_test = X_test[valid_test], y_test[valid_test]
+
+        # Retune or use fixed params
+        if fixed_params is None and months_since_retune >= retune_freq:
+            xgb_cfg = config["models"]["xgboost"]
+            search_space = xgb_cfg.get("search_space", {})
+            keys = list(search_space.keys())
+            values = list(search_space.values())
+            n_trials = xgb_cfg.get("n_random_search", 150)
+
+            full_grid_size = 1
+            for v in values:
+                full_grid_size *= len(v)
+
+            rng = np.random.RandomState(seed)
+            if full_grid_size <= n_trials:
+                param_grid = [dict(zip(keys, v)) for v in itertools.product(*values)]
+            else:
+                param_grid = []
+                for _ in range(n_trials):
+                    combo = {k: v[rng.randint(len(v))] for k, v in zip(keys, values)}
+                    param_grid.append(combo)
+
+            best_mse = np.inf
+            for params in param_grid:
+                trial_cfg = {**xgb_cfg, **params}
+                m = create_model("xgboost", config=trial_cfg, seed=seed)
+                m.fit(X_train, y_train)
+                preds = m.predict(X_val)
+                mse = np.mean((y_val - preds) ** 2)
+                if mse < best_mse:
+                    best_mse = mse
+                    best_params = trial_cfg
+
+            months_since_retune = 0
+            logger.info(
+                "%s month %d: RETUNED (best: %s)", label, test_month,
+                {k: best_params.get(k) for k in keys},
+            )
+        elif fixed_params is not None and best_params is None:
+            best_params = fixed_params
+
+        model = create_model("xgboost", config=best_params, seed=seed)
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+
+        test_valid = test_df[valid_test]
+        pred_df = pd.DataFrame({
+            "permno": test_valid["permno"].values,
+            "yyyymm": test_valid["yyyymm"].values,
+            "y_true": y_test,
+            "y_pred": y_pred,
+        })
+        predictions_list.append(pred_df)
+
+        months_since_retune += 1
+        n_done += 1
+
+        elapsed = _time.time() - t_start
+        avg_per_month = elapsed / n_done
+        remaining = avg_per_month * (len(oos_months) - i - 1)
+
+        if (i + 1) % 12 == 0 or months_since_retune == 1:
+            logger.info(
+                "%s progress: %d/%d (%.0f%%) | month %d%s | ETA: %.0f min",
+                label, i + 1, len(oos_months),
+                100 * (i + 1) / len(oos_months), test_month,
+                " [RETUNED]" if months_since_retune == 1 and fixed_params is None else "",
+                remaining / 60,
+            )
+
+    if not predictions_list:
+        logger.warning("%s: no valid OOS months produced", label)
+        return pd.DataFrame()
+
+    predictions = pd.concat(predictions_list, ignore_index=True)
+    logger.info(
+        "%s complete: %d predictions over %d months",
+        label, len(predictions), predictions["yyyymm"].nunique(),
+    )
+    return predictions
+
+
+def rolling_xgboost_predict_restricted(
+    panel: pd.DataFrame,
+    features: list[str],
+    min_quintile: int,
+    quintile_col: str = "liq_quintile",
+    config: dict | None = None,
+    return_col: str = "excess_ret",
+    fixed_params: dict | None = None,
+) -> pd.DataFrame:
+    """Train XGBoost on a restricted universe (drop illiquid quintiles).
+
+    Per Section 5.2(d): filters train/val to quintile >= min_quintile.
+    Test set includes ALL stocks (no filter). Uses fixed baseline
+    hyperparameters to isolate training composition effect.
+
+    Quintile assignment uses the last month of the training window.
+    """
+    if config is None:
+        config = load_config()
+
+    def train_filter(train_df, val_df, all_months, train_months, val_months):
+        last_train_month = train_months[-1]
+        last_month_q = train_df.loc[
+            train_df["yyyymm"] == last_train_month,
+            ["permno", quintile_col]
+        ].drop_duplicates()
+        valid_permnos = set(
+            last_month_q.loc[last_month_q[quintile_col] >= min_quintile, "permno"]
+        )
+        return (
+            train_df[train_df["permno"].isin(valid_permnos)].copy(),
+            val_df[val_df["permno"].isin(valid_permnos)].copy(),
+        )
+
+    def test_filter(test_df):
+        return test_df  # no filter on test set
+
+    return _rolling_xgboost_core(
+        panel, features, config, return_col,
+        train_filter_fn=train_filter,
+        test_filter_fn=test_filter,
+        fixed_params=fixed_params,
+        label=f"XGB_MQ{min_quintile}+",
+    )
+
+
+def rolling_xgboost_predict_quintile(
+    panel: pd.DataFrame,
+    features: list[str],
+    quintile: int,
+    quintile_col: str = "liq_quintile",
+    config: dict | None = None,
+    return_col: str = "excess_ret",
+    fixed_params: dict | None = None,
+) -> pd.DataFrame:
+    """Train XGBoost on a single liquidity quintile.
+
+    Per Section 5.2(e): filters train/val/test to the specified quintile.
+    Uses fixed baseline hyperparameters.
+
+    Quintile assignment uses the last month of the training window.
+    """
+    if config is None:
+        config = load_config()
+
+    def train_filter(train_df, val_df, all_months, train_months, val_months):
+        last_train_month = train_months[-1]
+        last_month_q = train_df.loc[
+            train_df["yyyymm"] == last_train_month,
+            ["permno", quintile_col]
+        ].drop_duplicates()
+        valid_permnos = set(
+            last_month_q.loc[last_month_q[quintile_col] == quintile, "permno"]
+        )
+        return (
+            train_df[train_df["permno"].isin(valid_permnos)].copy(),
+            val_df[val_df["permno"].isin(valid_permnos)].copy(),
+        )
+
+    def test_filter(test_df):
+        return test_df[test_df[quintile_col] == quintile].copy()
+
+    return _rolling_xgboost_core(
+        panel, features, config, return_col,
+        train_filter_fn=train_filter,
+        test_filter_fn=test_filter,
+        fixed_params=fixed_params,
+        label=f"XGB_Q{quintile}",
+    )
 
 
 def rolling_elasticnet_predict(

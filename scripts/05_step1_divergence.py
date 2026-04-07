@@ -74,6 +74,11 @@ def main():
         action="store_true",
         help="Skip Fama-MacBeth regression (Output 1.3) for faster iteration",
     )
+    parser.add_argument(
+        "--vw",
+        action="store_true",
+        help="Add value-weight (market cap) overlay to density comparison plots",
+    )
     args = parser.parse_args()
 
     # Map liquidity choice to column names
@@ -328,7 +333,8 @@ def main():
         )
 
     plot_density_comparison(
-        panel, density_features, "w_tilde", output_dir / "density_comparison.png"
+        panel, density_features, "w_tilde", output_dir / "density_comparison.png",
+        vw_col="liq_me_raw" if args.vw else None,
     )
 
     # ══════════════════════════════════════════════════════
