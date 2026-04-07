@@ -67,7 +67,7 @@ def main():
 
     regime = pd.read_csv(REGIME_PATH)
     config = load_config(); data_dir = get_data_dir()
-    output_base = Path(get_output_dir()) / "motivation_raw" / "step1_regime"
+    output_base = Path(get_output_dir()) / "motivation" / "step1_regime"
     panel = pd.read_parquet(data_dir / "processed_panel.parquet")
     panel = panel.merge(regime, on="yyyymm", how="left")
 

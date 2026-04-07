@@ -7,7 +7,7 @@ Compares within-quintile R² vs. the pooled model.
 Uses SAME hyperparameters as baseline (no retuning) per document spec.
 Quintile assignment based on last month of training window.
 
-Outputs (to outputs/motivation_raw/step3_quintile/{liquidity}/):
+Outputs (to outputs/motivation/step3_quintile/{liquidity}/):
   - predictions_q{1-5}.parquet
   - r2_comparison.csv  (Output 3.10)
   - r2_comparison.png
@@ -53,7 +53,7 @@ def main():
     liq = LIQ[args.liquidity]
     config = load_config()
     data_dir = get_data_dir()
-    output_dir = Path(get_output_dir()) / "motivation_raw" / "step3_quintile" / args.liquidity
+    output_dir = Path(get_output_dir()) / "motivation" / "step3_quintile" / args.liquidity
     output_dir.mkdir(parents=True, exist_ok=True)
     pooled_dir = Path(get_output_dir()) / "motivation" / "step3" / args.liquidity
 

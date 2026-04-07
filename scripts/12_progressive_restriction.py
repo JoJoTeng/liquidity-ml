@@ -7,7 +7,7 @@ Test set includes ALL stocks. Primary metric: R²(Q4-Q5).
 
 Models: MQ2+ (drop Q1), MQ3+ (drop Q1-Q2), MQ4+ (drop Q1-Q3), MQ5 (Q5 only)
 
-Outputs (to outputs/motivation_raw/step3_restriction/{liquidity}/):
+Outputs (to outputs/motivation/step3_restriction/{liquidity}/):
   - predictions_MQ{2,3,4,5}.parquet
   - restriction_curve.png       (Output 3.7)
   - restriction_comparison.csv  (Output 3.8)
@@ -60,7 +60,7 @@ def main():
     liq = LIQ[args.liquidity]
     config = load_config()
     data_dir = get_data_dir()
-    output_dir = Path(get_output_dir()) / "motivation_raw" / "step3_restriction" / args.liquidity
+    output_dir = Path(get_output_dir()) / "motivation" / "step3_restriction" / args.liquidity
     output_dir.mkdir(parents=True, exist_ok=True)
     pooled_dir = Path(get_output_dir()) / "motivation" / "step3" / args.liquidity
 
