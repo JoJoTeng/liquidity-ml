@@ -46,6 +46,8 @@ def main():
     parser.add_argument("--liquidity", type=str, default="dvol", choices=["dvol", "mcap"])
     parser.add_argument("--quintile", type=int, default=None, choices=[1,2,3,4,5])
     parser.add_argument("--retune", action="store_true", help="Retune within quintile (robustness)")
+    parser.add_argument("--use-baseline-params", action="store_true",
+                        help="Use baseline's per-window tuned params (from tuned_params.csv)")
     parser.add_argument("--recompute", action="store_true", help="Skip training, recompute from saved")
     args = parser.parse_args()
 
@@ -77,8 +79,21 @@ def main():
     # Quintiles
     panel["liq_quintile"] = assign_nyse_quintiles(panel, liq["col"], ascending=liq["asc"])
 
-    # Fixed params from baseline (default: use baseline config, no retuning)
-    fixed_params = None if args.retune else config["models"]["xgboost"]
+    # Param strategy: --use-baseline-params > --retune > fixed config defaults
+    baseline_tuned = None
+    fixed_params = None
+    if args.use_baseline_params:
+        tp_path = pooled_dir / "tuned_params.csv"
+        if not tp_path.exists():
+            logger.error("tuned_params.csv not found at %s. Re-run 07_step3_ml_diagnostics.py first.", tp_path)
+            sys.exit(1)
+        baseline_tuned = pd.read_csv(tp_path, index_col="yyyymm")
+        logger.info("Loaded %d baseline tuned param windows from %s", len(baseline_tuned), tp_path)
+    elif not args.retune:
+        fixed_params = config["models"]["xgboost"]
+        logger.info("Using fixed config defaults (no retuning)")
+    else:
+        logger.info("Retuning within each quintile")
 
     quintiles = [args.quintile] if args.quintile else [1,2,3,4,5]
 
@@ -89,6 +104,7 @@ def main():
             preds = rolling_xgboost_predict_quintile(
                 panel, features, quintile=q, quintile_col="liq_quintile",
                 config=config, fixed_params=fixed_params,
+                baseline_tuned_params=baseline_tuned,
             )
             if len(preds) > 0:
                 preds.to_parquet(output_dir / f"predictions_q{q}.parquet", index=False)

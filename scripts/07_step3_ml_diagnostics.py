@@ -162,6 +162,8 @@ def main():
     pred_path = output_dir / "predictions.parquet"
     imp_path = output_dir / "feature_importance.csv"
 
+    tuned_params_path = output_dir / "tuned_params.csv"
+
     if args.recompute and pred_path.exists() and imp_path.exists():
         logger.info("Loading saved predictions and importances...")
         predictions = pd.read_parquet(pred_path)
@@ -169,13 +171,14 @@ def main():
     else:
         logger.info("=" * 60)
         logger.info("Phase 1: Rolling XGBoost training (this may take a while)...")
-        predictions, importances = rolling_xgboost_predict(panel, features, config)
+        predictions, importances, tuned_params = rolling_xgboost_predict(panel, features, config)
 
         # Save intermediate results
         predictions.to_parquet(pred_path, index=False)
         importances.to_csv(imp_path)
-        logger.info("Saved predictions (%d rows) and importances (%d months)",
-                     len(predictions), len(importances))
+        tuned_params.to_csv(tuned_params_path)
+        logger.info("Saved predictions (%d rows), importances (%d months), tuned_params (%d windows)",
+                     len(predictions), len(importances), len(tuned_params))
 
     # ══════════════════════════════════════════════════════
     # Phase 2: Compute diagnostics

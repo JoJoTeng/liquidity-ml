@@ -1450,6 +1450,7 @@ def rolling_xgboost_predict(
 
     predictions_list = []
     importance_list = []
+    tuned_params_list = []
     best_params = None
     months_since_retune = retune_freq  # force retune on first window
     t_start = _time.time()
@@ -1572,6 +1573,9 @@ def rolling_xgboost_predict(
         imp_row.update(imp.to_dict())
         importance_list.append(imp_row)
 
+        # Save tuned params for this window
+        tuned_params_list.append({"yyyymm": test_month, **best_params})
+
         months_since_retune += 1
         n_done += 1
 
@@ -1593,16 +1597,17 @@ def rolling_xgboost_predict(
 
     if not predictions_list:
         logger.warning("No valid OOS months produced")
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     predictions = pd.concat(predictions_list, ignore_index=True)
     importances = pd.DataFrame(importance_list).set_index("yyyymm")
+    tuned_params = pd.DataFrame(tuned_params_list).set_index("yyyymm")
 
     logger.info(
         "Rolling XGBoost complete: %d OOS months, %d predictions",
         len(importances), len(predictions),
     )
-    return predictions, importances
+    return predictions, importances, tuned_params
 
 
 def _rolling_xgboost_core(
@@ -1613,6 +1618,7 @@ def _rolling_xgboost_core(
     train_filter_fn,
     test_filter_fn,
     fixed_params: dict | None = None,
+    baseline_tuned_params: pd.DataFrame | None = None,
     label: str = "XGB",
 ) -> pd.DataFrame:
     """Shared rolling-window XGBoost core for restricted/quintile models.
@@ -1623,7 +1629,10 @@ def _rolling_xgboost_core(
         Returns filtered (train_df, val_df).
     test_filter_fn : callable(test_df)
         Returns filtered test_df.
-    fixed_params : If provided, skip retuning and use these params.
+    fixed_params : If provided, use these same params every month (no retuning).
+    baseline_tuned_params : DataFrame indexed by yyyymm with per-window params
+        from the baseline model. If provided, uses baseline's tuned params for each
+        test month. Takes precedence over fixed_params.
     """
     import itertools
     import time as _time
@@ -1696,8 +1705,10 @@ def _rolling_xgboost_core(
         X_val, y_val = X_val[valid_val], y_val[valid_val]
         X_test, y_test = X_test[valid_test], y_test[valid_test]
 
-        # Retune or use fixed params
-        if fixed_params is None and months_since_retune >= retune_freq:
+        # Determine params: baseline_tuned > fixed > retune
+        if baseline_tuned_params is not None and test_month in baseline_tuned_params.index:
+            best_params = baseline_tuned_params.loc[test_month].to_dict()
+        elif fixed_params is None and months_since_retune >= retune_freq:
             xgb_cfg = config["models"]["xgboost"]
             search_space = xgb_cfg.get("search_space", {})
             keys = list(search_space.keys())
@@ -1785,6 +1796,7 @@ def rolling_xgboost_predict_restricted(
     config: dict | None = None,
     return_col: str = "excess_ret",
     fixed_params: dict | None = None,
+    baseline_tuned_params: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Train XGBoost on a restricted universe (drop illiquid quintiles).
 
@@ -1819,6 +1831,7 @@ def rolling_xgboost_predict_restricted(
         train_filter_fn=train_filter,
         test_filter_fn=test_filter,
         fixed_params=fixed_params,
+        baseline_tuned_params=baseline_tuned_params,
         label=f"XGB_MQ{min_quintile}+",
     )
 
@@ -1831,6 +1844,7 @@ def rolling_xgboost_predict_quintile(
     config: dict | None = None,
     return_col: str = "excess_ret",
     fixed_params: dict | None = None,
+    baseline_tuned_params: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Train XGBoost on a single liquidity quintile.
 
@@ -1864,6 +1878,7 @@ def rolling_xgboost_predict_quintile(
         train_filter_fn=train_filter,
         test_filter_fn=test_filter,
         fixed_params=fixed_params,
+        baseline_tuned_params=baseline_tuned_params,
         label=f"XGB_Q{quintile}",
     )
 
