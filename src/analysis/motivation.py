@@ -1669,16 +1669,9 @@ def _rolling_xgboost_core(
         val_df = panel[panel["yyyymm"].isin(val_months_list)].copy()
         test_df = panel[panel["yyyymm"] == test_month].copy()
 
-        # Apply train/test filters (quintile restriction)
-        train_df, val_df = train_filter_fn(
-            train_df, val_df, all_months, train_months_list, val_months_list
-        )
-        test_df = test_filter_fn(test_df)
-
-        if len(train_df) < 100 or len(test_df) < 20:
-            continue
-
-        # Per-window rank normalization
+        # Rank on FULL cross-section first (same scale as baseline),
+        # then filter to restricted/quintile universe.
+        # This ensures feature values are comparable across models.
         for col in features:
             train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
             val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
@@ -1687,6 +1680,15 @@ def _rolling_xgboost_core(
         train_df[features] = train_df[features].fillna(0.5)
         val_df[features] = val_df[features].fillna(0.5)
         test_df[features] = test_df[features].fillna(0.5)
+
+        # Apply train/test filters (quintile restriction) AFTER ranking
+        train_df, val_df = train_filter_fn(
+            train_df, val_df, all_months, train_months_list, val_months_list
+        )
+        test_df = test_filter_fn(test_df)
+
+        if len(train_df) < 100 or len(test_df) < 20:
+            continue
 
         X_train = train_df[features].values
         y_train = train_df[return_col].values
