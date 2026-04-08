@@ -252,28 +252,37 @@ def main():
     # Output 2.3b/2.1b: Full Interaction Regression (all ~113 chars)
     # ══════════════════════════════════════════════════════
     if args.full:
-        from src.analysis.motivation import (
-            get_motivation_features, load_signaldoc, build_feature_categories,
-        )
+        from src.analysis.motivation import build_feature_categories, load_signaldoc
 
         logger.info("=" * 60)
         logger.info("Loading full feature set for --full mode...")
-        signaldoc = load_signaldoc()
-        all_features = get_motivation_features(signaldoc, panel)
-        missing_full = [f for f in all_features if f not in panel.columns]
-        if missing_full:
-            logger.warning("Missing from panel (%d): %s", len(missing_full), missing_full)
-            all_features = [f for f in all_features if f in panel.columns]
+
+        # Use the same 113 features from feature_list.json (70% missing filter)
+        # — consistent with Steps 1 and 3.
+        feature_list_path = data_dir / "feature_list.json"
+        if not feature_list_path.exists():
+            logger.error("feature_list.json not found! Run 01_process_data.py first.")
+            sys.exit(1)
+        with open(feature_list_path) as f:
+            feature_meta = json.load(f)
+        all_features = feature_meta["features"] if isinstance(feature_meta, dict) else feature_meta
+        all_features = [f for f in all_features if f in panel.columns]
         logger.info("Full feature set: %d characteristics", len(all_features))
+
+        # Fill NaN with 0.5 (neutral rank) — with 113 features, requiring all
+        # non-NaN simultaneously drops too many rows. Same convention as ML pipeline.
+        panel_full = panel.copy()
+        panel_full[all_features] = panel_full[all_features].fillna(0.5)
 
         # 2.3b: Full interaction regression
         logger.info("Output 2.3b: Full interaction regression (%d features)", len(all_features))
-        int_full = interaction_fama_macbeth(panel, all_features, "liq_rank")
+        int_full = interaction_fama_macbeth(panel_full, all_features, "liq_rank")
         int_full["coef_table"].to_csv(output_dir / "interaction_regression_full.csv", index=False)
         n_sig_full = int((int_full["coef_table"]["gamma_t"].abs() > 2).sum())
         logger.info("Full: %d/%d sig γ, F-test p=%.6f", n_sig_full, len(all_features), int_full["f_test_pvalue"])
 
         # Category summary
+        signaldoc = load_signaldoc()
         cat_info = build_feature_categories(signaldoc)
         broad_map = cat_info["broad"]
         ct_full = int_full["coef_table"].copy()
@@ -287,12 +296,12 @@ def main():
         logger.info("Category summary:\n%s", cat_summary.to_string(index=False))
 
         # Robustness: dummy
-        int_full_dummy = interaction_fama_macbeth(panel, all_features, "liq_rank", use_dummy=True)
+        int_full_dummy = interaction_fama_macbeth(panel_full, all_features, "liq_rank", use_dummy=True)
         int_full_dummy["coef_table"].to_csv(output_dir / "interaction_regression_full_dummy.csv", index=False)
 
         # 2.1b: Full quintile FM
         logger.info("Output 2.1b: Full quintile FM (%d features)", len(all_features))
-        q_full = quintile_fama_macbeth(panel, all_features, "liq_quintile")
+        q_full = quintile_fama_macbeth(panel_full, all_features, "liq_quintile")
         q_full["coef_table"].to_csv(output_dir / "quintile_fm_coefficients_full_raw.csv", index=False)
 
         # Update metadata

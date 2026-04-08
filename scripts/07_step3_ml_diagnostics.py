@@ -292,7 +292,8 @@ def main():
     hist_r2_df = pd.DataFrame(hist_results)
     q_r2 = q_r2.merge(hist_r2_df, on="quintile", how="left")
     q_r2.to_csv(output_dir / "r2_by_quintile.csv", index=False)
-    logger.info("R² with historical mean benchmark added")
+    logger.info("R² by quintile (all 3 benchmarks):\n%s",
+                q_r2[["quintile", "pooled_r2_zero", "pooled_r2_cs", "pooled_r2_hist"]].to_string(index=False))
 
     # Monthly R² time series per quintile
     monthly_r2 = compute_monthly_quintile_r2(predictions, panel, "liq_quintile")
