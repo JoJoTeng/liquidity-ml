@@ -63,7 +63,16 @@ def main():
     liq = LIQ[args.liquidity]
     config = load_config()
     data_dir = get_data_dir()
-    output_dir = Path(get_output_dir()) / "motivation" / "step3_restriction" / args.liquidity
+
+    # Mode subdirectory: baseline / retune / default
+    if args.use_baseline_params:
+        mode = "baseline"
+    elif args.retune:
+        mode = "retune"
+    else:
+        mode = "default"
+
+    output_dir = Path(get_output_dir()) / "motivation" / "step3_restriction" / args.liquidity / mode
     output_dir.mkdir(parents=True, exist_ok=True)
     pooled_dir = Path(get_output_dir()) / "motivation" / "step3" / args.liquidity
 
