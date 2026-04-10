@@ -78,7 +78,7 @@ def main():
     # Rank-transform on full panel (not per-regime) so ranks reflect
     # the cross-sectional distribution at each month.
     panel = rank_transform_01(panel, all_features)
-    panel = compute_implementability_weights(panel, liq["col"])
+    panel["w_tilde"] = compute_implementability_weights(panel, liq["col"])
 
     monthly_vix = panel[["yyyymm", "vix"]].drop_duplicates("yyyymm").set_index("yyyymm")["vix"]
     vix_median = monthly_vix.median()
@@ -99,7 +99,7 @@ def main():
             if nm < 12: logger.warning("  %s: %d months — skip", slabel, nm); continue
             logger.info("  %s: %d months, %d rows", slabel, nm, len(sub))
             # Re-normalize weights within regime subset so mean(w_tilde) = 1
-            sub = compute_implementability_weights(sub, liq["col"])
+            sub["w_tilde"] = compute_implementability_weights(sub, liq["col"])
             fn = slabel.lower().replace(" ","_").replace("(","").replace(")","").replace("<=","le").replace(">","gt")
             plot_density_comparison(sub, density_features, "w_tilde", rdir / f"density_{fn}.png",
                                    vw_col="liq_me_raw", title_suffix=f" — {slabel}")
