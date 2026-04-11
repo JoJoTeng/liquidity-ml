@@ -183,9 +183,9 @@ def main():
     # ══════════════════════════════════════════════════════
     avg_importance = importances.mean()
 
-    # ── Output 3.1: Importance vs illiquidity-relatedness ──
+    # ── Output 3.2: Importance vs illiquidity-relatedness ──
     logger.info("=" * 60)
-    logger.info("Output 3.1: Feature importance vs illiquidity-relatedness")
+    logger.info("Output 3.2: Feature importance vs illiquidity-relatedness")
     illiq_rho = compute_illiquidity_relatedness(panel, features)
     illiq_rho.to_csv(output_dir / "illiquidity_relatedness.csv")
 
@@ -195,9 +195,9 @@ def main():
     )
     logger.info("Spearman ρ (mean gain vs raw relatedness): %.3f", rho_31)
 
-    # ── Output 3.2: Importance vs liquid-stock R² ──
+    # ── Output 3.1: Importance vs liquid-stock R² ──
     logger.info("=" * 60)
-    logger.info("Output 3.2: Feature importance vs liquid-stock R²")
+    logger.info("Output 3.1: Feature importance vs liquid-stock R²")
     liquid_r2 = compute_univariate_liquid_r2(panel, features, "liq_quintile")
     liquid_r2.to_csv(output_dir / "univariate_liquid_r2.csv")
 
