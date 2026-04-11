@@ -304,6 +304,26 @@ def main():
         q_full = quintile_fama_macbeth(panel_full, all_features, "liq_quintile")
         q_full["coef_table"].to_csv(output_dir / "quintile_fm_coefficients_full_raw.csv", index=False)
 
+        # 2.2b: Full coefficient plots (113 features)
+        logger.info("Output 2.2b: Full quintile coefficient plots (%d features)", len(all_features))
+        plot_quintile_coefficients(
+            q_full, all_features, output_dir / "coefficient_plots_full.png"
+        )
+
+        # 2.4b: Divergence vs heterogeneity scatter (full features)
+        step1_dir = Path(get_output_dir()) / "motivation" / "step1" / args.liquidity
+        div_stats_path = step1_dir / "divergence_stats.csv"
+        if div_stats_path.exists():
+            div_stats_full = pd.read_csv(div_stats_path)
+            rho_full = plot_divergence_vs_heterogeneity(
+                div_stats_full, int_full, all_features,
+                output_dir / "divergence_vs_heterogeneity_full.png",
+            )
+            meta["spearman_rho_full"] = rho_full
+            logger.info("Full divergence vs heterogeneity scatter (ρ=%.3f)", rho_full)
+        else:
+            logger.warning("divergence_stats.csv not found, skipping full scatter")
+
         # Update metadata
         meta["f_test_stat_full"] = int_full["f_test_stat"]
         meta["f_test_pvalue_full"] = int_full["f_test_pvalue"]
