@@ -55,6 +55,13 @@ Thumbs.db
 *.key
 
 # =========================
+# Large prediction parquets (stay local only)
+# =========================
+outputs/motivation/step3_quintile/dvol/*/predictions_*.parquet
+outputs/motivation/step3_restriction/dvol/*/predictions_*.parquet
+outputs/motivation/step3/dvol/fillna_issue.md
+
+# =========================
 # Claude Code (local session state)
 # =========================
 .claude/
