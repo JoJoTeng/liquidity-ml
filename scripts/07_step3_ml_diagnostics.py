@@ -255,12 +255,26 @@ def main():
         qdf = pred_with_hist[pred_with_hist["liq_quintile"] == q_val]
         ss_res = ((qdf["y_true"] - qdf["y_pred"]) ** 2).sum()
         ss_tot = ((qdf["y_true"] - qdf["r_hist"]) ** 2).sum()
-        hist_results.append({"quintile": int(q_val), "pooled_r2_hist": 1 - ss_res / ss_tot if ss_tot > 0 else np.nan})
+        pooled_hist = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+        # Monthly average R² (hist benchmark) per quintile
+        monthly_hist = []
+        for m in qdf["yyyymm"].unique():
+            mdf = qdf[qdf["yyyymm"] == m]
+            m_ss_res = ((mdf["y_true"] - mdf["y_pred"]) ** 2).sum()
+            m_ss_tot = ((mdf["y_true"] - mdf["r_hist"]) ** 2).sum()
+            if m_ss_tot > 0:
+                monthly_hist.append(1 - m_ss_res / m_ss_tot)
+        avg_monthly_hist = np.mean(monthly_hist) if monthly_hist else np.nan
+        hist_results.append({"quintile": int(q_val), "pooled_r2_hist": pooled_hist, "avg_monthly_r2_hist": avg_monthly_hist})
     ss_res_all = ((pred_with_hist["y_true"] - pred_with_hist["y_pred"]) ** 2).sum()
     ss_tot_all = ((pred_with_hist["y_true"] - pred_with_hist["r_hist"]) ** 2).sum()
-    hist_results.append({"quintile": "Full", "pooled_r2_hist": 1 - ss_res_all / ss_tot_all if ss_tot_all > 0 else np.nan})
+    hist_results.append({"quintile": "Full", "pooled_r2_hist": 1 - ss_res_all / ss_tot_all if ss_tot_all > 0 else np.nan, "avg_monthly_r2_hist": np.nan})
     hist_r2_df = pd.DataFrame(hist_results)
     q_r2 = q_r2.merge(hist_r2_df, on="quintile", how="left")
+    # Reorder columns: zero, CS, hist (matching paper Table 3)
+    col_order = ["quintile", "pooled_r2_zero", "pooled_r2_cs", "pooled_r2_hist",
+                 "avg_monthly_r2_zero", "avg_monthly_r2_cs", "avg_monthly_r2_hist", "avg_n_month"]
+    q_r2 = q_r2[[c for c in col_order if c in q_r2.columns]]
     q_r2.to_csv(output_dir / "r2_by_quintile.csv", index=False)
     logger.info("R² by quintile (all 3 benchmarks):\n%s",
                 q_r2[["quintile", "pooled_r2_zero", "pooled_r2_cs", "pooled_r2_hist"]].to_string(index=False))
@@ -273,6 +287,7 @@ def main():
     # Save both benchmark versions
     plot_r2_by_quintile(q_r2, output_dir / "r2_by_quintile_cs.png", r2_col="pooled_r2_cs")
     plot_r2_by_quintile(q_r2, output_dir / "r2_by_quintile_zero.png", r2_col="pooled_r2_zero")
+    plot_r2_by_quintile(q_r2, output_dir / "r2_by_quintile_hist.png", r2_col="pooled_r2_hist")
 
     # LaTeX table — format to match document Table 3 template
     q_r2_tex = q_r2.copy()
