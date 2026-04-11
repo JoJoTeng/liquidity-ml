@@ -64,7 +64,7 @@ def main():
     else:
         mode = "default"
 
-    output_dir = Path(get_output_dir()) / "motivation" / "step3_quintile" / args.liquidity / mode
+    output_dir = Path(get_output_dir()) / "motivation" / "step3_quintile_rerank" / args.liquidity / mode
     output_dir.mkdir(parents=True, exist_ok=True)
     pooled_dir = Path(get_output_dir()) / "motivation" / "step3" / args.liquidity
 
