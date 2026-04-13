@@ -785,6 +785,8 @@ def plot_density_comparison(
 
     x_grid = np.linspace(0, 1, 300)
 
+    kde_data = {}  # collect KDE curve data for CSV export
+
     def _plot_one(ax, feat, panel_data, w_col_name, vw_col_name=None):
         valid = panel_data[feat].notna() & panel_data[w_col_name].notna()
         vals = panel_data.loc[valid, feat].values
@@ -803,6 +805,10 @@ def plot_density_comparison(
         ax.plot(x_grid, deploy_y, "--", color="darkorange", linewidth=2.0,
                 label="Deployment (vol-wt)")
 
+        # Collect KDE data for CSV
+        feat_data = {"x": x_grid, "training_density": np.ones_like(x_grid),
+                     "deployment_density_volvw": deploy_y}
+
         # Shade the gap between training and deployment
         ax.fill_between(x_grid, 1.0, deploy_y, alpha=0.15, color="darkorange")
 
@@ -817,6 +823,9 @@ def plot_density_comparison(
                 mcap_y = kde_mcap(x_grid)
                 ax.plot(x_grid, mcap_y, ":", color="seagreen", linewidth=2.0,
                         label="Value-weighted")
+                feat_data["deployment_density_mcap"] = mcap_y
+
+        kde_data[feat] = feat_data
 
         ax.set_title(feat, fontsize=12, fontweight="bold")
         ax.set_xlim(-0.02, 1.02)
@@ -858,6 +867,22 @@ def plot_density_comparison(
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+    # Export underlying KDE data to CSV
+    csv_rows = []
+    for feat, data in kde_data.items():
+        for i, x_val in enumerate(data["x"]):
+            row = {"feature": feat, "x": x_val,
+                   "training_density": data["training_density"][i],
+                   "deployment_density_volvw": data["deployment_density_volvw"][i]}
+            if "deployment_density_mcap" in data:
+                row["deployment_density_mcap"] = data["deployment_density_mcap"][i]
+            csv_rows.append(row)
+    if csv_rows:
+        csv_path = Path(output_path).with_suffix(".csv")
+        pd.DataFrame(csv_rows).to_csv(csv_path, index=False)
+        logger.info("Saved density data to %s", csv_path)
+
     logger.info("Saved density comparison to %s", output_path)
 
 
@@ -952,6 +977,16 @@ def plot_weight_distribution(
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+    # Export underlying data to CSV
+    csv_data = {"percentile": pcts,
+                "dv_weight": list(pct_vals)}
+    if vw_col is not None and vw_col in panel.columns:
+        csv_data["vw_weight"] = list(vw_pcts)
+    csv_path = Path(output_path).with_suffix(".csv")
+    pd.DataFrame(csv_data).to_csv(csv_path, index=False)
+    logger.info("Saved weight distribution data to %s", csv_path)
+
     logger.info("Saved weight distribution to %s", output_path)
     logger.info(
         "DV weight percentiles: %s",
@@ -1400,6 +1435,14 @@ def plot_divergence_vs_heterogeneity(
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+    # Export underlying scatter data to CSV
+    df["spearman_rho"] = rho
+    df["spearman_pval"] = p_val
+    csv_path = Path(output_path).with_suffix(".csv")
+    df.to_csv(csv_path, index=False)
+    logger.info("Saved divergence vs heterogeneity data to %s", csv_path)
+
     logger.info("Saved divergence vs heterogeneity scatter to %s (ρ=%.3f)", output_path, rho)
     return rho
 
@@ -2769,6 +2812,19 @@ def plot_importance_vs_illiquidity(
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+    # Export underlying scatter data to CSV
+    scatter_df = pd.DataFrame({
+        "feature": imp.index,
+        "avg_importance": imp.values,
+        "neg_illiq_relatedness": rho_neg.values,
+    })
+    scatter_df["is_focal"] = scatter_df["feature"].isin(focal_features)
+    scatter_df["spearman_rho"] = spearman_rho
+    csv_path = Path(output_path).with_suffix(".csv")
+    scatter_df.to_csv(csv_path, index=False)
+    logger.info("Saved importance vs illiquidity data to %s", csv_path)
+
     logger.info("Saved importance vs illiquidity scatter (ρ=%.3f)", spearman_rho)
     return spearman_rho
 
@@ -2803,15 +2859,34 @@ def plot_importance_vs_liquid_r2(
                 textcoords="offset points", xytext=(4, 4),
             )
 
+    from scipy.stats import spearmanr as _spearmanr
+    spearman_rho, _ = _spearmanr(imp.values, r2.values)
+
     ax.set_xlabel(r"$R^2_j$(liquid) — univariate predictive $R^2$ among Q4--Q5 stocks")
     ax.set_ylabel("Ī_j (average XGBoost gain importance)")
-    ax.set_title(r"Feature Importance vs Liquid-Stock Predictive $R^2$")
+    ax.set_title(
+        r"Feature Importance vs Liquid-Stock Predictive $R^2$"
+        f"\n(Spearman ρ = {spearman_rho:.3f}; N = {len(imp)} features)"
+    )
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+    # Export underlying scatter data to CSV
+    scatter_df = pd.DataFrame({
+        "feature": imp.index,
+        "avg_importance": imp.values,
+        "liquid_r2": r2.values,
+    })
+    scatter_df["is_focal"] = scatter_df["feature"].isin(focal_features)
+    scatter_df["spearman_rho"] = spearman_rho
+    csv_path = Path(output_path).with_suffix(".csv")
+    scatter_df.to_csv(csv_path, index=False)
+    logger.info("Saved importance vs liquid R² data to %s", csv_path)
+
     logger.info("Saved importance vs liquid R² scatter")
 
 

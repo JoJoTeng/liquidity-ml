@@ -304,21 +304,76 @@ def main():
         q_full = quintile_fama_macbeth(panel_full, all_features, "liq_quintile")
         q_full["coef_table"].to_csv(output_dir / "quintile_fm_coefficients_full_raw.csv", index=False)
 
-        # 2.2b: Full coefficient plots (113 features)
-        logger.info("Output 2.2b: Full quintile coefficient plots (%d features)", len(all_features))
-        plot_quintile_coefficients(
-            q_full, all_features, output_dir / "coefficient_plots_full.png"
-        )
+        # 2.2b: Coefficient plots for significant features only
+        # Split into pages of 20 features each for readability
+        sig_features = ct_full.loc[ct_full["gamma_t"].abs() > 2, "feature"].tolist()
+        logger.info("Output 2.2b: Coefficient plots for %d significant features", len(sig_features))
+        page_size = 20
+        for page_idx in range(0, len(sig_features), page_size):
+            page_features = sig_features[page_idx:page_idx + page_size]
+            page_num = page_idx // page_size + 1
+            plot_quintile_coefficients(
+                q_full, page_features,
+                output_dir / f"coefficient_plots_full_p{page_num}.png",
+            )
+            logger.info("  Page %d: %d features", page_num, len(page_features))
 
         # 2.4b: Divergence vs heterogeneity scatter (full features)
+        # Label only top 15 features by |γ̄_j|, rest as unlabeled dots
         step1_dir = Path(get_output_dir()) / "motivation" / "step1" / args.liquidity
         div_stats_path = step1_dir / "divergence_stats.csv"
         if div_stats_path.exists():
+            import matplotlib.pyplot as plt
+            from scipy.stats import spearmanr
+
             div_stats_full = pd.read_csv(div_stats_path)
-            rho_full = plot_divergence_vs_heterogeneity(
-                div_stats_full, int_full, all_features,
-                output_dir / "divergence_vs_heterogeneity_full.png",
+            int_table = int_full["coef_table"]
+
+            points = []
+            for feat in all_features:
+                div_row = div_stats_full[div_stats_full["feature"] == feat]
+                int_row = int_table[int_table["feature"] == feat]
+                if div_row.empty or int_row.empty:
+                    continue
+                points.append({
+                    "feature": feat,
+                    "abs_d_bar": div_row.iloc[0]["abs_d_bar"],
+                    "abs_gamma": abs(int_row.iloc[0]["gamma_bar"]),
+                })
+
+            df_scatter = pd.DataFrame(points)
+            rho_full, _ = spearmanr(df_scatter["abs_d_bar"], df_scatter["abs_gamma"])
+
+            # Label features in top 15 by |γ̄_j| OR top 15 by |d̄_j|
+            top_gamma = set(df_scatter.nlargest(15, "abs_gamma")["feature"])
+            top_div = set(df_scatter.nlargest(15, "abs_d_bar")["feature"])
+            label_features = top_gamma | top_div
+
+            fig, ax = plt.subplots(figsize=(10, 8))
+            ax.scatter(df_scatter["abs_d_bar"], df_scatter["abs_gamma"],
+                       s=25, color="steelblue", alpha=0.6, zorder=3)
+
+            for _, row in df_scatter.iterrows():
+                if row["feature"] in label_features:
+                    ax.annotate(
+                        row["feature"],
+                        (row["abs_d_bar"], row["abs_gamma"]),
+                        fontsize=7, textcoords="offset points", xytext=(4, 4),
+                    )
+
+            ax.set_xlabel(r"$|\bar{d}_j|$ (distributional divergence)", fontsize=11)
+            ax.set_ylabel(r"$|\bar{\gamma}_j|$ (predictability heterogeneity)", fontsize=11)
+            ax.set_title(
+                f"Distributional Divergence vs Predictability Heterogeneity\n"
+                f"(Spearman ρ = {rho_full:.3f}; N = {len(df_scatter)} focal characteristics)",
+                fontsize=11,
             )
+            ax.grid(True, alpha=0.3)
+            plt.tight_layout()
+            fig.savefig(output_dir / "divergence_vs_heterogeneity_full.png",
+                        dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
             meta["spearman_rho_full"] = rho_full
             logger.info("Full divergence vs heterogeneity scatter (ρ=%.3f)", rho_full)
         else:

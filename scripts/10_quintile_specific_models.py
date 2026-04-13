@@ -134,6 +134,9 @@ def main():
             qp = pp[pp["liq_quintile"] == q]
             if len(qp) > 0: pooled_r2[q] = pooled_r2_zero(qp)
 
+    # Avg N_train/month per quintile
+    avg_n_train = panel.groupby(["yyyymm", "liq_quintile"]).size().groupby("liq_quintile").mean()
+
     rows = []
     for q in range(1, 6):
         path = output_dir / f"predictions_q{q}.parquet"
@@ -145,17 +148,20 @@ def main():
             n = len(pq)
         r2_pooled = pooled_r2.get(q, np.nan)
         delta = (r2_own - r2_pooled) * 100 if not (np.isnan(r2_own) or np.isnan(r2_pooled)) else np.nan
+        n_train = int(avg_n_train.get(q, 0))
         rows.append({"quintile": f"Q{q}", "r2_pooled_pct": r2_pooled*100 if not np.isnan(r2_pooled) else np.nan,
-                      "r2_own_pct": r2_own*100, "delta_pp": delta, "n_predictions": n})
-        logger.info("Q%d: pooled=%.3f%%, own=%.3f%%, Δ=%.3f pp", q,
-                     r2_pooled*100 if not np.isnan(r2_pooled) else 0, r2_own*100, delta if not np.isnan(delta) else 0)
+                      "r2_own_pct": r2_own*100, "delta_pp": delta, "N_train/month": n_train})
+        logger.info("Q%d: pooled=%.3f%%, own=%.3f%%, Δ=%.3f pp, N_train≈%d", q,
+                     r2_pooled*100 if not np.isnan(r2_pooled) else 0, r2_own*100,
+                     delta if not np.isnan(delta) else 0, n_train)
 
     comp = pd.DataFrame(rows)
     comp.to_csv(output_dir / "r2_comparison.csv", index=False)
 
     # Bar chart
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-    plt.rcParams.update({"font.family": "serif", "font.size": 11})
+    from src.analysis.motivation import _set_academic_style
+    _set_academic_style()
     valid = comp.dropna(subset=["r2_own_pct"])
     if len(valid) > 0:
         fig, ax = plt.subplots(figsize=(8, 5))
@@ -165,11 +171,12 @@ def main():
             ax.bar(x + w/2, valid["r2_own_pct"], w, label="Quintile-specific", color="darkorange", alpha=0.85)
         else:
             ax.bar(x, valid["r2_own_pct"], w, label="Quintile-specific", color="darkorange")
-        ax.axhline(0, color="black", linewidth=0.8)
+        ax.axhline(0, color="black", linewidth=0.6)
         ax.set_xticks(x); ax.set_xticklabels(valid["quintile"].tolist())
-        ax.set_xlabel("Liquidity Quintile"); ax.set_ylabel("OOS R² (%)")
-        ax.set_title("Pooled vs. Quintile-Specific XGBoost: Within-Quintile R²")
-        ax.legend(); plt.tight_layout()
+        ax.set_xlabel("Liquidity Quintile")
+        ax.set_ylabel(r"OOS $R^2$ (\%)")
+        ax.set_title(r"Pooled vs.\ Quintile-Specific XGBoost: Within-Quintile $R^2$")
+        ax.legend(fontsize=10); plt.tight_layout()
         fig.savefig(output_dir / "r2_comparison.png", dpi=150, bbox_inches="tight"); plt.close(fig)
 
     with open(output_dir / "meta.json", "w") as f:

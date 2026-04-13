@@ -139,12 +139,21 @@ def main():
     for mq in [2, 3, 4, 5]:
         models[f"MQ{mq}+"] = output_dir / f"predictions_MQ{mq}+.parquet"
 
+    # Compute avg N_train/month for each restriction level
+    q_counts = panel.groupby(["yyyymm", "liq_quintile"]).size().unstack(fill_value=0)
+    avg_n_train = {}
+    avg_n_train["Mall"] = panel.groupby("yyyymm").size().mean()
+    for mq in [2, 3, 4, 5]:
+        cols = [c for c in q_counts.columns if c >= mq]
+        avg_n_train[f"MQ{mq}+"] = q_counts[cols].sum(axis=1).mean()
+
     # Output 3.8: R² by training universe evaluated on Q4-Q5
     rows_38 = []
     for model_name, pred_path in models.items():
         if not pred_path.exists():
             rows_38.append({"model": model_name, "r2_q45_pct": np.nan, "r2_q4_pct": np.nan,
-                            "r2_q5_pct": np.nan, "r2_full_pct": np.nan})
+                            "r2_q5_pct": np.nan, "r2_full_pct": np.nan,
+                            "N_train/month": avg_n_train.get(model_name, np.nan)})
             continue
         preds = pd.read_parquet(pred_path)
         r2_q45 = r2_for_quintiles(preds, panel, [4, 5])
@@ -152,13 +161,15 @@ def main():
         r2_q5 = r2_for_quintiles(preds, panel, [5])
         r2_full = pooled_r2_zero(preds)
         rows_38.append({"model": model_name, "r2_q45_pct": r2_q45*100, "r2_q4_pct": r2_q4*100,
-                         "r2_q5_pct": r2_q5*100, "r2_full_pct": r2_full*100})
-        logger.info("%s: R²(Q4-Q5)=%.3f%%", model_name, r2_q45*100 if not np.isnan(r2_q45) else 0)
+                         "r2_q5_pct": r2_q5*100, "r2_full_pct": r2_full*100,
+                         "N_train/month": avg_n_train.get(model_name, np.nan)})
+        logger.info("%s: R²(Q4-Q5)=%.3f%%, N_train/month≈%.0f", model_name,
+                     r2_q45*100 if not np.isnan(r2_q45) else 0, avg_n_train.get(model_name, 0))
 
     comp38 = pd.DataFrame(rows_38)
     comp38.to_csv(output_dir / "restriction_comparison.csv", index=False)
 
-    # Output 3.9: R² by quintile × training universe
+    # Output 3.9: R² by quintile × training universe (Table 7 format)
     rows_39 = []
     for model_name, pred_path in models.items():
         if not pred_path.exists(): continue
@@ -166,18 +177,31 @@ def main():
         for q in range(1, 6):
             r2_q = r2_for_quintiles(preds, panel, [q])
             rows_39.append({"model": model_name, "quintile": f"Q{q}", "r2_pct": r2_q * 100})
+        r2_full = pooled_r2_zero(preds)
+        rows_39.append({"model": model_name, "quintile": "Full sample", "r2_pct": r2_full * 100})
         r2_q45 = r2_for_quintiles(preds, panel, [4, 5])
-        rows_39.append({"model": model_name, "quintile": "Q4-Q5", "r2_pct": r2_q45 * 100})
+        rows_39.append({"model": model_name, "quintile": "Q4-Q5 combined", "r2_pct": r2_q45 * 100})
 
     comp39 = pd.DataFrame(rows_39)
-    comp39.to_csv(output_dir / "restriction_by_quintile.csv", index=False)
+
+    # Pivot to Table 7 format: rows=quintile, columns=model
+    quintile_order = ["Q1", "Q2", "Q3", "Q4", "Q5", "Full sample", "Q4-Q5 combined"]
+    quintile_labels = {"Q1": "Q1 (Illiquid)", "Q5": "Q5 (Liquid)"}
+    pivot = comp39.pivot(index="quintile", columns="model", values="r2_pct")
+    model_order = [m for m in ["Mall", "MQ2+", "MQ3+", "MQ4+", "MQ5+"] if m in pivot.columns]
+    pivot = pivot[model_order]
+    pivot = pivot.reindex([q for q in quintile_order if q in pivot.index])
+    pivot.index = [quintile_labels.get(q, q) for q in pivot.index]
+    pivot = pivot.round(3)
+    pivot.to_csv(output_dir / "restriction_by_quintile.csv")
     if len(comp39) > 0:
         pivot = comp39.pivot(index="quintile", columns="model", values="r2_pct")
         logger.info("R² by quintile × model:\n%s", pivot.to_string())
 
     # Output 3.7: Restriction curve
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-    plt.rcParams.update({"font.family": "serif", "font.size": 11})
+    from src.analysis.motivation import _set_academic_style
+    _set_academic_style()
     valid = comp38.dropna(subset=["r2_q45_pct"])
     if len(valid) > 1:
         fig, ax = plt.subplots(figsize=(8, 5))
@@ -185,11 +209,12 @@ def main():
         x = np.arange(len(x_labels))
         ax.plot(x, valid["r2_q45_pct"], "o-", color="steelblue", linewidth=2, markersize=8)
         for xi, yi, lab in zip(x, valid["r2_q45_pct"], x_labels):
-            ax.annotate(f"{yi:.3f}%", (xi, yi), textcoords="offset points", xytext=(0, 10), ha="center", fontsize=9)
-        ax.axhline(0, color="black", linewidth=0.8, linestyle="-")
+            ax.annotate(f"{yi:.3f}%", (xi, yi), textcoords="offset points", xytext=(0, 12), ha="center", fontsize=10)
+        ax.axhline(0, color="black", linewidth=0.6, linestyle="-")
         ax.set_xticks(x); ax.set_xticklabels(x_labels)
-        ax.set_xlabel("Training Universe"); ax.set_ylabel("OOS R² on Q4-Q5 (%)")
-        ax.set_title("Restriction Curve: Liquid-Stock R² as Training Universe Narrows")
+        ax.set_xlabel("Training Universe")
+        ax.set_ylabel(r"OOS $R^2$ on Q4--Q5 (\%)")
+        ax.set_title("Restriction Curve: Liquid-Stock $R^2$ as Training Universe Narrows")
         plt.tight_layout()
         fig.savefig(output_dir / "restriction_curve.png", dpi=150, bbox_inches="tight"); plt.close(fig)
         logger.info("Saved restriction_curve.png")

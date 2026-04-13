@@ -209,7 +209,7 @@ def main():
     # ── Output 3.3: Illiquidity cluster importance aggregate ──
     logger.info("=" * 60)
     logger.info("Output 3.3: Illiquidity cluster importance aggregate")
-    illiq_threshold = 0.3
+    illiq_threshold = 0.5
     illiq_mask = illiq_rho.abs() > illiq_threshold
     total_importance = avg_importance.sum()
     illiq_importance = avg_importance[illiq_mask].sum()
@@ -289,35 +289,41 @@ def main():
     plot_r2_by_quintile(q_r2, output_dir / "r2_by_quintile_zero.png", r2_col="pooled_r2_zero")
     plot_r2_by_quintile(q_r2, output_dir / "r2_by_quintile_hist.png", r2_col="pooled_r2_hist")
 
-    # LaTeX table — format to match document Table 3 template
-    q_r2_tex = q_r2.copy()
-    q_r2_tex["pooled_r2_cs"] = (q_r2_tex["pooled_r2_cs"] * 100).round(3)
-    q_r2_tex["pooled_r2_zero"] = (q_r2_tex["pooled_r2_zero"] * 100).round(3)
-    q_r2_tex["avg_monthly_r2_cs"] = (q_r2_tex["avg_monthly_r2_cs"] * 100).round(3)
-    q_r2_tex["avg_monthly_r2_zero"] = (q_r2_tex["avg_monthly_r2_zero"] * 100).round(3)
-    q_r2_tex["avg_n_month"] = q_r2_tex["avg_n_month"].round(0)
-
-    # Format quintile labels to match document
+    # ── Output 3.5 Table: R² by quintile (matching paper Table 3) ──
     quintile_labels = {
         1: "Q1 (Illiquid)", 2: "Q2", 3: "Q3", 4: "Q4",
         5: "Q5 (Liquid)", "Full": "Full sample",
     }
-    q_r2_tex["quintile"] = q_r2_tex["quintile"].map(quintile_labels)
-
-    q_r2_tex = q_r2_tex.rename(columns={
+    q_r2_table = q_r2[["quintile", "pooled_r2_zero", "pooled_r2_cs", "pooled_r2_hist", "avg_n_month"]].copy()
+    q_r2_table["quintile"] = q_r2_table["quintile"].map(quintile_labels)
+    q_r2_table["pooled_r2_zero"] = (q_r2_table["pooled_r2_zero"] * 100).round(3)
+    q_r2_table["pooled_r2_cs"] = (q_r2_table["pooled_r2_cs"] * 100).round(3)
+    q_r2_table["pooled_r2_hist"] = (q_r2_table["pooled_r2_hist"] * 100).round(3)
+    q_r2_table["avg_n_month"] = q_r2_table["avg_n_month"].round(0).astype(int)
+    # CSV: human-readable column names
+    q_r2_csv = q_r2_table.rename(columns={
         "quintile": "Quintile",
-        "pooled_r2_cs": r"Pooled $R^2_{CS}$ (\%)",
-        "pooled_r2_zero": r"Pooled $R^2_{0}$ (\%)",
-        "avg_monthly_r2_cs": r"Avg.\ Monthly $R^2_{CS}$ (\%)",
-        "avg_monthly_r2_zero": r"Avg.\ Monthly $R^2_{0}$ (\%)",
+        "pooled_r2_zero": "R2_zero (%)",
+        "pooled_r2_cs": "R2_CS (%)",
+        "pooled_r2_hist": "R2_hist (%)",
+        "avg_n_month": "Avg N/month",
+    })
+    q_r2_csv.to_csv(output_dir / "table3_r2_by_quintile.csv", index=False)
+    logger.info("Table 3 (Output 3.5):\n%s", q_r2_csv.to_string(index=False))
+
+    # LaTeX: math notation
+    q_r2_tex = q_r2_table.rename(columns={
+        "quintile": "Quintile",
+        "pooled_r2_zero": r"$R^2_{\mathrm{zero}}$ (\%)",
+        "pooled_r2_cs": r"$R^2_{\mathrm{CS}}$ (\%)",
+        "pooled_r2_hist": r"$R^2_{\mathrm{hist}}$ (\%)",
         "avg_n_month": r"Avg.\ $N$/month",
     })
     q_r2_tex.to_latex(
         tex_dir / "R2ByQuintileML.tex",
-        index=False,
-        escape=False,
-        caption="OOS $R^2$ by Liquidity Quintile (Baseline XGBoost)",
-        label="tab:r2_by_quintile_ml",
+        index=False, escape=False,
+        caption="OOS $R^2$ by Liquidity Quintile",
+        label="tab:r2_by_quintile",
     )
 
     # ── Output 3.5: Utility-weighted R² ──
@@ -354,8 +360,30 @@ def main():
         r2_results["gap_mcap_zero"] * 100,
     )
 
+    # Add full-sample R²_hist
+    full_row = q_r2[q_r2["quintile"] == "Full"]
+    if not full_row.empty and "pooled_r2_hist" in full_row.columns:
+        r2_results["r2_standard_hist"] = float(full_row.iloc[0]["pooled_r2_hist"])
+
     with open(output_dir / "utility_weighted_r2.json", "w") as f:
         json.dump(r2_results, f, indent=2)
+
+    # ── Output 3.6 Table: Standard vs Utility-Weighted R² (matching paper Table 4) ──
+    table4_rows = [
+        {"Metric": "Standard (equal-weighted)", "Pooled R² (%)": round(r2_results["r2_standard_zero"] * 100, 3)},
+        {"Metric": "Utility-weighted (dollar-volume)", "Pooled R² (%)": round(r2_results["r2_weighted_zero"] * 100, 3)},
+        {"Metric": "Utility-weighted (market-cap)", "Pooled R² (%)": round(r2_results["r2_weighted_mcap_zero"] * 100, 3)},
+        {"Metric": "Gap (standard − dollar-volume)", "Pooled R² (%)": round(r2_results["gap_zero"] * 100, 3)},
+    ]
+    table4 = pd.DataFrame(table4_rows)
+    table4.to_csv(output_dir / "table4_utility_weighted_r2.csv", index=False)
+    table4.to_latex(
+        tex_dir / "UtilityWeightedR2.tex",
+        index=False, escape=False,
+        caption="Standard vs.\\ Utility-Weighted OOS $R^2$",
+        label="tab:utility_weighted_r2",
+    )
+    logger.info("Table 4 (Output 3.6):\n%s", table4.to_string(index=False))
 
     # Monthly utility-weighted R² time series
     monthly_uw_r2 = compute_monthly_utility_weighted_r2(predictions, panel)
@@ -369,6 +397,7 @@ def main():
         "r2_weighted_cs": r2_results["r2_weighted_cs"],
         "r2_standard_zero": r2_results["r2_standard_zero"],
         "r2_weighted_zero": r2_results["r2_weighted_zero"],
+        "r2_standard_hist": r2_results.get("r2_standard_hist", np.nan),
         "n_oos_months": len(importances),
         "n_predictions": len(predictions),
         "n_features": len(features),
