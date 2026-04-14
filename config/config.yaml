@@ -354,31 +354,11 @@ liquidity:
 # Weighting Schemes (Equations 11–14)
 # ----------------------------------------------------------
 weighting:
-  primary: "softmax_rank" # Scheme A: softmax on liquidity rank, λ=2.0
-
-  bid_ask_spread: # Eq. 13 (Robustness — spread only)
-    spread_col: "BidAskSpread" # from CZ predictors (Corwin-Schultz, raw scale)
-    spread_scale: 1.0 # Use raw CZ spread for training weights (no downscaling)
-
-  tc_stock: # Eq. 13 extended — full TC_stock (spread + volatility + volume)
-    kappa: 1.0 # scaling: w_i = 1/(1 + kappa * TC_stock_i)
-    lambda_market_impact: 0.1 # Frazzini et al. (2018)
-    spread_col: "BidAskSpread"
-    sigma_col: "daily_sigma"
-    adv_col: "dvol_21d"
-
-  softmax_rank: # Eq. 11 (Robustness)
-    lambda: 2.0
-
-  linear_dolvol: {} # Eq. 12 (Robustness)
-
-  quintile_discrete: # Eq. 14 (Robustness)
-    weights:
-      Q1: 0.1
-      Q2: 0.3
-      Q3: 1.0
-      Q4: 3.0
-      Q5: 5.0
+  # LiquidityML v3: two weight families
+  # Family 1: dolvol - Eq.21 DolVol/median(DolVol), AUM-independent
+  # Family 2: tc - Eq.23 exp(-alpha*TC), AUM-dependent
+  # Old schemes (softmax_rank, quintile_discrete, bid_ask_spread) removed.
+  primary: "dolvol"
 
 # ----------------------------------------------------------
 # ML Models (3 models, each run with standard + weighted)
@@ -387,8 +367,17 @@ models:
   # Active models run in the 2×2 framework independently.
   # Neural network pending fix (BatchNorm single-sample crash).
   run_models:
+    - elastic_net
     - xgboost
-    - random_forest
+    - neural_network
+
+  elastic_net:
+    alpha: 0.001
+    l1_ratio: 0.5
+    max_iter: 10000
+    search_space:
+      alpha: [0.00001, 0.0001, 0.001, 0.01, 0.1]
+    n_random_search: 5  # full grid = 5, all evaluated
 
   xgboost:
     n_estimators: 1000
@@ -404,35 +393,24 @@ models:
       learning_rate: [0.001, 0.01, 0.05]
       n_estimators: [300, 500, 1000]
       min_child_weight: [10, 50, 100]
-    n_random_search: 108  # full grid = 108 combos, all evaluated
-
-  random_forest:
-    n_estimators: 300
-    max_depth: 6
-    max_features: "sqrt"
-    min_samples_leaf: 100
-    n_jobs: -1
-    search_space:
-      n_estimators: [100, 300, 500]
-      max_depth: [4, 6, 8]
-      min_samples_leaf: [50, 100, 200]
+    n_random_search: 108  # full grid = 81 combos, all evaluated
 
   neural_network:
-    hidden_layers: [64, 32, 16]
+    hidden_layers: [32, 16, 8]  # GKX (2020) NN3 — best architecture
     activation: "relu"
-    dropout: 0.5
+    batch_norm: true             # Algorithm 7 — after ReLU
+    dropout: 0.0                 # not used by GKX
+    batch_size: 10000            # Table A.5
+    epochs: 100                  # Table A.5
+    patience: 5                  # Table A.5
     learning_rate: 0.001
-    batch_size: 256
-    epochs: 100
-    patience: 20
-    weight_decay: 0.0001
+    l1_penalty: 0.00001
+    weight_decay: 0.0
+    n_ensemble_seeds: 1          # no ensemble
     search_space:
-      hidden_layers:
-        - [64, 32]
-        - [64, 32, 16]
-        - [128, 64, 32]
-      dropout: [0.3, 0.5]
-      learning_rate: [0.001, 0.0005]
+      learning_rate: [0.001, 0.01]
+      l1_penalty: [0.00001, 0.001]
+    # Total grid: 2 LR x 2 L1 = 4 combos, best selected via validation
 
 # ----------------------------------------------------------
 # Training Protocol
@@ -446,8 +424,8 @@ training:
   oos_end: 202412 # December 2024
 
   preprocessing:
-    normalization: "rank_quantile" # rank → [-1, 1] (GKX 2020 convention)
-    missing_fill: "zero"
+    normalization: "rank_quantile" # rank -> [0, 1] via rank(pct=True)
+    missing_fill: 0.5 # midpoint of [0, 1]
 
 # ----------------------------------------------------------
 # Portfolio Construction
@@ -456,10 +434,9 @@ portfolio:
   n_quantiles: 10
   long_quantile: 10
   short_quantile: 1
-  position_cap: 0.05
-  min_liquidity_pctile: 0.40
   rebalance_frequency: "monthly"
-  buffer_quantiles: 0 # No buffer — full rebalance each month
+  # No liquidity filter - TC-penalised sort (Column 2) replaces it.
+  # No position cap - equal-dollar within each decile leg.
 
 # ----------------------------------------------------------
 # Transaction Cost Model
@@ -472,10 +449,9 @@ transaction_costs:
   sigma_col: "daily_sigma" # 21-day rolling daily return volatility
   adv_col: "dvol_21d" # average daily dollar volume
   aum_scenarios:
-    - 100_000_000
-    - 500_000_000
-    - 1_000_000_000
-    - 5_000_000_000
+    - 100_000_000   # $100M - small fund
+    - 500_000_000   # $500M - primary specification
+    - 1_000_000_000 # $1B - large fund
 
 # ----------------------------------------------------------
 # Statistical Inference
@@ -491,6 +467,7 @@ inference:
     capm: ["Mkt-RF"]
     ff3: ["Mkt-RF", "SMB", "HML"]
     ff5: ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
+    ff5_mom: ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom"]  # Primary for v3
 
 # ----------------------------------------------------------
 # SHAP Analysis (Hypothesis 2)

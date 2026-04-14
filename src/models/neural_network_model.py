@@ -1,66 +1,86 @@
 """
-Feedforward Neural Network Return Predictor (PyTorch)
-=====================================================
+Feedforward Neural Network Return Predictor (TensorFlow/Keras)
+===============================================================
 Multi-layer feedforward network for stock return prediction.
 Implements weighted MSE loss for implementability-weighted training.
 
-Architecture follows Gu, Kelly, Xiu (2020):
-  Input → [Linear → BatchNorm → ReLU → Dropout] × L → Output
+Architecture follows Gu, Kelly, Xiu (2020) NN3:
+  Input -> [Dense -> BatchNorm -> ReLU] x 3 -> Output
+  Hidden layers: 32, 16, 8 (geometric pyramid rule)
+
+Regularisation stack (GKX 2020):
+  1. L1 penalty on weights (sparsity)
+  2. Learning rate shrinkage via Adam
+  3. Early stopping (halt when validation error rises)
+  4. Batch normalisation (stabilise activations)
 
 Key implementation for weighted training:
-  Standard MSE: L = (1/N) Σ (y_i - ŷ_i)²
-  Weighted MSE: L = (1/N) Σ w_i · (y_i - ŷ_i)²
-
-  where w_i = liquidity weight (normalized to mean 1).
+  Standard MSE: L = (1/N) sum (y_i - y_hat_i)^2
+  Weighted MSE: L = (1/N) sum w_i * (y_i - y_hat_i)^2
 """
 
 from __future__ import annotations
 
-import copy
 import itertools
 import logging
+import os
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
 
 from src.models.base import BaseReturnPredictor
 
 logger = logging.getLogger(__name__)
 
+# Suppress TF logs unless explicitly wanted
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 
 def _build_model(
     input_dim: int,
     hidden_layers: list[int],
-    dropout: float = 0.5,
-    weight_decay: float = 1e-4,
-) -> nn.Sequential:
-    """Build a PyTorch Sequential feedforward network.
+    dropout: float = 0.0,
+    batch_norm: bool = True,
+    l1_penalty: float = 0.0,
+    learning_rate: float = 0.001,
+):
+    """Build a Keras Sequential feedforward network.
 
-    Architecture per hidden layer:
-        Linear → BatchNorm → ReLU → Dropout
+    Architecture per hidden layer (GKX 2020):
+        Dense -> BatchNormalization -> ReLU [-> Dropout if dropout > 0]
     """
-    layers: list[nn.Module] = []
-    in_features = input_dim
+    import tensorflow as tf
+
+    regularizer = tf.keras.regularizers.l1(l1_penalty) if l1_penalty > 0 else None
+
+    model = tf.keras.Sequential()
+    model.add(tf.keras.layers.InputLayer(shape=(input_dim,)))
 
     for units in hidden_layers:
-        layers.append(nn.Linear(in_features, units))
-        layers.append(nn.BatchNorm1d(units))
-        layers.append(nn.ReLU())
-        layers.append(nn.Dropout(dropout))
-        in_features = units
+        model.add(tf.keras.layers.Dense(
+            units,
+            kernel_regularizer=regularizer,
+            use_bias=True,
+        ))
+        if batch_norm:
+            model.add(tf.keras.layers.BatchNormalization())
+        model.add(tf.keras.layers.Activation("relu"))
+        if dropout > 0:
+            model.add(tf.keras.layers.Dropout(dropout))
 
-    # Output: single scalar prediction
-    layers.append(nn.Linear(in_features, 1))
+    # Output: single scalar prediction (no activation)
+    model.add(tf.keras.layers.Dense(1, kernel_regularizer=regularizer))
 
-    return nn.Sequential(*layers)
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        loss="mse",
+    )
+    return model
 
 
 class NeuralNetPredictor(BaseReturnPredictor):
-    """Feedforward neural network with weighted MSE training (PyTorch)."""
+    """Feedforward neural network with weighted MSE training (TensorFlow/Keras)."""
 
     def __init__(self, config: dict[str, Any] | None = None, seed: int = 42):
         from src.config import load_config
@@ -68,8 +88,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
         default_cfg = load_config()["models"]["neural_network"]
         cfg = {**default_cfg, **(config or {})}
         super().__init__(name="neural_network", config=cfg, seed=seed)
-        self.model: nn.Sequential | None = None
-        self.device = torch.device("cpu")
+        self.model = None  # tf.keras.Sequential
 
     def fit(
         self,
@@ -82,166 +101,134 @@ class NeuralNetPredictor(BaseReturnPredictor):
     ) -> "NeuralNetPredictor":
         """Train feedforward NN with optional implementability weights.
 
-        Weighted MSE: loss_i = w_i * (y_i - ŷ_i)²
-
-        When sample_weight_val is provided, the validation loss is also
-        weighted, ensuring training and early stopping optimize the same
-        objective.
-
         Uses early stopping + ReduceLROnPlateau scheduling.
         """
-        # Reproducibility
-        torch.manual_seed(self.seed)
-        np.random.seed(self.seed)
+        import tensorflow as tf
 
         cfg = self.config
-        input_dim = X_train.shape[1]
-        batch_size = cfg["batch_size"]
-        epochs = cfg["epochs"]
-        patience = cfg.get("patience", 10)
-        lr_patience = 5
+        n_ensemble = cfg.get("n_ensemble_seeds", 1)
 
-        # Build model
-        self.model = _build_model(
-            input_dim=input_dim,
-            hidden_layers=cfg["hidden_layers"],
-            dropout=cfg["dropout"],
-            weight_decay=cfg.get("weight_decay", 1e-4),
-        ).to(self.device)
+        self._ensemble_models = []
+        all_val_losses = []
 
-        # Optimizer with L2 regularization (weight_decay)
-        optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=cfg["learning_rate"],
-            weight_decay=cfg.get("weight_decay", 1e-4),
-        )
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=lr_patience, min_lr=1e-6
-        )
+        for seed_i in range(n_ensemble):
+            model_seed = self.seed + seed_i
+            tf.keras.utils.set_random_seed(model_seed)
 
-        # Prepare tensors
-        X_t = torch.tensor(X_train, dtype=torch.float32, device=self.device)
-        y_t = torch.tensor(y_train, dtype=torch.float32, device=self.device)
-        w_t = (
-            torch.tensor(sample_weight, dtype=torch.float32, device=self.device)
-            if sample_weight is not None
-            else None
-        )
-
-        has_val = X_val is not None and y_val is not None
-        if has_val:
-            X_v = torch.tensor(X_val, dtype=torch.float32, device=self.device)
-            y_v = torch.tensor(y_val, dtype=torch.float32, device=self.device)
-            w_v = (
-                torch.tensor(sample_weight_val, dtype=torch.float32, device=self.device)
-                if sample_weight_val is not None
-                else None
+            model_i, val_loss_i, n_epochs_i = self._train_single(
+                X_train, y_train, X_val, y_val,
+                sample_weight, sample_weight_val, cfg, model_seed,
             )
+            self._ensemble_models.append(model_i)
+            all_val_losses.append(val_loss_i)
 
-        # Training loop
-        best_val_loss = float("inf")
-        best_state = None
-        epochs_no_improve = 0
-        n_epochs_run = 0
-
-        for epoch in range(epochs):
-            self.model.train()
-            # Shuffle training data
-            perm = torch.randperm(len(X_t))
-            epoch_loss = 0.0
-            n_batches = 0
-
-            for start in range(0, len(X_t), batch_size):
-                idx = perm[start : start + batch_size]
-                if len(idx) < 2:
-                    continue  # BatchNorm requires ≥2 samples
-                X_batch = X_t[idx]
-                y_batch = y_t[idx]
-
-                optimizer.zero_grad()
-                pred = self.model(X_batch).squeeze(-1)
-                residuals = (pred - y_batch) ** 2
-
-                if w_t is not None:
-                    loss = (w_t[idx] * residuals).mean()
-                else:
-                    loss = residuals.mean()
-
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
-                n_batches += 1
-
-            avg_train_loss = epoch_loss / max(n_batches, 1)
-            n_epochs_run = epoch + 1
-
-            # Validation
-            if has_val:
-                val_loss = self._compute_val_loss(X_v, y_v, w_v)
-                scheduler.step(val_loss)
-
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    best_state = copy.deepcopy(self.model.state_dict())
-                    epochs_no_improve = 0
-                else:
-                    epochs_no_improve += 1
-
-                if epochs_no_improve >= patience:
-                    break
-
-            # Progress logging every 10 epochs
-            if (epoch + 1) % 10 == 0 or epoch == 0:
-                val_str = f", val_loss={val_loss:.6f}" if has_val else ""
-                logger.debug(
-                    "Epoch %d/%d: train_loss=%.6f%s",
-                    epoch + 1, epochs, avg_train_loss, val_str,
+            if n_ensemble > 1:
+                logger.info(
+                    "  Ensemble member %d/%d: val_loss=%.6f, epochs=%d",
+                    seed_i + 1, n_ensemble, val_loss_i, n_epochs_i,
                 )
 
-        # Restore best weights
-        if best_state is not None:
-            self.model.load_state_dict(best_state)
-
+        self.model = self._ensemble_models[0]
         self.is_fitted = True
 
-        # Log summary
         weighted_str = "weighted" if sample_weight is not None else "standard"
-        val_str = f", val_loss={best_val_loss:.6f}" if has_val else ""
         logger.info(
-            "NeuralNet %s training: %d epochs, hidden=%s, "
-            "train_loss=%.6f%s, shape %s",
+            "NeuralNet %s training: %d ensemble members, hidden=%s, "
+            "mean_val_loss=%.6f, shape %s",
             weighted_str,
-            n_epochs_run,
+            n_ensemble,
             cfg["hidden_layers"],
-            avg_train_loss,
-            val_str,
+            np.mean(all_val_losses),
             X_train.shape,
         )
         return self
 
-    @torch.no_grad()
-    def _compute_val_loss(
+    def _train_single(
         self,
-        X_v: torch.Tensor,
-        y_v: torch.Tensor,
-        w_v: torch.Tensor | None,
-    ) -> float:
-        """Compute (optionally weighted) MSE on validation set."""
-        self.model.eval()
-        pred = self.model(X_v).squeeze(-1)
-        residuals = (pred - y_v) ** 2
-        if w_v is not None:
-            return (w_v * residuals).mean().item()
-        return residuals.mean().item()
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray | None,
+        y_val: np.ndarray | None,
+        sample_weight: np.ndarray | None,
+        sample_weight_val: np.ndarray | None,
+        cfg: dict,
+        seed: int,
+    ) -> tuple:
+        """Train a single network. Returns (model, best_val_loss, n_epochs)."""
+        import tensorflow as tf
 
-    @torch.no_grad()
+        tf.keras.utils.set_random_seed(seed)
+
+        input_dim = X_train.shape[1]
+        batch_size = cfg["batch_size"]
+        epochs = cfg["epochs"]
+        patience = cfg.get("patience", 5)
+
+        model = _build_model(
+            input_dim=input_dim,
+            hidden_layers=cfg["hidden_layers"],
+            dropout=cfg.get("dropout", 0.0),
+            batch_norm=cfg.get("batch_norm", True),
+            l1_penalty=cfg.get("l1_penalty", 0.0),
+            learning_rate=cfg.get("learning_rate", 0.001),
+        )
+
+        # Callbacks
+        callbacks = [
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss", factor=0.5, patience=3, min_lr=1e-6,
+            ),
+        ]
+
+        has_val = X_val is not None and y_val is not None
+        if has_val:
+            callbacks.append(
+                tf.keras.callbacks.EarlyStopping(
+                    monitor="val_loss",
+                    patience=patience,
+                    restore_best_weights=True,
+                )
+            )
+            validation_data = (X_val.astype(np.float32), y_val.astype(np.float32))
+            if sample_weight_val is not None:
+                validation_data = (
+                    X_val.astype(np.float32),
+                    y_val.astype(np.float32),
+                    sample_weight_val.astype(np.float32),
+                )
+        else:
+            validation_data = None
+
+        history = model.fit(
+            X_train.astype(np.float32),
+            y_train.astype(np.float32),
+            sample_weight=sample_weight.astype(np.float32) if sample_weight is not None else None,
+            validation_data=validation_data,
+            epochs=epochs,
+            batch_size=min(batch_size, len(X_train)),
+            callbacks=callbacks,
+            verbose=0,
+        )
+
+        n_epochs_run = len(history.history["loss"])
+        best_val_loss = (
+            min(history.history["val_loss"]) if has_val else history.history["loss"][-1]
+        )
+
+        return model, best_val_loss, n_epochs_run
+
     def predict(self, X: np.ndarray) -> np.ndarray:
+        """Predict using ensemble average."""
         if not self.is_fitted:
             raise RuntimeError("Model not fitted. Call .fit() first.")
-        self.model.eval()
-        X_t = torch.tensor(X, dtype=torch.float32, device=self.device)
-        preds = self.model(X_t).squeeze(-1)
-        return preds.cpu().numpy()
+
+        ensemble = getattr(self, "_ensemble_models", [self.model])
+        all_preds = []
+        for m in ensemble:
+            p = m.predict(X.astype(np.float32), verbose=0).flatten()
+            all_preds.append(p)
+
+        return np.mean(all_preds, axis=0)
 
     def get_feature_importance(
         self, feature_names: list[str] | None = None
@@ -250,24 +237,61 @@ class NeuralNetPredictor(BaseReturnPredictor):
         if not self.is_fitted:
             raise RuntimeError("Model not fitted.")
 
-        # First Linear layer
-        first_linear = None
-        for module in self.model.modules():
-            if isinstance(module, nn.Linear):
-                first_linear = module
+        # Find first Dense layer
+        first_dense = None
+        for layer in self.model.layers:
+            if "dense" in layer.name.lower() and hasattr(layer, "kernel"):
+                first_dense = layer
                 break
 
-        if first_linear is None:
-            raise RuntimeError("No Linear layer found.")
+        if first_dense is None:
+            raise RuntimeError("No Dense layer found.")
 
-        # Sum absolute weights across output neurons → (input_dim,)
-        weights = first_linear.weight.detach().cpu().numpy()  # (out, in)
-        importance = np.abs(weights).sum(axis=0)
+        weights = first_dense.kernel.numpy()  # shape: (input_dim, units)
+        importance = np.abs(weights).sum(axis=1)
 
         if feature_names is None:
             feature_names = [f"f{i}" for i in range(len(importance))]
 
         return pd.Series(importance, index=feature_names).sort_values(ascending=False)
+
+    def get_permutation_importance(
+        self,
+        X_test: np.ndarray,
+        y_test: np.ndarray,
+        feature_names: list[str] | None = None,
+        n_repeats: int = 10,
+        seed: int | None = None,
+    ) -> pd.Series:
+        """Compute permutation importance on test data."""
+        from sklearn.inspection import permutation_importance as sklearn_perm_importance
+
+        if not self.is_fitted:
+            raise RuntimeError("Model not fitted.")
+        if seed is None:
+            seed = self.seed
+
+        # Wrap for sklearn API
+        class _SklearnWrapper:
+            def __init__(self, model):
+                self._model = model
+
+            def predict(self, X):
+                return self._model.predict(X.astype(np.float32), verbose=0).flatten()
+
+        wrapper = _SklearnWrapper(self.model)
+        result = sklearn_perm_importance(
+            wrapper,
+            X_test.astype(np.float32),
+            y_test,
+            n_repeats=n_repeats,
+            random_state=seed,
+            scoring="neg_mean_squared_error",
+        )
+        importances = result.importances_mean
+        if feature_names is None:
+            feature_names = [f"f{i}" for i in range(len(importances))]
+        return pd.Series(importances, index=feature_names, name="perm_importance")
 
     def get_shap_values(
         self,
@@ -276,7 +300,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
         feature_names: list[str] | None = None,
         config: dict[str, Any] | None = None,
     ) -> pd.DataFrame:
-        """Compute SHAP values using DeepExplainer (fallback: KernelExplainer)."""
+        """Compute SHAP values using KernelExplainer (works with any Keras model)."""
         import shap
 
         if not self.is_fitted:
@@ -290,6 +314,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
         cfg = config or {}
         n_bg = cfg.get("background_samples", 100)
         max_test = cfg.get("max_test_samples", None)
+        use_kernel = cfg.get("use_kernel_fallback", True)
 
         # Subsample background
         if len(X_background) > n_bg:
@@ -308,28 +333,27 @@ class NeuralNetPredictor(BaseReturnPredictor):
         else:
             X_explain = X_test.astype(np.float32)
 
-        # Try DeepExplainer first, fall back to KernelExplainer
-        self.model.eval()
+        # Try DeepExplainer first (TF2 support varies), fall back to Kernel
+        sv = None
         try:
-            bg_tensor = torch.tensor(X_bg, dtype=torch.float32, device=self.device)
-            explain_tensor = torch.tensor(X_explain, dtype=torch.float32, device=self.device)
-            explainer = shap.DeepExplainer(self.model, bg_tensor)
-            sv = explainer.shap_values(explain_tensor)
-        except Exception:
-            logger.info("DeepExplainer failed, falling back to KernelExplainer")
+            explainer = shap.DeepExplainer(self.model, X_bg)
+            sv = explainer.shap_values(X_explain)
+        except Exception as e:
+            if use_kernel:
+                logger.info("DeepExplainer failed (%s), using KernelExplainer", e)
 
-            def predict_fn(x):
-                with torch.no_grad():
-                    t = torch.tensor(x, dtype=torch.float32, device=self.device)
-                    return self.model(t).squeeze(-1).cpu().numpy()
+                def predict_fn(x):
+                    return self.model.predict(x.astype(np.float32), verbose=0).flatten()
 
-            explainer = shap.KernelExplainer(predict_fn, X_bg)
-            sv = explainer.shap_values(X_explain, nsamples=100)
+                explainer = shap.KernelExplainer(predict_fn, X_bg)
+                sv = explainer.shap_values(X_explain, nsamples=100)
+            else:
+                raise RuntimeError(
+                    f"DeepExplainer failed and KernelExplainer fallback is disabled: {e}"
+                )
 
         if isinstance(sv, list):
             sv = sv[0]
-        if isinstance(sv, torch.Tensor):
-            sv = sv.cpu().numpy()
 
         # Pad back to full test size if subsampled
         if explain_idx is not None:
@@ -367,7 +391,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
         best_params = {}
 
         for i, params in enumerate(param_grid):
-            trial_config = {**self.config, **params}
+            trial_config = {**self.config, **params, "n_ensemble_seeds": 1}
             model = NeuralNetPredictor(config=trial_config, seed=self.seed)
             model.fit(X_train, y_train, X_val, y_val, sample_weight, sample_weight_val)
             preds = model.predict(X_val)
@@ -379,7 +403,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
             )
 
             logger.info(
-                "  Combo %d/%d: %s → MSE=%.6f",
+                "  Combo %d/%d: %s -> MSE=%.6f",
                 i + 1, len(param_grid),
                 {k: params[k] for k in keys}, mse,
             )

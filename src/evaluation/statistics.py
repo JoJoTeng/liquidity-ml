@@ -73,14 +73,12 @@ def load_ff_factors(n_factors: int = 5, config: dict | None = None) -> pd.DataFr
 
     Parameters
     ----------
-    n_factors : 3 or 5. If 3, loads Mkt-RF, SMB, HML from the local
-        FFResearch_Data_Factors.csv. If 5, adds RMW and CMA via
-        pandas_datareader (with local CSV fallback).
+    n_factors : 3, 5, or 6. If 6, loads FF5 + Momentum (UMD).
     config : Override config.
 
     Returns
     -------
-    DataFrame with columns: yyyymm, Mkt-RF, SMB, HML [, RMW, CMA].
+    DataFrame with columns: yyyymm, Mkt-RF, SMB, HML [, RMW, CMA [, Mom]].
     All factor values in decimal (e.g. 0.01 = 1%).
     """
     if config is None:
@@ -88,7 +86,6 @@ def load_ff_factors(n_factors: int = 5, config: dict | None = None) -> pd.DataFr
     data_dir = get_data_dir()
 
     if n_factors <= 3:
-        # Use existing local file
         ff_path = data_dir / config["data"]["ff_factors_csv"]
         ff = pd.read_csv(ff_path)
         ff = ff.rename(columns={"Date": "yyyymm"})
@@ -96,7 +93,8 @@ def load_ff_factors(n_factors: int = 5, config: dict | None = None) -> pd.DataFr
             ff[col] = ff[col] / 100.0
         return ff[["yyyymm", "Mkt-RF", "SMB", "HML"]]
 
-    # n_factors == 5: try pandas_datareader, fall back to local CSV
+    # n_factors >= 5: load FF5
+    ff5 = None
     try:
         import pandas_datareader.data as web
 
@@ -106,32 +104,70 @@ def load_ff_factors(n_factors: int = 5, config: dict | None = None) -> pd.DataFr
             start="1972-01-01",
             end="2024-12-31",
         )
-        ff = ff_all[0] / 100.0  # percent → decimal
-        ff.index = ff.index.to_timestamp("M")
-        # Convert index to yyyymm integer
-        ff["yyyymm"] = ff.index.year * 100 + ff.index.month
-        ff = ff.reset_index(drop=True)
-        cols = ["yyyymm", "Mkt-RF", "SMB", "HML", "RMW", "CMA"]
-        ff = ff[cols]
-        logger.info("Loaded FF5 factors via pandas_datareader (%d rows)", len(ff))
-        return ff
+        ff5 = ff_all[0] / 100.0
+        ff5.index = ff5.index.to_timestamp("M")
+        ff5["yyyymm"] = ff5.index.year * 100 + ff5.index.month
+        ff5 = ff5.reset_index(drop=True)
+        ff5 = ff5[["yyyymm", "Mkt-RF", "SMB", "HML", "RMW", "CMA"]]
+        logger.info("Loaded FF5 factors via pandas_datareader (%d rows)", len(ff5))
 
     except Exception as e:
         logger.warning("pandas_datareader FF5 fetch failed (%s); trying local CSV", e)
+        ff5_path = data_dir / "ff5_factors.csv"
+        if ff5_path.exists():
+            ff5 = pd.read_csv(ff5_path)
+            ff5 = ff5.rename(columns={"Date": "yyyymm"})
+            for col in ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]:
+                if col in ff5.columns:
+                    ff5[col] = ff5[col] / 100.0
+            ff5 = ff5[["yyyymm", "Mkt-RF", "SMB", "HML", "RMW", "CMA"]]
 
-    # Fallback: local CSV
-    ff5_path = data_dir / "ff5_factors.csv"
-    if ff5_path.exists():
-        ff = pd.read_csv(ff5_path)
-        ff = ff.rename(columns={"Date": "yyyymm"})
-        for col in ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]:
-            if col in ff.columns:
-                ff[col] = ff[col] / 100.0
-        return ff[["yyyymm", "Mkt-RF", "SMB", "HML", "RMW", "CMA"]]
+    if ff5 is None:
+        logger.warning("FF5 data unavailable; returning FF3 only")
+        return load_ff_factors(n_factors=3, config=config)
 
-    # Last resort: return FF3 with warning
-    logger.warning("FF5 data unavailable; returning FF3 only")
-    return load_ff_factors(n_factors=3, config=config)
+    if n_factors <= 5:
+        return ff5
+
+    # n_factors == 6: add Momentum (UMD)
+    mom = None
+    try:
+        import pandas_datareader.data as web
+
+        mom_all = web.DataReader(
+            "F-F_Momentum_Factor",
+            "famafrench",
+            start="1972-01-01",
+            end="2024-12-31",
+        )
+        mom = mom_all[0] / 100.0
+        mom.index = mom.index.to_timestamp("M")
+        mom["yyyymm"] = mom.index.year * 100 + mom.index.month
+        mom = mom.reset_index(drop=True)
+        # Column is typically "Mom   " with trailing spaces
+        mom_col = [c for c in mom.columns if "Mom" in c or "WML" in c or "UMD" in c]
+        if mom_col:
+            mom = mom.rename(columns={mom_col[0]: "Mom"})
+        mom = mom[["yyyymm", "Mom"]]
+        logger.info("Loaded Momentum factor via pandas_datareader (%d rows)", len(mom))
+
+    except Exception as e:
+        logger.warning("pandas_datareader Mom fetch failed (%s); trying local CSV", e)
+        mom_path = data_dir / "momentum_factor.csv"
+        if mom_path.exists():
+            mom = pd.read_csv(mom_path)
+            mom = mom.rename(columns={"Date": "yyyymm"})
+            if "Mom" in mom.columns:
+                mom["Mom"] = mom["Mom"] / 100.0
+            mom = mom[["yyyymm", "Mom"]]
+
+    if mom is not None:
+        ff6 = ff5.merge(mom, on="yyyymm", how="inner")
+        logger.info("FF5+Mom: %d rows after merge", len(ff6))
+        return ff6
+    else:
+        logger.warning("Momentum factor unavailable; returning FF5 only")
+        return ff5
 
 
 # ══════════════════════════════════════════════════════════════
@@ -245,7 +281,7 @@ def factor_alpha(
     if factor_cols is None:
         raise ValueError(f"Unknown model: {model!r}. Available: {list(FACTOR_MODELS)}")
 
-    n_factors_needed = 5 if model == "ff5" else 3
+    n_factors_needed = 6 if model == "ff5_mom" else (5 if model == "ff5" else 3)
     if ff_factors is None:
         ff_factors = load_ff_factors(n_factors=n_factors_needed, config=config)
 

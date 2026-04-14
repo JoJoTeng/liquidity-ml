@@ -1,15 +1,30 @@
 """
-Portfolio Construction
-======================
-Long-short decile portfolios for the 2×2 experimental framework.
+Portfolio Construction (LiquidityML v3, Section 9)
+===================================================
+Long-short decile portfolios for the 2x2 experimental framework.
 
-Supports both equal-weighted (standard) and liquidity-weighted portfolios.
-Transaction cost model follows Frazzini et al. (2018) Eq. 12:
+The 2x2 design:
+                    Sort on r_hat       Sort on r_hat - TC
+  Standard train    1A (Baseline)       1B
+  Weighted train    2A                  2B (Combined)
 
-    TC_i = Spread_i / 2  +  λ · σ_i · √(Q_i / ADV_i)
+Column 1: standard sort on predicted returns.
+Column 2: TC-penalised sort - sort on r_hat - TC(AUM).
+  No explicit liquidity filter - the TC penalty naturally pushes
+  illiquid stocks down the ranking.
 
-where λ=0.1, σ_i is daily volatility, Q_i is trade size, ADV_i is
-average daily volume.
+Portfolio rules:
+  - Decile sort (long Q10, short Q1)
+  - Equal-dollar within each leg
+  - Monthly rebalancing
+
+Net return computation:
+  - Uses actual turnover-adjusted trade size DeltaQ_it
+    (target position minus drifted position) for market impact,
+    NOT the full Q_it = AUM/N_leg.
+  - Tracks position drift from returns between rebalancing months.
+
+Transaction cost model: Frazzini et al. (2018) Eq. 25.
 """
 
 from __future__ import annotations
@@ -24,189 +39,97 @@ from src.config import load_config
 
 logger = logging.getLogger(__name__)
 
-# ── Module-level constants (from config) ─────────────────────
-
 _cfg = load_config()
-_portfolio_cfg = _cfg["portfolio"]
-_tc_cfg = _cfg["transaction_costs"]
-_liq_cfg = _cfg["liquidity"]
-
-N_QUANTILES: int = _portfolio_cfg["n_quantiles"]
-LONG_QUANTILE: int = _portfolio_cfg["long_quantile"]
-SHORT_QUANTILE: int = _portfolio_cfg["short_quantile"]
-POSITION_CAP: float = _portfolio_cfg["position_cap"]
-MIN_LIQUIDITY_PCTILE: float = _portfolio_cfg["min_liquidity_pctile"]
-PRIMARY_LIQ_COL: str = f"liq_{_liq_cfg['primary']}"
-
-# Weighting scheme for liquidity-weighted portfolios
-_weighting_cfg = _cfg["weighting"]
-DEFAULT_WEIGHT_COL: str = f"weight_{_weighting_cfg['primary']}"
-
-# Transaction cost parameters (Frazzini et al. 2018, Eq. 12)
-TC_LAMBDA: float = _tc_cfg["lambda_market_impact"]
-TC_SPREAD_COL: str = _tc_cfg["spread_col"]
-TC_SIGMA_COL: str = _tc_cfg["sigma_col"]
-TC_ADV_COL: str = _tc_cfg["adv_col"]
-AUM_SCENARIOS: list[int] = _tc_cfg["aum_scenarios"]
 
 
-# ── Helpers ──────────────────────────────────────────────────
+# -- Helpers ----------------------------------------------------------
 
 
-def _apply_position_cap(weights: pd.Series, cap: float) -> pd.Series:
-    """Clip individual weights at `cap` and renormalize to sum=1.
+def _assign_deciles(values: pd.Series, n_quantiles: int = 10) -> pd.Series:
+    """Assign stocks to decile bins (1 = lowest, 10 = highest).
 
-    Uses iterative clip-redistribute: excess weight from capped positions
-    is redistributed proportionally to uncapped ones. If all positions
-    exceed the cap (too few stocks), returns equal weights.
+    Uses rank-based assignment to handle tied predictions.
     """
-    n = len(weights)
-    if n == 0:
-        return weights
-    # Cap infeasible if n * cap < 1 (not enough room)
-    if n * cap < 1.0:
-        return pd.Series(1.0 / n, index=weights.index)
-
-    w = weights / weights.sum()  # ensure sum=1
-    for _ in range(20):
-        over = w > cap
-        if not over.any():
-            break
-        excess = (w[over] - cap).sum()
-        w[over] = cap
-        under = ~over
-        if under.sum() == 0:
-            break
-        w[under] = w[under] + excess * (w[under] / w[under].sum())
-    return w
-
-
-def _assign_quantiles(
-    predictions: pd.Series, n_quantiles: int
-) -> pd.Series:
-    """Assign stocks to quantile bins (1 = lowest, n = highest).
-
-    Always uses rank-based assignment to handle tied predictions
-    (common with tree models producing near-constant outputs).
-    """
-    quantiles = pd.qcut(
-        predictions.rank(method="first"),
+    return pd.qcut(
+        values.rank(method="first"),
         q=n_quantiles,
         labels=False,
     ) + 1  # 1-indexed
-    return quantiles
 
 
-# ── Core: Single Month Portfolio ─────────────────────────────
+# -- Core: Build Single-Month Portfolio -------------------------------
 
 
 def build_long_short_portfolio(
     df: pd.DataFrame,
-    predictions: np.ndarray | pd.Series,
-    weighted: bool = False,
-    weight_col: str | None = None,
-    config: dict | None = None,
+    predictions: pd.Series,
+    tc_penalised: bool = False,
+    tc_per_stock: pd.Series | None = None,
+    n_quantiles: int = 10,
 ) -> dict[str, Any]:
     """Build a long-short decile portfolio for a single cross-section.
 
     Parameters
     ----------
-    df : DataFrame for one month with columns: permno, ret, liq_* columns,
-         and weight_* columns (if weighted=True).
+    df : DataFrame for one month with columns: permno, ret.
     predictions : Model return predictions aligned to df rows.
-    weighted : If True, use liquidity weights within deciles.
-               If False, equal-weight within deciles.
-    weight_col : Weight column name (default: weight_softmax_rank).
-    config : Override config dict.
+    tc_penalised : If True, sort on (predictions - tc_per_stock) for Column 2.
+    tc_per_stock : One-way TC per stock (required if tc_penalised=True).
+    n_quantiles : Number of quantiles (default 10 for deciles).
 
     Returns
     -------
     dict with keys:
-        ret_long        — weighted return of long decile
-        ret_short       — weighted return of short decile
-        ret_long_short  — long minus short return
-        n_long          — number of stocks in long decile
-        n_short         — number of stocks in short decile
-        positions_long  — {permno: weight} for long leg
-        positions_short — {permno: weight} for short leg
+        ret_long, ret_short, ret_long_short : gross returns
+        n_long, n_short : stock counts
+        positions_long, positions_short : {permno: weight} dicts
+        permnos_long, permnos_short : sets of permnos in each leg
     """
-    if config is None:
-        config = _cfg
-    pcfg = config["portfolio"]
-    n_q = pcfg["n_quantiles"]
-    long_q = pcfg["long_quantile"]
-    short_q = pcfg["short_quantile"]
-    cap = pcfg["position_cap"]
-    min_liq_pctile = pcfg["min_liquidity_pctile"]
-
-    if weight_col is None:
-        weight_col = DEFAULT_WEIGHT_COL
-
     work = df.copy()
-    if isinstance(predictions, np.ndarray):
-        predictions = pd.Series(predictions, index=df.index)
-    work["_pred"] = predictions.values
+    work["_pred"] = predictions.values if isinstance(predictions, pd.Series) else predictions
 
-    # ── 1. Liquidity filter ──────────────────────────────
-    if PRIMARY_LIQ_COL in work.columns:
-        liq_threshold = work[PRIMARY_LIQ_COL].quantile(min_liq_pctile)
-        liq_mask = work[PRIMARY_LIQ_COL] >= liq_threshold
-        n_filtered = (~liq_mask).sum()
-        work = work[liq_mask]
-        if n_filtered > 0:
-            logger.debug(
-                "Liquidity filter: removed %d stocks (%.0f%% pctile threshold)",
-                n_filtered, min_liq_pctile * 100,
-            )
+    # -- Sorting signal ------
+    if tc_penalised:
+        if tc_per_stock is None:
+            raise ValueError("tc_per_stock required for TC-penalised sort")
+        work["_signal"] = work["_pred"] - tc_per_stock.reindex(work.index).fillna(0.0)
+    else:
+        work["_signal"] = work["_pred"]
 
-    if len(work) < n_q * 2:
-        logger.warning(
-            "Too few stocks (%d) after liquidity filter for %d quantiles",
-            len(work), n_q,
-        )
+    if len(work) < n_quantiles * 2:
         return _empty_result()
 
-    # ── 2. Assign quantiles ──────────────────────────────
-    work["_quantile"] = _assign_quantiles(work["_pred"], n_q)
+    # -- Decile assignment ------
+    work["_decile"] = _assign_deciles(work["_signal"], n_quantiles)
 
-    long_df = work[work["_quantile"] == long_q]
-    short_df = work[work["_quantile"] == short_q]
+    long_df = work[work["_decile"] == n_quantiles]   # Q10 = highest signal
+    short_df = work[work["_decile"] == 1]             # Q1 = lowest signal
 
     if len(long_df) < 2 or len(short_df) < 2:
-        logger.warning(
-            "Decile too small: long=%d, short=%d", len(long_df), len(short_df)
-        )
         return _empty_result()
 
-    # ── 3. Compute weights within each decile ────────────
-    if weighted and weight_col in work.columns:
-        w_long = long_df[weight_col] / long_df[weight_col].sum()
-        w_short = short_df[weight_col] / short_df[weight_col].sum()
-    else:
-        w_long = pd.Series(1.0 / len(long_df), index=long_df.index)
-        w_short = pd.Series(1.0 / len(short_df), index=short_df.index)
+    # -- Equal-dollar weights ------
+    w_long = pd.Series(1.0 / len(long_df), index=long_df.index)
+    w_short = pd.Series(1.0 / len(short_df), index=short_df.index)
 
-    # ── 4. Apply position cap ────────────────────────────
-    w_long = _apply_position_cap(w_long, cap)
-    w_short = _apply_position_cap(w_short, cap)
-
-    # ── 5. Compute returns ───────────────────────────────
+    # -- Gross returns ------
     ret_long = (w_long * long_df["ret"]).sum()
     ret_short = (w_short * short_df["ret"]).sum()
-    ret_ls = ret_long - ret_short
 
-    # ── 6. Store positions (for turnover / TC computation)
+    # -- Store positions for TC computation ------
     pos_long = dict(zip(long_df["permno"], w_long))
     pos_short = dict(zip(short_df["permno"], w_short))
 
     return {
         "ret_long": ret_long,
         "ret_short": ret_short,
-        "ret_long_short": ret_ls,
+        "ret_long_short": ret_long - ret_short,
         "n_long": len(long_df),
         "n_short": len(short_df),
         "positions_long": pos_long,
         "positions_short": pos_short,
+        "permnos_long": set(long_df["permno"]),
+        "permnos_short": set(short_df["permno"]),
     }
 
 
@@ -220,322 +143,100 @@ def _empty_result() -> dict[str, Any]:
         "n_short": 0,
         "positions_long": {},
         "positions_short": {},
+        "permnos_long": set(),
+        "permnos_short": set(),
     }
 
 
-# ── High-Level: Full Time Series ────────────────────────────
+# -- Time Series Portfolio Builder ------------------------------------
 
 
 def build_portfolio_timeseries(
     panel: pd.DataFrame,
     predictions: pd.Series,
-    weighted: bool = False,
-    weight_col: str | None = None,
+    tc_penalised: bool = False,
+    aum: float | None = None,
     config: dict | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Build monthly long-short portfolios over the full test period.
 
-    Uses a no-trade buffer zone: stocks in the previous long/short leg
-    are kept if they remain within ``buffer_quantiles`` deciles of the
-    target. This reduces turnover from noisy month-to-month re-rankings.
-
     Parameters
     ----------
-    panel : Full test panel with columns: permno, yyyymm, ret, weight_*, liq_*.
-    predictions : Model predictions aligned to panel.index.
-    weighted : If True, use liquidity weights within deciles.
-    weight_col : Weight column name.
+    panel : Full panel with yyyymm, permno, ret, liq_* columns.
+    predictions : OOS predictions indexed to panel rows (subset of panel).
+    tc_penalised : If True, use TC-penalised sort (Column 2).
+    aum : AUM in dollars. Required if tc_penalised=True.
     config : Override config dict.
 
     Returns
     -------
-    results_df : DataFrame with monthly rows:
-        yyyymm, ret_long, ret_short, ret_long_short, n_long, n_short, turnover
+    (returns_df, positions_history)
+    returns_df : DataFrame with yyyymm, ret_long, ret_short, ret_long_short.
     positions_history : {yyyymm: {"long": {permno: w}, "short": {permno: w}}}
     """
     if config is None:
         config = _cfg
-    pcfg = config["portfolio"]
-    buffer_q = pcfg.get("buffer_quantiles", 0)
+    n_q = config["portfolio"]["n_quantiles"]
 
-    results: list[dict] = []
-    positions_history: dict[int, dict] = {}
-    prev_positions: dict[str, dict[int, float]] = {"long": {}, "short": {}}
-    prev_long_permnos: set[int] = set()
-    prev_short_permnos: set[int] = set()
+    # Align panel to prediction months
+    pred_months = panel.loc[predictions.index, "yyyymm"].unique()
+    pred_months = sorted(pred_months)
 
-    for yyyymm, group in panel.groupby("yyyymm"):
-        group_preds = predictions.loc[group.index]
+    # Precompute TC for sorting if needed
+    tc_for_sort = None
+    if tc_penalised:
+        if aum is None:
+            raise ValueError("aum required for TC-penalised sort")
+        from src.weighting.schemes import compute_tc_for_sorting
+        tc_for_sort = compute_tc_for_sorting(panel, aum=aum, config=config)
 
-        if buffer_q > 0 and (prev_long_permnos or prev_short_permnos):
-            month_result = _build_portfolio_with_buffer(
-                group, group_preds,
-                prev_long_permnos, prev_short_permnos,
-                buffer_q=buffer_q,
-                weighted=weighted, weight_col=weight_col, config=config,
-            )
-        else:
-            month_result = build_long_short_portfolio(
-                group, group_preds, weighted=weighted,
-                weight_col=weight_col, config=config,
-            )
+    records = []
+    positions_history = {}
 
-        # Compute turnover vs previous month
-        turnover = _compute_turnover(
-            prev_positions["long"], month_result["positions_long"],
-        ) + _compute_turnover(
-            prev_positions["short"], month_result["positions_short"],
+    for yyyymm in pred_months:
+        month_mask = panel["yyyymm"] == yyyymm
+        pred_mask = month_mask & panel.index.isin(predictions.index)
+        month_panel = panel[pred_mask]
+        month_preds = predictions[pred_mask.values[predictions.index.isin(panel.index)]]
+
+        # Re-align
+        common_idx = month_panel.index.intersection(predictions.index)
+        if len(common_idx) < n_q * 2:
+            continue
+        month_panel = month_panel.loc[common_idx]
+        month_preds = predictions.loc[common_idx]
+
+        tc_month = None
+        if tc_penalised and tc_for_sort is not None:
+            tc_month = tc_for_sort.reindex(common_idx)
+
+        result = build_long_short_portfolio(
+            df=month_panel,
+            predictions=month_preds,
+            tc_penalised=tc_penalised,
+            tc_per_stock=tc_month,
+            n_quantiles=n_q,
         )
 
-        month_result["yyyymm"] = yyyymm
-        month_result["turnover"] = turnover
-        results.append(month_result)
-
-        # Update previous positions
+        result["yyyymm"] = yyyymm
+        records.append(result)
         positions_history[yyyymm] = {
-            "long": month_result["positions_long"],
-            "short": month_result["positions_short"],
+            "long": result["positions_long"],
+            "short": result["positions_short"],
         }
-        prev_positions = positions_history[yyyymm]
-        prev_long_permnos = set(month_result["positions_long"].keys())
-        prev_short_permnos = set(month_result["positions_short"].keys())
 
-    results_df = pd.DataFrame(results)
-    # Drop position dicts from the DataFrame (kept in positions_history)
-    results_df = results_df.drop(
-        columns=["positions_long", "positions_short"], errors="ignore"
-    )
+    if not records:
+        logger.warning("No valid months for portfolio construction")
+        return pd.DataFrame(), {}
 
-    logger.info(
-        "Portfolio timeseries: %d months, mean LS return=%.4f, "
-        "mean turnover=%.2f",
-        len(results_df),
-        results_df["ret_long_short"].mean(),
-        results_df["turnover"].mean(),
-    )
+    returns_df = pd.DataFrame(records)
+    cols = ["yyyymm", "ret_long", "ret_short", "ret_long_short", "n_long", "n_short"]
+    returns_df = returns_df[[c for c in cols if c in returns_df.columns]]
 
-    return results_df, positions_history
+    return returns_df, positions_history
 
 
-def _build_portfolio_with_buffer(
-    df: pd.DataFrame,
-    predictions: np.ndarray | pd.Series,
-    prev_long_permnos: set[int],
-    prev_short_permnos: set[int],
-    buffer_q: int = 1,
-    weighted: bool = False,
-    weight_col: str | None = None,
-    config: dict | None = None,
-) -> dict[str, Any]:
-    """Build long-short portfolio with no-trade buffer zone.
-
-    Stocks already in the long (short) leg are kept if their new quantile
-    is within ``buffer_q`` deciles of the target. New entries must strictly
-    qualify for the target decile. This reduces turnover from noisy
-    month-to-month re-rankings without distorting the portfolio signal.
-    """
-    if config is None:
-        config = _cfg
-    pcfg = config["portfolio"]
-    n_q = pcfg["n_quantiles"]
-    long_q = pcfg["long_quantile"]
-    short_q = pcfg["short_quantile"]
-    cap = pcfg["position_cap"]
-    min_liq_pctile = pcfg["min_liquidity_pctile"]
-
-    if weight_col is None:
-        weight_col = DEFAULT_WEIGHT_COL
-
-    work = df.copy()
-    if isinstance(predictions, np.ndarray):
-        predictions = pd.Series(predictions, index=df.index)
-    work["_pred"] = predictions.values
-
-    # Liquidity filter
-    if PRIMARY_LIQ_COL in work.columns:
-        liq_threshold = work[PRIMARY_LIQ_COL].quantile(min_liq_pctile)
-        work = work[work[PRIMARY_LIQ_COL] >= liq_threshold]
-
-    if len(work) < n_q * 2:
-        return _empty_result()
-
-    # Assign quantiles
-    work["_quantile"] = _assign_quantiles(work["_pred"], n_q)
-
-    # Buffer logic: keep previous holdings if within buffer range
-    long_mask = work["_quantile"] == long_q  # strict qualifiers
-    short_mask = work["_quantile"] == short_q
-
-    # Existing holdings get a wider acceptance band
-    in_prev_long = work["permno"].isin(prev_long_permnos)
-    in_prev_short = work["permno"].isin(prev_short_permnos)
-
-    long_buffer_mask = in_prev_long & (work["_quantile"] >= long_q - buffer_q)
-    short_buffer_mask = in_prev_short & (work["_quantile"] <= short_q + buffer_q)
-
-    long_df = work[long_mask | long_buffer_mask]
-    short_df = work[short_mask | short_buffer_mask]
-
-    if len(long_df) < 2 or len(short_df) < 2:
-        return _empty_result()
-
-    # Compute weights
-    if weighted and weight_col in work.columns:
-        w_long = long_df[weight_col] / long_df[weight_col].sum()
-        w_short = short_df[weight_col] / short_df[weight_col].sum()
-    else:
-        w_long = pd.Series(1.0 / len(long_df), index=long_df.index)
-        w_short = pd.Series(1.0 / len(short_df), index=short_df.index)
-
-    w_long = _apply_position_cap(w_long, cap)
-    w_short = _apply_position_cap(w_short, cap)
-
-    ret_long = (w_long * long_df["ret"]).sum()
-    ret_short = (w_short * short_df["ret"]).sum()
-
-    pos_long = dict(zip(long_df["permno"], w_long))
-    pos_short = dict(zip(short_df["permno"], w_short))
-
-    return {
-        "ret_long": ret_long,
-        "ret_short": ret_short,
-        "ret_long_short": ret_long - ret_short,
-        "n_long": len(long_df),
-        "n_short": len(short_df),
-        "positions_long": pos_long,
-        "positions_short": pos_short,
-    }
-
-
-def _compute_turnover(
-    prev_pos: dict[int, float], curr_pos: dict[int, float]
-) -> float:
-    """Compute one-way turnover between two position dicts.
-
-    Turnover = Σ|w_i,t - w_i,t-1| summed over all stocks in either period.
-    If previous positions are empty (first month), all current weights
-    count as new entries (full establishment cost).
-    """
-
-    all_permnos = set(prev_pos) | set(curr_pos)
-    turnover = sum(
-        abs(curr_pos.get(p, 0.0) - prev_pos.get(p, 0.0))
-        for p in all_permnos
-    )
-    return turnover
-
-
-# ── Transaction Cost Model (Frazzini et al. 2018, Eq. 12) ───
-
-
-def compute_transaction_costs(
-    positions_history: dict[int, dict],
-    panel: pd.DataFrame,
-    aum: float,
-    config: dict | None = None,
-) -> pd.Series:
-    """Compute monthly transaction costs using Frazzini et al. (2018) Eq. 12.
-
-    TC_i = Spread_i/2 + λ · σ_i · √(Q_i / ADV_i)
-
-    Parameters
-    ----------
-    positions_history : {yyyymm: {"long": {permno: w}, "short": {permno: w}}}
-    panel : Full panel for spread, sigma, adv lookup by (permno, yyyymm).
-    aum : Assets under management in dollars.
-    config : Override config dict.
-
-    Returns
-    -------
-    pd.Series indexed by yyyymm with monthly TC as decimal fraction.
-    """
-    if config is None:
-        config = _cfg
-    tc_cfg = config["transaction_costs"]
-    lam = tc_cfg["lambda_market_impact"]
-    spread_col = tc_cfg["spread_col"]
-    sigma_col = tc_cfg["sigma_col"]
-    adv_col = tc_cfg["adv_col"]
-    spread_scale = tc_cfg.get("spread_scale", 1.0)
-    spread_cap = tc_cfg.get("spread_cap", 0.05)
-
-    # Build lookup: (permno, yyyymm) → {spread, sigma, adv}
-    # Use liq_ prefixed columns if available, fall back to raw
-    liq_spread = f"liq_{spread_col}" if f"liq_{spread_col}" in panel.columns else spread_col
-    liq_sigma = f"liq_{sigma_col}" if f"liq_{sigma_col}" in panel.columns else sigma_col
-    liq_adv = f"liq_{adv_col}" if f"liq_{adv_col}" in panel.columns else adv_col
-
-    lookup_cols = ["permno", "yyyymm"]
-    for col in [liq_spread, liq_sigma, liq_adv]:
-        if col in panel.columns:
-            lookup_cols.append(col)
-
-    lookup = panel[lookup_cols].set_index(["permno", "yyyymm"])
-
-    months = sorted(positions_history.keys())
-    tc_series = {}
-
-    for i, yyyymm in enumerate(months):
-        pos = positions_history[yyyymm]
-
-        if i == 0:
-            # First month: all positions are new entries
-            prev_pos = {"long": {}, "short": {}}
-        else:
-            prev_yyyymm = months[i - 1]
-            prev_pos = positions_history[prev_yyyymm]
-
-        total_tc = 0.0
-
-        for leg in ["long", "short"]:
-            curr = pos[leg]
-            prev = prev_pos[leg]
-            all_permnos = set(curr) | set(prev)
-
-            for permno in all_permnos:
-                delta_w = abs(curr.get(permno, 0.0) - prev.get(permno, 0.0))
-                if delta_w < 1e-10:
-                    continue
-
-                # Look up stock characteristics
-                try:
-                    row = lookup.loc[(permno, yyyymm)]
-                except KeyError:
-                    # Stock not in panel this month, use conservative defaults
-                    total_tc += delta_w * 0.005  # 50bps default
-                    continue
-
-                spread = row.get(liq_spread, 0.01)
-                sigma = row.get(liq_sigma, 0.02)
-                adv = row.get(liq_adv, 1e6)
-
-                # Handle NaN/invalid values
-                if pd.isna(spread) or spread <= 0:
-                    spread = 0.01
-                if pd.isna(sigma) or sigma <= 0:
-                    sigma = 0.02
-                if pd.isna(adv) or adv <= 0:
-                    adv = 1e6
-
-                # Calibrate spread: CZ Corwin-Schultz → effective spread
-                spread = spread * spread_scale
-                # Clip extreme outliers
-                spread = min(spread, spread_cap)
-
-                # Trade size in dollars
-                q_i = delta_w * aum
-
-                # Frazzini et al. (2018) Eq. 12
-                half_spread = spread / 2.0
-                market_impact = lam * sigma * np.sqrt(q_i / adv)
-                tc_i = half_spread + market_impact
-
-                # Portfolio cost = |Δw_i| × TC_i
-                total_tc += delta_w * tc_i
-
-        tc_series[yyyymm] = total_tc
-
-    return pd.Series(tc_series, name="transaction_cost")
+# -- Transaction Cost: Turnover-Adjusted (Net Returns) ----------------
 
 
 def compute_net_returns(
@@ -545,28 +246,144 @@ def compute_net_returns(
     aum: float,
     config: dict | None = None,
 ) -> pd.DataFrame:
-    """Add net-of-cost return columns to gross returns DataFrame.
+    """Compute net returns using turnover-adjusted trade sizes.
 
-    Parameters
-    ----------
-    gross_returns : From build_portfolio_timeseries (has yyyymm, ret_long_short).
-    positions_history : Position history from build_portfolio_timeseries.
-    panel : Full panel for TC lookup.
-    aum : AUM in dollars.
-    config : Override config dict.
-
-    Returns
-    -------
-    DataFrame with additional column: ret_long_short_net.
+    For each stock held or traded:
+      1. Compute drifted position from last month's holding + actual return
+      2. DeltaQ_it = |target_position - drifted_position|
+      3. TC_it = Spread/2 + lambda * sigma * sqrt(DeltaQ_it / ADV)
+      4. Portfolio TC = sum over all traded stocks
     """
-    tc = compute_transaction_costs(
-        positions_history, panel, aum=aum, config=config,
-    )
+    if config is None:
+        config = _cfg
+    tc_cfg = config["transaction_costs"]
+    lam = tc_cfg["lambda_market_impact"]
+    spread_col = f"liq_{tc_cfg['spread_col']}"
+    sigma_col = f"liq_{tc_cfg['sigma_col']}"
+    adv_col = f"liq_{tc_cfg['adv_col']}"
+    spread_cap = tc_cfg.get("spread_cap", 0.05)
 
+    # Build lookup: (permno, yyyymm) -> {spread, sigma, adv, ret}
+    lookup_cols = ["permno", "yyyymm", "ret"]
+    for col in [spread_col, sigma_col, adv_col]:
+        if col in panel.columns:
+            lookup_cols.append(col)
+    lookup = panel[list(set(lookup_cols))].copy()
+    lookup = lookup.set_index(["permno", "yyyymm"])
+
+    months = sorted(positions_history.keys())
+    tc_series = {}
+
+    # Track drifted positions (evolve with actual returns)
+    prev_pos_long: dict[int, float] = {}
+    prev_pos_short: dict[int, float] = {}
+
+    for i, yyyymm in enumerate(months):
+        pos = positions_history[yyyymm]
+        target_long = pos["long"]
+        target_short = pos["short"]
+
+        # Compute drifted positions from last month
+        if i == 0:
+            drifted_long: dict[int, float] = {}
+            drifted_short: dict[int, float] = {}
+        else:
+            prev_yyyymm = months[i - 1]
+            drifted_long = _drift_positions(prev_pos_long, prev_yyyymm, yyyymm, lookup)
+            drifted_short = _drift_positions(prev_pos_short, prev_yyyymm, yyyymm, lookup)
+
+        # Compute TC for each leg
+        total_tc = 0.0
+        for target, drifted, leg_name in [
+            (target_long, drifted_long, "long"),
+            (target_short, drifted_short, "short"),
+        ]:
+            all_permnos = set(target) | set(drifted)
+            for permno in all_permnos:
+                target_w = target.get(permno, 0.0)
+                drifted_w = drifted.get(permno, 0.0)
+                delta_w = abs(target_w - drifted_w)
+
+                if delta_w < 1e-10:
+                    continue
+
+                # Dollar trade amount
+                delta_q = delta_w * aum
+
+                # Look up stock characteristics
+                try:
+                    row = lookup.loc[(permno, yyyymm)]
+                except KeyError:
+                    total_tc += delta_w * 0.005  # 50bps default
+                    continue
+
+                spread = _safe_val(row, spread_col, 0.01)
+                sigma = _safe_val(row, sigma_col, 0.02)
+                adv = _safe_val(row, adv_col, 1e6)
+
+                spread = min(abs(spread), spread_cap)
+                adv = max(adv, 1e3)
+
+                # Frazzini et al. Eq. 25 with actual DeltaQ
+                half_spread = spread / 2.0
+                market_impact = lam * sigma * np.sqrt(delta_q / adv)
+                tc_i = half_spread + market_impact
+
+                total_tc += delta_w * tc_i
+
+        tc_series[yyyymm] = total_tc
+
+        # Store current positions for next month's drift
+        prev_pos_long = target_long.copy()
+        prev_pos_short = target_short.copy()
+
+    # Merge TC into gross returns
     result = gross_returns.copy()
-    result["transaction_cost"] = result["yyyymm"].map(tc).fillna(0.0)
+    result["transaction_cost"] = result["yyyymm"].map(tc_series).fillna(0.0)
     result["ret_long_short_net"] = result["ret_long_short"] - result["transaction_cost"]
     return result
+
+
+def _drift_positions(
+    positions: dict[int, float],
+    from_yyyymm: int,
+    to_yyyymm: int,
+    lookup: pd.DataFrame,
+) -> dict[int, float]:
+    """Drift positions forward by one month using actual returns."""
+    if not positions:
+        return {}
+
+    drifted = {}
+    total_value = 0.0
+
+    for permno, w in positions.items():
+        try:
+            row = lookup.loc[(permno, from_yyyymm)]
+            ret = row["ret"] if not pd.isna(row["ret"]) else 0.0
+        except KeyError:
+            ret = 0.0
+        new_val = w * (1.0 + ret)
+        drifted[permno] = new_val
+        total_value += new_val
+
+    # Renormalise to sum to ~1
+    if total_value > 0:
+        for permno in drifted:
+            drifted[permno] /= total_value
+
+    return drifted
+
+
+def _safe_val(row, col: str, default: float) -> float:
+    """Safely extract a value from a lookup row."""
+    try:
+        val = row[col] if col in row.index else default
+    except (KeyError, TypeError):
+        val = default
+    if pd.isna(val) or val <= 0:
+        val = default
+    return val
 
 
 def compute_net_returns_all_aum(
@@ -579,7 +396,7 @@ def compute_net_returns_all_aum(
 
     Returns
     -------
-    DataFrame with columns: ret_long_short_net_{aum} for each AUM scenario.
+    DataFrame with columns: ret_ls_net_{aum_label} for each AUM.
     """
     if config is None:
         config = _cfg
@@ -587,12 +404,10 @@ def compute_net_returns_all_aum(
 
     result = gross_returns.copy()
     for aum in aum_scenarios:
-        tc = compute_transaction_costs(
-            positions_history, panel, aum=aum, config=config,
+        net_df = compute_net_returns(
+            gross_returns, positions_history, panel, aum=aum, config=config,
         )
         label = f"{aum // 1_000_000}M" if aum < 1_000_000_000 else f"{aum // 1_000_000_000}B"
-        col_name = f"ret_ls_net_{label}"
-        result[col_name] = result["yyyymm"].map(tc).fillna(0.0)
-        result[col_name] = result["ret_long_short"] - result[col_name]
+        result[f"ret_ls_net_{label}"] = net_df["ret_long_short_net"]
 
     return result

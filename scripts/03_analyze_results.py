@@ -1,23 +1,28 @@
 """
-03_analyze_results.py — Tables, Figures, and Hypothesis Tests (H1–H4)
-=====================================================================
-Final script in the build order. Loads experiment results saved by
-02_run_experiment.py and generates:
+03 - Analyze Formal Experiment Results (LiquidityML v3)
+========================================================
+Reads predictions from 02_run_experiment.py and produces all tables
+and figures specified in Sections 8-9 of the v3 paper.
 
-  - Publication-ready tables (CSV + LaTeX)
-  - Figures (PNG)
-  - Consolidated hypothesis test summary (JSON)
+Outputs (all in outputs/formalanalysis/analysis/):
+  Tables:
+    prediction_1_r2_by_quintile_{spec}.csv
+    prediction_1_utility_weighted_r2_{spec}.csv
+    prediction_2_importance_shift_{spec}.csv
+    prediction_4_se_differential_{spec}.csv
+    table_11_within_quintile_{spec}.csv
+    table_12_decomposition_{spec}_{aum}.csv
+    hypothesis_tests.json
 
-Hypotheses (proposal Section 5):
-  H1 (Training Dominance):   Training effect > Portfolio effect
-  H2 (Feature Reallocation): SHAP shifts toward tradable features
-  H3 (Sharpe Improvement):   SR(2B) − SR(1A) ≥ 0.20
-  H4 (Capacity Improvement): Break-even AUM increases ≥ 25×
+  Figures:
+    squared_error_differential_{spec}.png   - Prediction 4
+    importance_shift_{spec}.png             - Prediction 2
 
 Usage:
-  python scripts/03_analyze_results.py              # full analysis
-  python scripts/03_analyze_results.py --no-figures  # tables only
-  python scripts/03_analyze_results.py --model xgboost
+    python scripts/03_analyze_results.py
+    python scripts/03_analyze_results.py --model xgboost
+    python scripts/03_analyze_results.py --weights dolvol
+    python scripts/03_analyze_results.py --no-figures
 """
 
 from __future__ import annotations
@@ -30,1270 +35,504 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
-# Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import load_config, get_output_dir
-from src.evaluation.statistics import bootstrap_sharpe_test, sharpe_ratio
-from src.analysis.feature_importance import (
-    load_importance,
-    cross_model_h2_summary,
-    test_h2_group_shift,
-    test_h2_per_feature,
-    plot_importance_comparison,
-    plot_importance_over_time,
-    plot_ratio_over_time,
+from src.config import load_config
+from src.data.loader import load_panel, get_feature_names
+from src.evaluation.statistics import (
+    sharpe_ratio,
+    bootstrap_sharpe_test,
+    factor_alpha,
+    load_ff_factors,
+    oos_r_squared,
+    compute_effect_decomposition,
+)
+from src.portfolio.construction import (
+    build_portfolio_timeseries,
+    compute_net_returns,
 )
 
-logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("03_analysis")
 
 
-# ── CLI ──────────────────────────────────────────────────────────
+# -- CLI ---------------------------------------------------------------
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Analyze formal experiment results")
+    p.add_argument("--model", default=None,
+                    choices=["elastic_net", "xgboost", "neural_network"])
+    p.add_argument("--weights", default=None, choices=["dolvol", "tc"])
+    p.add_argument("--no-figures", action="store_true")
+    return p.parse_args()
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Analyze experiment results: tables, figures, hypothesis tests."
-    )
-    parser.add_argument(
-        "--no-figures", action="store_true",
-        help="Skip figure generation (faster).",
-    )
-    parser.add_argument(
-        "--model", type=str, default=None,
-        help="Analyze a single model only (e.g. xgboost).",
-    )
-    parser.add_argument(
-        "--importance-type", type=str, default="gain",
-        choices=["gain", "shap"],
-        help="Feature importance type (default: gain; shap as robustness check).",
-    )
-    return parser.parse_args()
+# -- Discovery & Loading -----------------------------------------------
 
-
-# ── Loading ──────────────────────────────────────────────────────
-
-
-def _load_model_results(
-    model_name: str, experiment_dir: Path
-) -> dict:
-    """Load all saved outputs for a single model."""
-    model_dir = experiment_dir / model_name
-
-    # Effect decomposition
-    with open(model_dir / "effect_decomposition.json") as f:
-        decomp = json.load(f)
-
-    # OOS R²
-    with open(model_dir / "oos_r2.json") as f:
-        oos_r2 = json.load(f)
-
-    # Gross returns per cell
-    gross = {}
-    for cell in ["1A", "1B", "2A", "2B"]:
-        gross[cell] = pd.read_csv(model_dir / f"gross_returns_{cell}.csv")
-
-    # Net returns per cell
-    net = {}
-    for cell in ["1A", "1B", "2A", "2B"]:
-        net[cell] = pd.read_csv(model_dir / f"net_returns_{cell}.csv")
-
-    # Monthly OOS R²
-    r2_monthly_path = model_dir / "oos_r2_monthly.csv"
-    oos_r2_monthly = (
-        pd.read_csv(r2_monthly_path) if r2_monthly_path.exists() else None
-    )
-
-    return {
-        "model": model_name,
-        "effect_decomposition": decomp,
-        "oos_r2": oos_r2,
-        "oos_r2_monthly": oos_r2_monthly,
-        "gross_returns": gross,
-        "net_returns": net,
-    }
-
-
-# ── Table Builders ───────────────────────────────────────────────
-
-
-def build_main_results_table(
-    all_results: dict[str, dict],
-    summary_df: pd.DataFrame | None = None,
-    net_tests: dict[str, dict] | None = None,
-    config: dict | None = None,
-) -> pd.DataFrame:
-    """Build results table: SR per cell, effects, H1/H3 p-values (net primary, gross secondary)."""
-    # Determine primary AUM label for net results
-    primary_aum = _get_aum_labels(config)[1] if config else "500M"
-
-    rows = []
-    for model_name, res in all_results.items():
-        decomp = res["effect_decomposition"]
-        sharpes = decomp["sharpe_ratios"]
-
-        training = decomp["training_effect"]
-        portfolio = decomp["portfolio_effect"]
-        total = decomp["total_effect"]
-        interaction = decomp["interaction"]
-
-        # Gross H1/H3
-        training_share = training / total if total != 0 else np.nan
-        h1_gross_pval = decomp["lw_h3"]["p_value"]
-        h3_gross_pval = decomp["lw_total"]["p_value"]
-
-        row = {
-            "model": model_name,
-            # Gross Sharpe ratios and effects
-            "SR_1A": sharpes["1A"],
-            "SR_1B": sharpes["1B"],
-            "SR_2A": sharpes["2A"],
-            "SR_2B": sharpes["2B"],
-            "training_effect": training,
-            "portfolio_effect": portfolio,
-            "total_effect": total,
-            "interaction": interaction,
-            "training_share": training_share,
-            "h1_gross_pval": h1_gross_pval,
-            "h3_gross_total_effect": total,
-            "h3_gross_pval": h3_gross_pval,
-        }
-
-        # Net primary H1/H3 at primary AUM
-        if net_tests and model_name in net_tests:
-            aum_tests = net_tests[model_name].get(primary_aum, {})
-            if aum_tests:
-                row["net_SR_1A"] = aum_tests["sharpe_ratios"]["1A"]
-                row["net_SR_1B"] = aum_tests["sharpe_ratios"]["1B"]
-                row["net_SR_2A"] = aum_tests["sharpe_ratios"]["2A"]
-                row["net_SR_2B"] = aum_tests["sharpe_ratios"]["2B"]
-                row["net_training_effect"] = aum_tests["training_effect"]
-                row["net_portfolio_effect"] = aum_tests["portfolio_effect"]
-                row["net_total_effect"] = aum_tests["total_effect"]
-                row["net_interaction"] = aum_tests["interaction"]
-                row["net_training_share"] = (
-                    aum_tests["training_share"]
-                    if aum_tests["training_share"] is not None else np.nan
-                )
-                row["h1_net_pval"] = aum_tests["lw_h3"]["p_value"]
-                row["h3_net_total_effect"] = aum_tests["total_effect"]
-                row["h3_net_pval"] = aum_tests["lw_total"]["p_value"]
-
-        rows.append(row)
-
-    # Ensemble row from summary.csv
-    if summary_df is not None and len(summary_df) > 1:
-        ens = {
-            "model": "ensemble",
-            "SR_1A": summary_df["SR_1A"].mean(),
-            "SR_1B": summary_df["SR_1B"].mean(),
-            "SR_2A": summary_df["SR_2A"].mean(),
-            "SR_2B": summary_df["SR_2B"].mean(),
-            "training_effect": summary_df["training_effect"].mean(),
-            "portfolio_effect": summary_df["portfolio_effect"].mean(),
-            "total_effect": summary_df["total_effect"].mean(),
-            "interaction": summary_df["interaction"].mean(),
-        }
-        ens["training_share"] = (
-            ens["training_effect"] / ens["total_effect"]
-            if ens["total_effect"] != 0 else np.nan
-        )
-        ens["h1_gross_pval"] = np.nan
-        ens["h3_gross_total_effect"] = ens["total_effect"]
-        ens["h3_gross_pval"] = np.nan
-        rows.append(ens)
-
-    return pd.DataFrame(rows)
-
-
-def _get_aum_labels(config: dict) -> list[str]:
-    """Convert AUM integers to labels like '100M', '500M', '1B', '5B'."""
-    labels = []
-    for aum in config["transaction_costs"]["aum_scenarios"]:
-        if aum < 1_000_000_000:
-            labels.append(f"{aum // 1_000_000}M")
-        else:
-            labels.append(f"{aum // 1_000_000_000}B")
-    return labels
-
-
-def build_net_results_table(
-    all_results: dict[str, dict],
-    config: dict,
-    net_tests: dict[str, dict] | None = None,
-) -> pd.DataFrame:
-    """Build net results table: net SR per AUM scenario + net effects + p-values."""
-    aum_labels = _get_aum_labels(config)
-    cells = ["1A", "1B", "2A", "2B"]
-    rows = []
-
-    for model_name, res in all_results.items():
-        row: dict[str, object] = {"model": model_name}
-
-        for aum_label in aum_labels:
-            col = f"ret_ls_net_{aum_label}"
-            for cell in cells:
-                net_df = res["net_returns"][cell]
-                if col in net_df.columns:
-                    sr = sharpe_ratio(net_df[col].dropna())
-                else:
-                    sr = np.nan
-                row[f"net_SR_{cell}_{aum_label}"] = sr
-
-            # Net effect decomposition at this AUM
-            sr_1a = row.get(f"net_SR_1A_{aum_label}", np.nan)
-            sr_1b = row.get(f"net_SR_1B_{aum_label}", np.nan)
-            sr_2a = row.get(f"net_SR_2A_{aum_label}", np.nan)
-            sr_2b = row.get(f"net_SR_2B_{aum_label}", np.nan)
-            net_training = sr_2a - sr_1a
-            net_portfolio = sr_1b - sr_1a
-            net_total = sr_2b - sr_1a
-            net_interaction = net_total - net_training - net_portfolio
-            row[f"net_training_{aum_label}"] = net_training
-            row[f"net_portfolio_{aum_label}"] = net_portfolio
-            row[f"net_total_{aum_label}"] = net_total
-            row[f"net_interaction_{aum_label}"] = net_interaction
-            row[f"net_training_share_{aum_label}"] = (
-                net_training / net_total if net_total != 0 else np.nan
-            )
-
-            # P-values from bootstrap tests (if available)
-            if net_tests and model_name in net_tests:
-                aum_tests = net_tests[model_name].get(aum_label, {})
-                row[f"h1_pval_{aum_label}"] = (
-                    aum_tests["lw_h3"]["p_value"] if aum_tests else np.nan
-                )
-                row[f"h3_pval_{aum_label}"] = (
-                    aum_tests["lw_total"]["p_value"] if aum_tests else np.nan
-                )
-
-        rows.append(row)
-
-    return pd.DataFrame(rows)
-
-
-def build_capacity_table(
-    all_results: dict[str, dict],
-    config: dict,
-) -> pd.DataFrame:
-    """Build H4 capacity table: break-even AUM per cell per model."""
-    from scipy.interpolate import interp1d
-
-    aum_scenarios = config["transaction_costs"]["aum_scenarios"]
-    aum_labels = _get_aum_labels(config)
-    log_aums = np.log10(aum_scenarios)
-    cells = ["1A", "1B", "2A", "2B"]
-    rows = []
-
-    for model_name, res in all_results.items():
-        cell_breakevens = {}
-
-        for cell in cells:
-            net_df = res["net_returns"][cell]
-            srs = []
-            for aum_label in aum_labels:
-                col = f"ret_ls_net_{aum_label}"
-                if col in net_df.columns:
-                    srs.append(sharpe_ratio(net_df[col].dropna()))
-                else:
-                    srs.append(np.nan)
-
-            srs = np.array(srs)
-            row_data: dict[str, object] = {
+def discover_experiments(base_dir: Path) -> list[dict]:
+    """Discover all completed experiment specifications."""
+    specs = []
+    if not base_dir.exists():
+        return specs
+    for model_dir in sorted(base_dir.iterdir()):
+        if not model_dir.is_dir():
+            continue
+        model_name = model_dir.name
+        std_dir = model_dir / "standard"
+        if not (std_dir / "predictions.parquet").exists():
+            continue
+        for wt_dir in sorted(model_dir.iterdir()):
+            if wt_dir.name == "standard" or not wt_dir.is_dir():
+                continue
+            if not (wt_dir / "predictions.parquet").exists():
+                continue
+            dirname = wt_dir.name
+            if dirname == "dolvol":
+                weight_family = "dolvol"
+                aum_label = None
+            elif dirname.startswith("tc_"):
+                weight_family = "tc"
+                aum_label = dirname
+            else:
+                continue
+            specs.append({
                 "model": model_name,
-                "cell": cell,
-            }
-            for i, aum_label in enumerate(aum_labels):
-                row_data[f"net_SR_{aum_label}"] = srs[i]
-
-            # Interpolate break-even AUM (where net SR crosses 0)
-            valid = ~np.isnan(srs)
-            if valid.sum() >= 2:
-                valid_srs = srs[valid]
-                valid_log_aums = log_aums[valid]
-
-                if np.all(valid_srs > 0):
-                    breakeven = float("inf")  # SR positive at all AUM levels
-                elif np.all(valid_srs <= 0):
-                    breakeven = 0.0  # SR non-positive at all levels
-                else:
-                    try:
-                        f_interp = interp1d(
-                            valid_log_aums, valid_srs,
-                            kind="linear", fill_value="extrapolate",
-                        )
-                        # Search for zero crossing
-                        from scipy.optimize import brentq
-                        # Find interval containing zero
-                        found = False
-                        for j in range(len(valid_srs) - 1):
-                            if valid_srs[j] * valid_srs[j + 1] <= 0:
-                                log_be = brentq(
-                                    f_interp,
-                                    valid_log_aums[j],
-                                    valid_log_aums[j + 1],
-                                )
-                                breakeven = 10 ** log_be
-                                found = True
-                                break
-                        if not found:
-                            # Extrapolate
-                            breakeven = float("inf") if valid_srs[-1] > 0 else 0.0
-                    except Exception:
-                        breakeven = np.nan
-            else:
-                breakeven = np.nan
-
-            row_data["breakeven_aum"] = breakeven
-            cell_breakevens[cell] = breakeven
-            rows.append(row_data)
-
-        # Compute H4 uplift: breakeven_2B / breakeven_1A
-        be_1a = cell_breakevens.get("1A", np.nan)
-        be_2b = cell_breakevens.get("2B", np.nan)
-        if (
-            be_1a is not None
-            and be_2b is not None
-            and be_1a > 0
-            and np.isfinite(be_1a)
-            and np.isfinite(be_2b)
-        ):
-            uplift = be_2b / be_1a
-        else:
-            uplift = np.nan
-
-        # Tag uplift on the 2B row
-        for r in rows:
-            if r["model"] == model_name and r["cell"] == "2B":
-                r["h4_uplift"] = uplift
-
-    return pd.DataFrame(rows)
+                "weight_family": weight_family,
+                "aum_label": aum_label,
+                "std_dir": std_dir,
+                "wt_dir": wt_dir,
+                "spec_label": f"{model_name}_{dirname}",
+            })
+    return specs
 
 
-def build_factor_alpha_table(
-    all_results: dict[str, dict],
-) -> pd.DataFrame:
-    """Build factor alpha table from effect_decomposition.json."""
-    rows = []
-    for model_name, res in all_results.items():
-        alphas = res["effect_decomposition"].get("factor_alphas", {})
-        for factor_model, cells in alphas.items():
-            for cell, alpha_data in cells.items():
-                rows.append({
-                    "model": model_name,
-                    "factor_model": factor_model,
-                    "cell": cell,
-                    "alpha_annual": alpha_data.get("alpha_annual"),
-                    "alpha_tstat": alpha_data.get("alpha_tstat"),
-                    "alpha_pval": alpha_data.get("alpha_pvalue"),
-                })
-    return pd.DataFrame(rows)
+def load_predictions(spec: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    preds_std = pd.read_parquet(spec["std_dir"] / "predictions.parquet")
+    preds_wt = pd.read_parquet(spec["wt_dir"] / "predictions.parquet")
+    return preds_std, preds_wt
 
 
-def build_oos_r2_table(
-    all_results: dict[str, dict],
-) -> pd.DataFrame:
-    """Build OOS R² table."""
-    rows = []
-    for model_name, res in all_results.items():
-        rows.append({
-            "model": model_name,
-            "R2_std": res["oos_r2"]["standard"],
-            "R2_wt": res["oos_r2"]["weighted"],
+def load_importance(spec: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    imp_std = pd.read_csv(spec["std_dir"] / "importance_shap.csv")
+    imp_wt = pd.read_csv(spec["wt_dir"] / "importance_shap.csv")
+    return imp_std, imp_wt
+
+
+def assign_liquidity_quintiles(panel: pd.DataFrame, config: dict) -> pd.Series:
+    """NYSE-breakpoint liquidity quintiles per month."""
+    liq_col = f"liq_{config['liquidity']['primary']}"
+    quintiles = pd.Series(np.nan, index=panel.index, name="liq_quintile")
+    for yyyymm, group in panel.groupby("yyyymm"):
+        liq = group[liq_col]
+        breaks = liq.quantile([0.0, 0.2, 0.4, 0.6, 0.8, 1.0]).values
+        breaks[0] = -np.inf
+        breaks[-1] = np.inf
+        q = pd.cut(liq, bins=breaks, labels=[1, 2, 3, 4, 5], include_lowest=True)
+        quintiles.loc[group.index] = q.astype(float)
+    return quintiles
+
+
+# ------------------------------------------------------------------
+# Prediction 1: Improved liquid-stock R^2
+# ------------------------------------------------------------------
+
+def compute_prediction_1(preds_std, preds_wt, panel, config):
+    target = config["data"]["target_col"]
+    liq_col = f"liq_{config['liquidity']['primary']}"
+
+    panel_sub = panel[["permno", "yyyymm", target, liq_col]].copy()
+    panel_sub["liq_quintile"] = assign_liquidity_quintiles(panel, config)
+
+    std_m = preds_std.merge(panel_sub, on=["permno", "yyyymm"], how="inner")
+    wt_m = preds_wt.merge(panel_sub, on=["permno", "yyyymm"], how="inner")
+
+    # R^2 by quintile (zero benchmark)
+    r2_rows = []
+    for q in [1, 2, 3, 4, 5]:
+        sq = std_m[std_m["liq_quintile"] == q]
+        wq = wt_m[wt_m["liq_quintile"] == q]
+        ss_pred_std = (sq[target] - sq["prediction"]).pow(2).sum()
+        ss_total_std = sq[target].pow(2).sum()
+        ss_pred_wt = (wq[target] - wq["prediction"]).pow(2).sum()
+        ss_total_wt = wq[target].pow(2).sum()
+        r2_std = 1.0 - ss_pred_std / ss_total_std if ss_total_std > 0 else np.nan
+        r2_wt = 1.0 - ss_pred_wt / ss_total_wt if ss_total_wt > 0 else np.nan
+        r2_rows.append({
+            "quintile": f"Q{q}", "r2_std_pct": r2_std * 100,
+            "r2_wt_pct": r2_wt * 100, "delta_pct": (r2_wt - r2_std) * 100,
+            "n_obs": len(sq),
         })
-    return pd.DataFrame(rows)
+
+    # Full sample
+    r2_std_f = 1.0 - (std_m[target] - std_m["prediction"]).pow(2).sum() / std_m[target].pow(2).sum()
+    r2_wt_f = 1.0 - (wt_m[target] - wt_m["prediction"]).pow(2).sum() / wt_m[target].pow(2).sum()
+    r2_rows.append({
+        "quintile": "Full", "r2_std_pct": r2_std_f * 100,
+        "r2_wt_pct": r2_wt_f * 100, "delta_pct": (r2_wt_f - r2_std_f) * 100,
+        "n_obs": len(std_m),
+    })
+    r2_table = pd.DataFrame(r2_rows)
+
+    # Utility-weighted R^2
+    w_std = std_m[liq_col] / std_m.groupby("yyyymm")[liq_col].transform("mean")
+    r2_uw_std = 1.0 - (w_std * (std_m[target] - std_m["prediction"]).pow(2)).sum() / (w_std * std_m[target].pow(2)).sum()
+    w_wt = wt_m[liq_col] / wt_m.groupby("yyyymm")[liq_col].transform("mean")
+    r2_uw_wt = 1.0 - (w_wt * (wt_m[target] - wt_m["prediction"]).pow(2)).sum() / (w_wt * wt_m[target].pow(2)).sum()
+
+    utility_r2 = pd.DataFrame([
+        {"metric": "Standard (equal-weighted)", "r2_std_pct": r2_std_f * 100, "r2_wt_pct": r2_wt_f * 100},
+        {"metric": "Utility-weighted (dollar-volume)", "r2_std_pct": r2_uw_std * 100, "r2_wt_pct": r2_uw_wt * 100},
+        {"metric": "Gap (standard - utility)", "r2_std_pct": (r2_std_f - r2_uw_std) * 100, "r2_wt_pct": (r2_wt_f - r2_uw_wt) * 100},
+    ])
+
+    return {"r2_by_quintile": r2_table, "utility_weighted_r2": utility_r2}
 
 
-# ── Net Return Statistical Tests ─────────────────────────────────
+# ------------------------------------------------------------------
+# Prediction 2: Feature importance reallocation
+# ------------------------------------------------------------------
+
+def compute_prediction_2(imp_std, imp_wt):
+    common_months = set(imp_std["yyyymm"]) & set(imp_wt["yyyymm"])
+    imp_std = imp_std[imp_std["yyyymm"].isin(common_months)].sort_values("yyyymm")
+    imp_wt = imp_wt[imp_wt["yyyymm"].isin(common_months)].sort_values("yyyymm")
+    features = [c for c in imp_std.columns if c != "yyyymm"]
+
+    rows = []
+    for feat in features:
+        sv = imp_std[feat].values
+        wv = imp_wt[feat].values
+        valid = ~(np.isnan(sv) | np.isnan(wv))
+        if valid.sum() < 5:
+            continue
+        mean_std = np.nanmean(sv[valid])
+        mean_wt = np.nanmean(wv[valid])
+        delta = mean_wt - mean_std
+        diffs = wv[valid] - sv[valid]
+        se = np.std(diffs, ddof=1) / np.sqrt(len(diffs))
+        t_stat = np.mean(diffs) / se if se > 0 else 0.0
+        p_val = 2.0 * (1.0 - stats.t.cdf(abs(t_stat), df=len(diffs) - 1))
+        rows.append({
+            "feature": feat, "mean_shap_std": mean_std, "mean_shap_wt": mean_wt,
+            "delta": delta, "t_stat": t_stat, "p_value": p_val, "n_windows": int(valid.sum()),
+        })
+
+    return {"importance_shift": pd.DataFrame(rows).sort_values("delta", ascending=False)}
 
 
-def compute_net_effect_tests(
-    all_results: dict[str, dict],
-    config: dict,
-) -> dict[str, dict]:
-    """Run Ledoit-Wolf bootstrap tests on net return series.
+# ------------------------------------------------------------------
+# Prediction 4: Cumulative squared error differential
+# ------------------------------------------------------------------
 
-    For each model and AUM level, tests:
-      - lw_portfolio: net SR(1B) vs net SR(1A)
-      - lw_training:  net SR(2A) vs net SR(1A)
-      - lw_total:     net SR(2B) vs net SR(1A)  (H3 net)
-      - lw_h3:        net SR(2A) vs net SR(1B), one-sided  (H1 net)
+def compute_prediction_4(preds_std, preds_wt, panel, config):
+    target = config["data"]["target_col"]
+    panel_sub = panel[["permno", "yyyymm", target]].copy()
+    panel_sub["liq_quintile"] = assign_liquidity_quintiles(panel, config)
 
-    Returns
-    -------
-    dict : {model_name: {aum_label: {lw_portfolio, lw_training, lw_total, lw_h3}}}
-    """
-    aum_labels = _get_aum_labels(config)
-    results: dict[str, dict] = {}
+    std_m = preds_std.merge(panel_sub, on=["permno", "yyyymm"], how="inner")
+    wt_m = preds_wt.merge(panel_sub, on=["permno", "yyyymm"], how="inner")
 
-    for model_name, res in all_results.items():
-        model_tests: dict[str, dict] = {}
+    # Q4-Q5 only
+    std_liq = std_m[std_m["liq_quintile"] >= 4]
+    wt_liq = wt_m[wt_m["liq_quintile"] >= 4]
 
-        for aum_label in aum_labels:
-            col = f"ret_ls_net_{aum_label}"
+    std_se = std_liq.groupby("yyyymm").apply(
+        lambda g: ((g[target] - g["prediction"]) ** 2).mean()
+    ).rename("se_std")
+    wt_se = wt_liq.groupby("yyyymm").apply(
+        lambda g: ((g[target] - g["prediction"]) ** 2).mean()
+    ).rename("se_wt")
 
-            # Load net return series for all 4 cells
-            net_series = {}
-            for cell in ["1A", "1B", "2A", "2B"]:
-                net_df = res["net_returns"][cell]
-                if col not in net_df.columns:
-                    break
-                net_series[cell] = net_df[["yyyymm", col]].dropna()
-            else:
-                # Align to common months
-                common_months = sorted(
-                    set(net_series["1A"]["yyyymm"])
-                    & set(net_series["1B"]["yyyymm"])
-                    & set(net_series["2A"]["yyyymm"])
-                    & set(net_series["2B"]["yyyymm"])
-                )
-                if len(common_months) < 12:
-                    logger.warning(
-                        "%s / %s: only %d common months — skipping net tests.",
-                        model_name, aum_label, len(common_months),
-                    )
-                    continue
-
-                def _aligned(df: pd.DataFrame) -> np.ndarray:
-                    return (
-                        df[df["yyyymm"].isin(common_months)]
-                        .sort_values("yyyymm")[col]
-                        .values
-                    )
-
-                r_1a = _aligned(net_series["1A"])
-                r_1b = _aligned(net_series["1B"])
-                r_2a = _aligned(net_series["2A"])
-                r_2b = _aligned(net_series["2B"])
-
-                # Net Sharpe ratios
-                net_sharpes = {
-                    "1A": sharpe_ratio(r_1a),
-                    "1B": sharpe_ratio(r_1b),
-                    "2A": sharpe_ratio(r_2a),
-                    "2B": sharpe_ratio(r_2b),
-                }
-
-                # Net effect decomposition
-                net_portfolio_effect = net_sharpes["1B"] - net_sharpes["1A"]
-                net_training_effect = net_sharpes["2A"] - net_sharpes["1A"]
-                net_total_effect = net_sharpes["2B"] - net_sharpes["1A"]
-                net_interaction = (
-                    net_total_effect - net_portfolio_effect - net_training_effect
-                )
-
-                model_tests[aum_label] = {
-                    "sharpe_ratios": net_sharpes,
-                    "portfolio_effect": net_portfolio_effect,
-                    "training_effect": net_training_effect,
-                    "total_effect": net_total_effect,
-                    "interaction": net_interaction,
-                    "training_share": (
-                        net_training_effect / net_total_effect
-                        if net_total_effect != 0 else None
-                    ),
-                    "lw_portfolio": bootstrap_sharpe_test(
-                        r_1b, r_1a, config=config
-                    ),
-                    "lw_training": bootstrap_sharpe_test(
-                        r_2a, r_1a, config=config
-                    ),
-                    "lw_total": bootstrap_sharpe_test(
-                        r_2b, r_1a, config=config
-                    ),
-                    "lw_h3": bootstrap_sharpe_test(
-                        r_2a, r_1b, one_sided=True, config=config
-                    ),
-                }
-
-                logger.info(
-                    "  %s / %s: net SR(1A)=%.3f, SR(2B)=%.3f, "
-                    "training=%.3f, portfolio=%.3f, total=%.3f, "
-                    "H1 p=%.4f, H3 p=%.4f",
-                    model_name, aum_label,
-                    net_sharpes["1A"], net_sharpes["2B"],
-                    net_training_effect, net_portfolio_effect, net_total_effect,
-                    model_tests[aum_label]["lw_h3"]["p_value"],
-                    model_tests[aum_label]["lw_total"]["p_value"],
-                )
-
-        results[model_name] = model_tests
-
-    return results
+    diff = pd.DataFrame({"se_std": std_se, "se_wt": wt_se}).dropna()
+    diff["se_diff"] = diff["se_std"] - diff["se_wt"]
+    diff["cumulative_diff"] = diff["se_diff"].cumsum()
+    return diff.reset_index()
 
 
-# ── Hypothesis Test Summary ──────────────────────────────────────
+# ------------------------------------------------------------------
+# Table 11: Within-quintile portfolio performance
+# ------------------------------------------------------------------
+
+def compute_table_11(preds_std, preds_wt, panel, aum, config):
+    panel_work = panel.copy()
+    panel_work["liq_quintile"] = assign_liquidity_quintiles(panel_work, config)
+
+    rows = []
+    for q in [1, 2, 3, 4, 5]:
+        for label, preds in [("std", preds_std), ("wt", preds_wt)]:
+            q_mask = panel_work["liq_quintile"] == q
+            panel_q = panel_work[q_mask].copy()
+
+            pred_idx = preds.set_index(["permno", "yyyymm"])["prediction"]
+            panel_q_idx = panel_q.set_index(["permno", "yyyymm"])
+            common = panel_q_idx.index.intersection(pred_idx.index)
+            if len(common) < 100:
+                continue
+
+            panel_q_a = panel_q.set_index(["permno", "yyyymm"]).loc[common].reset_index()
+            pred_a = pred_idx.loc[common]
+            pred_a.index = panel_q_a.index
+
+            ret_df, pos_hist = build_portfolio_timeseries(
+                panel_q_a, pred_a, tc_penalised=False, config=config,
+            )
+            if len(ret_df) < 12:
+                continue
+
+            gross_sr = sharpe_ratio(ret_df["ret_long_short"].dropna())
+            net_df = compute_net_returns(ret_df, pos_hist, panel, aum=aum, config=config)
+            net_sr = sharpe_ratio(net_df["ret_long_short_net"].dropna())
+
+            rows.append({
+                "quintile": f"Q{q}", "model_type": label,
+                "gross_sr": gross_sr, "net_sr": net_sr,
+            })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    pivot = df.pivot(index="quintile", columns="model_type", values=["gross_sr", "net_sr"])
+    pivot.columns = [f"{m}_{t}" for m, t in pivot.columns]
+    return pivot.reset_index()
 
 
-def build_hypothesis_summary(
-    all_results: dict[str, dict],
-    h2_summary: pd.DataFrame | None,
-    capacity_df: pd.DataFrame | None,
-    net_tests: dict[str, dict] | None = None,
-    config: dict | None = None,
-) -> dict:
-    """Consolidate H1–H4 results into a single JSON-serializable dict.
+# ------------------------------------------------------------------
+# Table 12: 2x2 Decomposition
+# ------------------------------------------------------------------
 
-    Primary tests use net returns at the primary AUM ($500M).
-    Gross results are kept as secondary under ``gross_results``.
-    """
-    primary_aum = _get_aum_labels(config)[1] if config else "500M"
+def compute_table_12(preds_std, preds_wt, panel, aum, config):
+    logger.info("  Building 2x2 portfolios at AUM=$%.0fM...", aum / 1e6)
 
-    # H1: Training Dominance
-    h1_per_model = {}
-    for model_name, res in all_results.items():
-        decomp = res["effect_decomposition"]
-        gross_training = decomp["training_effect"]
-        gross_portfolio = decomp["portfolio_effect"]
-        gross_total = decomp["total_effect"]
-
-        # Gross (secondary)
-        gross_h1 = {
-            "training_effect": gross_training,
-            "portfolio_effect": gross_portfolio,
-            "total_effect": gross_total,
-            "training_share": gross_training / gross_total if gross_total != 0 else None,
-            "p_value": decomp["lw_h3"]["p_value"],
-        }
-
-        # Primary: net at primary AUM
-        primary_tests = (
-            net_tests.get(model_name, {}).get(primary_aum)
-            if net_tests else None
+    def align_preds(preds_df):
+        merged = panel[["permno", "yyyymm"]].merge(
+            preds_df, on=["permno", "yyyymm"], how="inner",
         )
-        if primary_tests:
-            h1_entry = {
-                "training_effect": primary_tests["training_effect"],
-                "portfolio_effect": primary_tests["portfolio_effect"],
-                "total_effect": primary_tests["total_effect"],
-                "training_share": primary_tests["training_share"],
-                "p_value": primary_tests["lw_h3"]["p_value"],
-                "primary_aum": primary_aum,
-                "gross_results": gross_h1,
-            }
-        else:
-            h1_entry = gross_h1
-            h1_entry["primary_aum"] = "gross (net unavailable)"
+        return pd.Series(merged["prediction"].values, index=merged.index)
 
-        # Per-AUM net results
-        if net_tests and model_name in net_tests:
-            net_h1 = {}
-            for aum_label, tests in net_tests[model_name].items():
-                net_h1[aum_label] = {
-                    "training_effect": tests["training_effect"],
-                    "portfolio_effect": tests["portfolio_effect"],
-                    "total_effect": tests["total_effect"],
-                    "interaction": tests["interaction"],
-                    "training_share": tests["training_share"],
-                    "p_value": tests["lw_h3"]["p_value"],
-                    "difference": tests["lw_h3"]["difference"],
-                }
-            h1_entry["net_results"] = net_h1
-        h1_per_model[model_name] = h1_entry
+    pred_std_s = align_preds(preds_std)
+    pred_wt_s = align_preds(preds_wt)
 
-    # H2: Feature Reallocation
-    h2_per_model = {}
-    if h2_summary is not None and len(h2_summary) > 0:
-        for _, row in h2_summary.iterrows():
-            h2_per_model[row["model"]] = {
-                "ratio_std_mean": row.get("ratio_std"),
-                "ratio_wt_mean": row.get("ratio_wt"),
-                "ratio_diff": row.get("ratio_diff"),
-                "t_stat": row.get("t_stat"),
-                "p_value": row.get("p_value"),
-            }
-
-    # H3: Sharpe Improvement
-    h3_per_model = {}
-    for model_name, res in all_results.items():
-        decomp = res["effect_decomposition"]
-        gross_total = decomp["total_effect"]
-
-        # Gross (secondary)
-        gross_h3 = {
-            "total_effect": gross_total,
-            "p_value": decomp["lw_total"]["p_value"],
-            "meets_target": gross_total >= 0.20,
-        }
-
-        # Primary: net at primary AUM
-        primary_tests = (
-            net_tests.get(model_name, {}).get(primary_aum)
-            if net_tests else None
+    cells = {}
+    positions = {}
+    for cell_name, pred_s, tc_pen in [
+        ("1A", pred_std_s, False), ("1B", pred_std_s, True),
+        ("2A", pred_wt_s, False), ("2B", pred_wt_s, True),
+    ]:
+        ret_df, pos_hist = build_portfolio_timeseries(
+            panel, pred_s, tc_penalised=tc_pen,
+            aum=aum if tc_pen else None, config=config,
         )
-        if primary_tests:
-            net_total = primary_tests["total_effect"]
-            h3_entry = {
-                "total_effect": net_total,
-                "p_value": primary_tests["lw_total"]["p_value"],
-                "meets_target": net_total >= 0.20,
-                "primary_aum": primary_aum,
-                "gross_results": gross_h3,
-            }
-        else:
-            h3_entry = gross_h3
-            h3_entry["primary_aum"] = "gross (net unavailable)"
+        net_df = compute_net_returns(ret_df, pos_hist, panel, aum=aum, config=config)
+        cells[cell_name] = net_df
+        positions[cell_name] = pos_hist
 
-        # Per-AUM net results
-        if net_tests and model_name in net_tests:
-            net_h3 = {}
-            for aum_label, tests in net_tests[model_name].items():
-                net_h3[aum_label] = {
-                    "sharpe_ratios": tests["sharpe_ratios"],
-                    "total_effect": tests["total_effect"],
-                    "meets_target": tests["total_effect"] >= 0.20,
-                    "p_value": tests["lw_total"]["p_value"],
-                    "difference": tests["lw_total"]["difference"],
-                }
-            h3_entry["net_results"] = net_h3
-        h3_per_model[model_name] = h3_entry
+    # Align to common months
+    common = set(cells["1A"]["yyyymm"])
+    for k in ["1B", "2A", "2B"]:
+        common &= set(cells[k]["yyyymm"])
+    common = sorted(common)
 
-    # H4: Capacity Improvement
-    h4_per_model = {}
-    if capacity_df is not None and len(capacity_df) > 0:
-        for model_name in all_results:
-            model_cap = capacity_df[capacity_df["model"] == model_name]
-            be_1a_row = model_cap[model_cap["cell"] == "1A"]
-            be_2b_row = model_cap[model_cap["cell"] == "2B"]
+    aligned = {}
+    for k, df in cells.items():
+        aligned[k] = df[df["yyyymm"].isin(common)].sort_values("yyyymm")
 
-            be_1a = (
-                float(be_1a_row["breakeven_aum"].iloc[0])
-                if len(be_1a_row) > 0 else None
-            )
-            be_2b = (
-                float(be_2b_row["breakeven_aum"].iloc[0])
-                if len(be_2b_row) > 0 else None
-            )
-            uplift = (
-                float(be_2b_row["h4_uplift"].iloc[0])
-                if len(be_2b_row) > 0 and "h4_uplift" in be_2b_row.columns
-                else None
-            )
+    # Decomposition
+    decomp = compute_effect_decomposition(
+        returns_1a=aligned["1A"]["ret_long_short_net"].values,
+        returns_1b=aligned["1B"]["ret_long_short_net"].values,
+        returns_2a=aligned["2A"]["ret_long_short_net"].values,
+        returns_2b=aligned["2B"]["ret_long_short_net"].values,
+        yyyymm=aligned["1A"]["yyyymm"].values,
+        config=config,
+    )
 
-            h4_per_model[model_name] = {
-                "breakeven_1A": be_1a,
-                "breakeven_2B": be_2b,
-                "uplift_ratio": uplift,
-            }
+    total = decomp["total_effect"]
+    training_share = (decomp["training_effect"] / total * 100) if abs(total) > 1e-10 else np.nan
+
+    # Turnover
+    turnover = {}
+    for cell_name, pos_hist in positions.items():
+        months = sorted(pos_hist.keys())
+        mt = []
+        for i in range(1, len(months)):
+            prev, curr = pos_hist[months[i - 1]], pos_hist[months[i]]
+            turn = 0.0
+            for leg in ["long", "short"]:
+                all_p = set(prev[leg]) | set(curr[leg])
+                turn += sum(abs(curr[leg].get(p, 0) - prev[leg].get(p, 0)) for p in all_p)
+            mt.append(turn)
+        turnover[cell_name] = np.mean(mt) if mt else np.nan
 
     return {
-        "H1_training_dominance": {
-            "description": (
-                "Training effect exceeds portfolio effect: "
-                "[SR(2A)-SR(1A)] > [SR(1B)-SR(1A)] (net returns, primary AUM)"
-            ),
-            "target": "Training effect = 60-70% of total improvement",
-            "per_model": h1_per_model,
-        },
-        "H2_feature_reallocation": {
-            "description": (
-                "Weighted training shifts feature importance "
-                "from illiquidity to tradable features"
-            ),
-            "target": "Illiquidity total 43% -> 12%, Mom12m 10% -> 24%",
-            "per_model": h2_per_model,
-        },
-        "H3_sharpe_improvement": {
-            "description": "Net SR(2B) - Net SR(1A) >= 0.20 annualized (primary AUM)",
-            "target": "Net total effect >= 0.20",
-            "per_model": h3_per_model,
-        },
-        "H4_capacity_improvement": {
-            "description": (
-                "Break-even AUM of combined approach (2B) vs baseline (1A)"
-            ),
-            "target": "25x increase (~$200M to ~$5B)",
-            "per_model": h4_per_model,
-        },
+        "decomposition": decomp, "training_share": training_share,
+        "cells": aligned, "turnover": turnover,
     }
 
 
-# ── Figures ──────────────────────────────────────────────────────
+# ------------------------------------------------------------------
+# Figures
+# ------------------------------------------------------------------
 
-
-def _setup_matplotlib():
-    """Configure matplotlib for publication-quality figures."""
+def plot_squared_error_differential(diff_df, out_path, model):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    plt.rcParams.update({
-        "figure.figsize": (10, 6),
-        "figure.dpi": 150,
-        "font.size": 11,
-        "axes.grid": True,
-        "grid.alpha": 0.3,
-    })
-    return plt
 
-
-CELL_LABELS = {
-    "1A": "Std Train / Std Portfolio",
-    "1B": "Std Train / Liq Portfolio",
-    "2A": "Wt Train / Std Portfolio",
-    "2B": "Wt Train / Liq Portfolio",
-}
-CELL_COLORS = {"1A": "#1f77b4", "1B": "#ff7f0e", "2A": "#2ca02c", "2B": "#d62728"}
-
-
-def plot_cumulative_returns(
-    gross: dict[str, pd.DataFrame],
-    model_name: str,
-    save_path: Path,
-):
-    """Plot cumulative gross returns for 4 cells."""
-    plt = _setup_matplotlib()
-    fig, ax = plt.subplots()
-
-    for cell in ["1A", "1B", "2A", "2B"]:
-        df = gross[cell].sort_values("yyyymm")
-        cum = (1 + df["ret_long_short"]).cumprod()
-        ax.plot(
-            df["yyyymm"], cum,
-            label=CELL_LABELS[cell], color=CELL_COLORS[cell],
-        )
-
-    ax.set_xlabel("Date (yyyymm)")
-    ax.set_ylabel("Cumulative Return")
-    ax.set_title(f"Cumulative Gross Returns — {model_name}")
-    ax.legend(fontsize=9)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(range(len(diff_df)), diff_df["cumulative_diff"], color="steelblue", lw=1.5)
+    ax.axhline(0, color="gray", ls="--", lw=0.5)
+    ax.set_ylabel("Cumulative SE(M_std) - SE(M_w)")
+    ax.set_title(f"Prediction 4: Squared Error Differential ({model}, Q4-Q5)")
+    n = len(diff_df)
+    tick_every = max(n // 10, 1)
+    ax.set_xticks(range(0, n, tick_every))
+    ax.set_xticklabels(diff_df["yyyymm"].astype(str).iloc[::tick_every], rotation=45, fontsize=8)
     fig.tight_layout()
-    fig.savefig(save_path)
+    fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    logger.info("  Saved %s", save_path.name)
+    logger.info("  Saved %s", out_path)
 
 
-def plot_cumulative_returns_net(
-    net: dict[str, pd.DataFrame],
-    model_name: str,
-    primary_aum: str,
-    save_path: Path,
-):
-    """Plot cumulative net returns (primary AUM) for 4 cells."""
-    plt = _setup_matplotlib()
-    fig, ax = plt.subplots()
-    col = f"ret_ls_net_{primary_aum}"
+def plot_importance_shift(shift_df, out_path, model, top_n=30):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
 
-    for cell in ["1A", "1B", "2A", "2B"]:
-        df = net[cell].sort_values("yyyymm")
-        if col not in df.columns:
-            continue
-        cum = (1 + df[col]).cumprod()
-        ax.plot(
-            df["yyyymm"], cum,
-            label=CELL_LABELS[cell], color=CELL_COLORS[cell],
-        )
-
-    ax.set_xlabel("Date (yyyymm)")
-    ax.set_ylabel("Cumulative Return")
-    ax.set_title(f"Cumulative Net Returns ({primary_aum} AUM) — {model_name}")
-    ax.legend(fontsize=9)
+    df = shift_df.head(top_n).copy()
+    df = df.reindex(df["delta"].abs().sort_values(ascending=True).index)
+    fig, ax = plt.subplots(figsize=(8, max(6, top_n * 0.25)))
+    colors = ["steelblue" if d > 0 else "coral" for d in df["delta"]]
+    ax.barh(df["feature"], df["delta"], color=colors)
+    ax.axvline(0, color="gray", lw=0.5)
+    ax.set_xlabel("Delta SHAP (weighted - standard)")
+    ax.set_title(f"Prediction 2: Importance Reallocation ({model})")
     fig.tight_layout()
-    fig.savefig(save_path)
+    fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    logger.info("  Saved %s", save_path.name)
+    logger.info("  Saved %s", out_path)
 
 
-def plot_effect_decomposition(
-    main_df: pd.DataFrame,
-    net: bool,
-    save_path: Path,
-    aum_label: str | None = None,
-):
-    """Grouped bar chart of training/portfolio/total effects per model."""
-    plt = _setup_matplotlib()
-    fig, ax = plt.subplots()
-
-    models = main_df[main_df["model"] != "ensemble"]["model"].tolist()
-    x = np.arange(len(models))
-    width = 0.25
-
-    if net and aum_label:
-        train_col = f"net_training_{aum_label}"
-        port_col = f"net_portfolio_{aum_label}"
-        total_col = f"net_total_{aum_label}"
-        title = f"Net Effect Decomposition ({aum_label} AUM)"
-    else:
-        train_col = "training_effect"
-        port_col = "portfolio_effect"
-        total_col = "total_effect"
-        title = "Gross Effect Decomposition"
-
-    model_rows = main_df[main_df["model"].isin(models)]
-    ax.bar(x - width, model_rows[train_col], width, label="Training Effect", color="#2ca02c")
-    ax.bar(x, model_rows[port_col], width, label="Portfolio Effect", color="#ff7f0e")
-    ax.bar(x + width, model_rows[total_col], width, label="Total Effect", color="#d62728")
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(models, rotation=15)
-    ax.set_ylabel("Sharpe Ratio Difference")
-    ax.set_title(title)
-    ax.legend()
-    ax.axhline(y=0, color="black", linewidth=0.5)
-    fig.tight_layout()
-    fig.savefig(save_path)
-    plt.close(fig)
-    logger.info("  Saved %s", save_path.name)
-
-
-def plot_capacity_curve(
-    capacity_df: pd.DataFrame,
-    config: dict,
-    save_path: Path,
-):
-    """Plot net SR vs AUM for each cell, subplot per model (H4)."""
-    plt = _setup_matplotlib()
-
-    aum_labels = _get_aum_labels(config)
-    aum_scenarios = config["transaction_costs"]["aum_scenarios"]
-    models = capacity_df["model"].unique()
-    n_models = len(models)
-
-    fig, axes = plt.subplots(1, n_models, figsize=(5 * n_models, 5), squeeze=False)
-
-    for i, model_name in enumerate(models):
-        ax = axes[0, i]
-        model_data = capacity_df[capacity_df["model"] == model_name]
-
-        for cell in ["1A", "2B"]:
-            cell_row = model_data[model_data["cell"] == cell]
-            if cell_row.empty:
-                continue
-            srs = [float(cell_row[f"net_SR_{lbl}"].iloc[0]) for lbl in aum_labels]
-            ax.plot(
-                aum_scenarios, srs,
-                marker="o", label=CELL_LABELS[cell], color=CELL_COLORS[cell],
-            )
-
-            # Mark break-even
-            be = float(cell_row["breakeven_aum"].iloc[0])
-            if np.isfinite(be) and be > 0:
-                ax.axvline(
-                    x=be, color=CELL_COLORS[cell],
-                    linestyle="--", alpha=0.5,
-                )
-
-        ax.set_xscale("log")
-        ax.set_xlabel("AUM ($)")
-        ax.set_ylabel("Net Sharpe Ratio")
-        ax.set_title(model_name)
-        ax.axhline(y=0, color="black", linewidth=0.5)
-        ax.legend(fontsize=8)
-
-    fig.suptitle("Capacity Curve: Net SR vs AUM (H4)", fontsize=13)
-    fig.tight_layout()
-    fig.savefig(save_path)
-    plt.close(fig)
-    logger.info("  Saved %s", save_path.name)
-
-
-def plot_oos_r2_monthly(
-    all_results: dict[str, dict],
-    save_path: Path,
-):
-    """Plot monthly OOS R² time series for all models (std vs wt)."""
-    plt = _setup_matplotlib()
-    n_models = len(all_results)
-    fig, axes = plt.subplots(n_models, 1, figsize=(10, 4 * n_models), squeeze=False)
-
-    for idx, (model_name, res) in enumerate(all_results.items()):
-        ax = axes[idx, 0]
-        r2m = res.get("oos_r2_monthly")
-        if r2m is None or r2m.empty:
-            ax.set_title(f"OOS R² — {model_name} (no data)")
-            continue
-
-        r2m = r2m.sort_values("yyyymm")
-        ax.plot(r2m["yyyymm"], r2m["R2_std"], label="Standard", alpha=0.7)
-        ax.plot(r2m["yyyymm"], r2m["R2_wt"], label="Weighted", alpha=0.7)
-        ax.axhline(y=0, color="black", linewidth=0.5, linestyle="--")
-        ax.set_xlabel("Date (yyyymm)")
-        ax.set_ylabel("OOS R²")
-        ax.set_title(f"Monthly OOS R² — {model_name}")
-        ax.legend(fontsize=9)
-
-    fig.tight_layout()
-    fig.savefig(save_path)
-    plt.close(fig)
-    logger.info("  Saved %s", save_path.name)
-
-
-# ── LaTeX helpers ────────────────────────────────────────────────
-
-
-def _save_latex(df: pd.DataFrame, path: Path, float_format: str = "%.4f"):
-    """Save DataFrame as LaTeX table."""
-    latex = df.to_latex(index=False, float_format=float_format, escape=False)
-    path.write_text(latex)
-
-
-# ── Main ─────────────────────────────────────────────────────────
-
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
 
 def main():
     args = parse_args()
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
     config = load_config()
-    output_dir = get_output_dir()
-    experiment_dir = output_dir / "experiment"
 
-    if not experiment_dir.exists():
-        logger.error("Experiment directory not found: %s", experiment_dir)
-        logger.error("Run scripts/02_run_experiment.py first.")
-        sys.exit(1)
-
-    # Determine models to analyze
-    if args.model:
-        model_names = [args.model]
-    else:
-        model_names = config["models"]["run_models"]
-
-    # Filter to models that actually have results
-    model_names = [m for m in model_names if (experiment_dir / m).exists()]
-    if not model_names:
-        logger.error("No model results found in %s", experiment_dir)
-        sys.exit(1)
-
-    logger.info("Analyzing results for models: %s", model_names)
-
-    # Create output directories
-    analysis_dir = output_dir / "analysis"
-    tables_dir = analysis_dir / "tables"
-    figures_dir = analysis_dir / "figures"
+    base_dir = Path(config["project"]["output_dir"]) / "formalanalysis"
+    experiment_dir = base_dir / "experiment"
+    tables_dir = base_dir / "analysis" / "tables"
+    figures_dir = base_dir / "analysis" / "figures"
     tables_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── 1. Load results ──
-    logger.info("Loading experiment results...")
-    all_results: dict[str, dict] = {}
-    for name in model_names:
-        try:
-            all_results[name] = _load_model_results(name, experiment_dir)
-            logger.info("  Loaded %s", name)
-        except Exception as e:
-            logger.warning("  Failed to load %s: %s", name, e)
-
-    if not all_results:
-        logger.error("No results loaded successfully.")
+    specs = discover_experiments(experiment_dir)
+    if not specs:
+        logger.error("No completed experiments in %s", experiment_dir)
         sys.exit(1)
 
-    # Load summary.csv if exists (multi-model run)
-    summary_path = experiment_dir / "summary.csv"
-    summary_df = pd.read_csv(summary_path) if summary_path.exists() else None
+    if args.model:
+        specs = [s for s in specs if s["model"] == args.model]
+    if args.weights:
+        specs = [s for s in specs if s["weight_family"] == args.weights]
 
-    # ── 2. Net return statistical tests (Ledoit-Wolf bootstrap) ──
-    logger.info("Running Ledoit-Wolf bootstrap tests on net returns...")
-    net_tests = compute_net_effect_tests(all_results, config)
+    logger.info("Found %d specifications to analyze", len(specs))
+    logger.info("Loading panel...")
+    panel = load_panel(config)
 
-    # ── 3. Main results table (gross + net primary) ──
-    logger.info("Building main results table...")
-    main_df = build_main_results_table(
-        all_results, summary_df, net_tests=net_tests, config=config,
-    )
-    main_df.to_csv(tables_dir / "main_results.csv", index=False)
-    _save_latex(main_df, tables_dir / "main_results.tex")
-    logger.info("  Saved main_results.csv / .tex")
+    aum_primary = 500_000_000
+    aum_scenarios = config["transaction_costs"]["aum_scenarios"]
 
-    # ── 4. Net results table ──
-    logger.info("Building net results table...")
-    net_df = build_net_results_table(all_results, config, net_tests=net_tests)
-    net_df.to_csv(tables_dir / "net_results.csv", index=False)
-    _save_latex(net_df, tables_dir / "net_results.tex")
-    logger.info("  Saved net_results.csv / .tex")
+    all_results = {}
 
-    # ── 5. Capacity analysis (H4) ──
-    logger.info("Computing capacity / break-even AUM (H4)...")
-    capacity_df = build_capacity_table(all_results, config)
-    capacity_df.to_csv(tables_dir / "capacity.csv", index=False)
-    logger.info("  Saved capacity.csv")
+    for spec in specs:
+        sl = spec["spec_label"]
+        logger.info("=== %s ===", sl)
+        preds_std, preds_wt = load_predictions(spec)
+        logger.info("  Predictions: std=%d, wt=%d", len(preds_std), len(preds_wt))
 
-    # Log H4 summary
-    for model_name in all_results:
-        model_cap = capacity_df[capacity_df["model"] == model_name]
-        be_1a_row = model_cap[model_cap["cell"] == "1A"]
-        be_2b_row = model_cap[model_cap["cell"] == "2B"]
-        if not be_1a_row.empty and not be_2b_row.empty:
-            be_1a = be_1a_row["breakeven_aum"].iloc[0]
-            be_2b = be_2b_row["breakeven_aum"].iloc[0]
-            uplift = be_2b_row.get("h4_uplift", pd.Series([np.nan])).iloc[0]
-            logger.info(
-                "  %s: break-even 1A=$%.0f, 2B=$%.0f, uplift=%.1fx",
-                model_name, be_1a, be_2b,
-                uplift if pd.notna(uplift) else 0,
-            )
+        # Prediction 1
+        logger.info("  Prediction 1...")
+        p1 = compute_prediction_1(preds_std, preds_wt, panel, config)
+        p1["r2_by_quintile"].to_csv(tables_dir / f"prediction_1_r2_{sl}.csv", index=False)
+        p1["utility_weighted_r2"].to_csv(tables_dir / f"prediction_1_utility_r2_{sl}.csv", index=False)
 
-    # ── 6. Factor alpha table ──
-    logger.info("Building factor alpha table...")
-    alpha_df = build_factor_alpha_table(all_results)
-    if len(alpha_df) > 0:
-        alpha_df.to_csv(tables_dir / "factor_alphas.csv", index=False)
-        _save_latex(alpha_df, tables_dir / "factor_alphas.tex")
-        logger.info("  Saved factor_alphas.csv / .tex")
-    else:
-        logger.info("  No factor alpha data found (yyyymm may not have been provided).")
-
-    # ── 7. OOS R² table ──
-    logger.info("Building OOS R² table...")
-    r2_df = build_oos_r2_table(all_results)
-    r2_df.to_csv(tables_dir / "oos_r2.csv", index=False)
-    logger.info("  Saved oos_r2.csv")
-
-    # Monthly OOS R² CSVs
-    for model_name, res in all_results.items():
-        r2m = res.get("oos_r2_monthly")
-        if r2m is not None and not r2m.empty:
-            r2m.to_csv(tables_dir / f"oos_r2_monthly_{model_name}.csv", index=False)
-            logger.info("  Saved oos_r2_monthly_%s.csv", model_name)
-
-    # ── 8. H2 analysis (feature importance) ──
-    logger.info("Running H2 analysis (feature importance)...")
-    importance_type = args.importance_type
-    h2_summary = None
-    h2_per_feature_all = []
-
-    try:
-        h2_summary = cross_model_h2_summary(
-            model_names=model_names,
-            importance_type=importance_type,
-            output_dir=experiment_dir,
-            extended=False,
-        )
-        if len(h2_summary) > 0:
-            h2_summary.to_csv(tables_dir / "h2_summary.csv", index=False)
-            logger.info("  Saved h2_summary.csv")
-        else:
-            logger.info("  No H2 summary data (importance files may be missing).")
-    except Exception as e:
-        logger.warning("  H2 summary failed: %s", e)
-        if importance_type == "shap":
-            logger.info("  Falling back to gain importance...")
-            try:
-                h2_summary = cross_model_h2_summary(
-                    model_names=model_names,
-                    importance_type="gain",
-                    output_dir=experiment_dir,
-                    extended=True,
-                )
-                if len(h2_summary) > 0:
-                    h2_summary.to_csv(tables_dir / "h2_summary.csv", index=False)
-                    logger.info("  Saved h2_summary.csv (gain fallback)")
-                    importance_type = "gain"
-            except Exception as e2:
-                logger.warning("  Gain fallback also failed: %s", e2)
-
-    # Per-feature H2 analysis
-    for model_name in model_names:
+        # Prediction 2
+        logger.info("  Prediction 2...")
         try:
-            imp = load_importance(
-                model_name, importance_type=importance_type,
-                output_dir=experiment_dir,
-            )
-            per_feat = test_h2_per_feature(imp["standard"], imp["weighted"])
-            per_feat["model"] = model_name
-            h2_per_feature_all.append(per_feat)
-        except Exception as e:
-            logger.warning("  Per-feature H2 failed for %s: %s", model_name, e)
+            imp_std, imp_wt = load_importance(spec)
+            p2 = compute_prediction_2(imp_std, imp_wt)
+            p2["importance_shift"].to_csv(tables_dir / f"prediction_2_{sl}.csv", index=False)
+            if not args.no_figures:
+                plot_importance_shift(p2["importance_shift"], figures_dir / f"importance_shift_{sl}.png", spec["model"])
+        except FileNotFoundError:
+            logger.warning("  SHAP files not found - skipping Prediction 2")
 
-    if h2_per_feature_all:
-        h2_per_feature_df = pd.concat(h2_per_feature_all, ignore_index=True)
-        h2_per_feature_df.to_csv(tables_dir / "h2_per_feature.csv", index=False)
-        logger.info("  Saved h2_per_feature.csv")
+        # Prediction 4
+        logger.info("  Prediction 4...")
+        p4 = compute_prediction_4(preds_std, preds_wt, panel, config)
+        p4.to_csv(tables_dir / f"prediction_4_{sl}.csv", index=False)
+        if not args.no_figures:
+            plot_squared_error_differential(p4, figures_dir / f"se_diff_{sl}.png", spec["model"])
 
-    # ── 9. Hypothesis test summary (H1–H4) ──
-    logger.info("Building hypothesis test summary...")
-    hyp_summary = build_hypothesis_summary(
-        all_results, h2_summary, capacity_df,
-        net_tests=net_tests, config=config,
-    )
+        # Table 12 per AUM
+        for aum in aum_scenarios:
+            al = f"{aum // 1_000_000}M" if aum < 1_000_000_000 else f"{aum // 1_000_000_000}B"
+            logger.info("  Table 12 (AUM=$%s)...", al)
+            t12 = compute_table_12(preds_std, preds_wt, panel, aum=aum, config=config)
+            d = t12["decomposition"]
+            decomp_rows = [
+                {"metric": "SR(1A)", "value": d["sharpe_ratios"]["1A"]},
+                {"metric": "SR(1B)", "value": d["sharpe_ratios"]["1B"]},
+                {"metric": "SR(2A)", "value": d["sharpe_ratios"]["2A"]},
+                {"metric": "SR(2B)", "value": d["sharpe_ratios"]["2B"]},
+                {"metric": "Training effect", "value": d["training_effect"]},
+                {"metric": "Portfolio effect", "value": d["portfolio_effect"]},
+                {"metric": "Total effect", "value": d["total_effect"]},
+                {"metric": "Interaction", "value": d["interaction"]},
+                {"metric": "Training share (%)", "value": t12["training_share"]},
+                {"metric": "LW p-val (training)", "value": d["lw_training"].get("p_value", np.nan)},
+                {"metric": "LW p-val (total)", "value": d["lw_total"].get("p_value", np.nan)},
+                {"metric": "LW p-val (H1)", "value": d["lw_h3"].get("p_value", np.nan)},
+                {"metric": "Turnover 1A", "value": t12["turnover"].get("1A", np.nan)},
+                {"metric": "Turnover 2B", "value": t12["turnover"].get("2B", np.nan)},
+            ]
+            pd.DataFrame(decomp_rows).to_csv(tables_dir / f"table_12_{sl}_{al}.csv", index=False)
+            if aum == aum_primary:
+                all_results[sl] = t12
+
+        # Table 11
+        logger.info("  Table 11...")
+        t11 = compute_table_11(preds_std, preds_wt, panel, aum=aum_primary, config=config)
+        if len(t11) > 0:
+            t11.to_csv(tables_dir / f"table_11_{sl}.csv", index=False)
+
+    # Consolidated hypothesis tests
+    logger.info("=== Hypothesis tests ===")
+    hyp = {}
+    for sl, t12 in all_results.items():
+        d = t12["decomposition"]
+        hyp[sl] = {
+            "H1_training_share_pct": t12["training_share"],
+            "H1_lw_pvalue": d["lw_h3"].get("p_value"),
+            "H3_total_effect": d["total_effect"],
+            "H3_lw_pvalue": d["lw_total"].get("p_value"),
+            "sharpe_ratios": d["sharpe_ratios"],
+            "training_effect": d["training_effect"],
+            "portfolio_effect": d["portfolio_effect"],
+            "interaction": d["interaction"],
+        }
+
     with open(tables_dir / "hypothesis_tests.json", "w") as f:
-        json.dump(hyp_summary, f, indent=2, default=str)
-    logger.info("  Saved hypothesis_tests.json")
+        json.dump(hyp, f, indent=2, default=str)
 
-    # ── 10. Figures ──
-    if not args.no_figures:
-        logger.info("Generating figures...")
-
-        # Primary AUM label for net return plots
-        primary_aum = _get_aum_labels(config)[1]  # 500M (second scenario)
-
-        for model_name, res in all_results.items():
-            # Cumulative returns (gross)
-            plot_cumulative_returns(
-                res["gross_returns"], model_name,
-                figures_dir / f"cumulative_returns_{model_name}.png",
-            )
-
-            # Cumulative returns (net)
-            plot_cumulative_returns_net(
-                res["net_returns"], model_name, primary_aum,
-                figures_dir / f"cumulative_returns_net_{model_name}.png",
-            )
-
-            # Feature importance plots
-            try:
-                imp = load_importance(
-                    model_name, importance_type=importance_type,
-                    output_dir=experiment_dir,
-                )
-                plot_importance_comparison(
-                    imp["standard"], imp["weighted"],
-                    title=f"Feature Importance: Std vs Wt — {model_name}",
-                    save_path=figures_dir / f"importance_comparison_{model_name}.png",
-                )
-                plot_ratio_over_time(
-                    imp["standard"], imp["weighted"],
-                    title=f"Tradable Ratio Over Time — {model_name}",
-                    save_path=figures_dir / f"importance_ratio_{model_name}.png",
-                )
-                plot_importance_over_time(
-                    imp["standard"], imp["weighted"],
-                    group="tradable",
-                    title=f"Tradable Group Importance — {model_name}",
-                    save_path=figures_dir / f"importance_group_{model_name}.png",
-                )
-            except Exception as e:
-                logger.warning("  Importance plots failed for %s: %s", model_name, e)
-
-        # Effect decomposition (gross) — all models
-        plot_effect_decomposition(
-            main_df, net=False,
-            save_path=figures_dir / "effect_decomposition.png",
-        )
-
-        # Effect decomposition (net) — all models
-        plot_effect_decomposition(
-            net_df, net=True, aum_label=primary_aum,
-            save_path=figures_dir / "effect_decomposition_net.png",
-        )
-
-        # Capacity curve (H4)
-        if len(capacity_df) > 0:
-            plot_capacity_curve(
-                capacity_df, config,
-                save_path=figures_dir / "capacity_curve.png",
-            )
-
-        # Monthly OOS R² time series
-        plot_oos_r2_monthly(
-            all_results,
-            save_path=figures_dir / "oos_r2_monthly.png",
-        )
-    else:
-        logger.info("Skipping figure generation (--no-figures).")
-
-    # ── 11. Console summary ──
-    logger.info("=" * 60)
-    logger.info("ANALYSIS COMPLETE")
-    logger.info("=" * 60)
-    logger.info("Tables saved to: %s", tables_dir)
-    logger.info("Figures saved to: %s", figures_dir)
-
-    # Print hypothesis verdicts
-    logger.info("\n--- Hypothesis Summary ---")
-    aum_labels = _get_aum_labels(config)
-    primary_aum = aum_labels[1]  # 500M
-    for model_name, res in all_results.items():
-        decomp = res["effect_decomposition"]
-        gross_training = decomp["training_effect"]
-        gross_total = decomp["total_effect"]
-        gross_share = gross_training / gross_total if gross_total != 0 else 0
-
-        logger.info("\n%s:", model_name)
-
-        # H1 — primary: net at primary AUM; secondary: gross
-        if model_name in net_tests and primary_aum in net_tests[model_name]:
-            nt = net_tests[model_name][primary_aum]
-            net_share = (
-                nt["training_share"] * 100
-                if nt["training_share"] is not None else 0
-            )
-            logger.info(
-                "  H1 (Training Dominance): share=%.1f%%, training=%.3f, "
-                "portfolio=%.3f, total=%.3f, p=%.4f [net %s]",
-                net_share,
-                nt["training_effect"], nt["portfolio_effect"],
-                nt["total_effect"], nt["lw_h3"]["p_value"],
-                primary_aum,
-            )
-        logger.info(
-            "    H1 (gross): share=%.1f%%, p=%.4f",
-            gross_share * 100, decomp["lw_h3"]["p_value"],
-        )
-        # Other AUM levels
-        if model_name in net_tests:
-            for aum_label in aum_labels:
-                if aum_label == primary_aum:
-                    continue
-                if aum_label in net_tests[model_name]:
-                    nt = net_tests[model_name][aum_label]
-                    net_share = (
-                        nt["training_share"] * 100
-                        if nt["training_share"] is not None else 0
-                    )
-                    logger.info(
-                        "    H1 (net %s): share=%.1f%%, training=%.3f, "
-                        "portfolio=%.3f, total=%.3f, p=%.4f",
-                        aum_label, net_share,
-                        nt["training_effect"], nt["portfolio_effect"],
-                        nt["total_effect"], nt["lw_h3"]["p_value"],
-                    )
-
-        # H2
-        if h2_summary is not None and len(h2_summary) > 0:
-            h2_row = h2_summary[h2_summary["model"] == model_name]
-            if len(h2_row) > 0:
-                logger.info(
-                    "  H2 (Feature Reallocation): ratio_diff=%.3f, p=%.4f",
-                    h2_row["ratio_diff"].iloc[0], h2_row["p_value"].iloc[0],
-                )
-
-        # H3 — primary: net at primary AUM; secondary: gross
-        if model_name in net_tests and primary_aum in net_tests[model_name]:
-            nt = net_tests[model_name][primary_aum]
-            logger.info(
-                "  H3 (Sharpe Improvement): total_effect=%.3f (target: >=0.20), "
-                "p=%.4f, SR(1A)=%.3f, SR(2B)=%.3f [net %s]",
-                nt["total_effect"], nt["lw_total"]["p_value"],
-                nt["sharpe_ratios"]["1A"], nt["sharpe_ratios"]["2B"],
-                primary_aum,
-            )
-        logger.info(
-            "    H3 (gross): total_effect=%.3f, p=%.4f",
-            gross_total, decomp["lw_total"]["p_value"],
-        )
-        # Other AUM levels
-        if model_name in net_tests:
-            for aum_label in aum_labels:
-                if aum_label == primary_aum:
-                    continue
-                if aum_label in net_tests[model_name]:
-                    nt = net_tests[model_name][aum_label]
-                    logger.info(
-                        "    H3 (net %s): total_effect=%.3f, p=%.4f, "
-                        "SR(1A)=%.3f, SR(2B)=%.3f",
-                        aum_label, nt["total_effect"],
-                        nt["lw_total"]["p_value"],
-                        nt["sharpe_ratios"]["1A"], nt["sharpe_ratios"]["2B"],
-                    )
-
-        # H4
-        model_cap = capacity_df[capacity_df["model"] == model_name]
-        be_2b_row = model_cap[model_cap["cell"] == "2B"]
-        if not be_2b_row.empty and "h4_uplift" in be_2b_row.columns:
-            uplift = be_2b_row["h4_uplift"].iloc[0]
-            if pd.notna(uplift):
-                logger.info(
-                    "  H4 (Capacity): uplift=%.1fx (target: 25x)",
-                    uplift,
-                )
-
-    logger.info("\nDone.")
+    logger.info("=== Done. Outputs in %s ===", base_dir / "analysis")
 
 
 if __name__ == "__main__":

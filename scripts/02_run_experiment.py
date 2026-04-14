@@ -1,123 +1,425 @@
 """
-02 — Run 2×2 Experiment
-========================
-Run the rolling-window 2×2 experiment for all ML models.
+02 - Run 2x2 Experiment (LiquidityML v3)
+==========================================
+Rolling-window ML training for the formal analysis.
 
-For each model (XGBoost, Random Forest, Neural Network):
-  - Train standard and liquidity-weighted models over rolling windows
-  - Build 4 portfolio configurations (2×2 design matrix)
-  - Compute effect decomposition with Ledoit-Wolf bootstrap tests
+Each invocation trains ONE specification:
+  - One model (elastic_net / xgboost / neural_network)
+  - One weight family + AUM (dolvol or tc at a given AUM)
 
-Input:  data/signed_predictors_all_wide.csv  (from 00_fetch_data.py)
-Output: outputs/experiment/{model_name}/     (predictions, returns, stats)
+Produces:
+  - M_std (standard training) predictions + importance
+  - M_w  (weighted training)  predictions + importance
+  - Tuned hyperparameters per retune window
 
-Usage:
-    python scripts/02_run_experiment.py            # full run (2000–2024)
-    python scripts/02_run_experiment.py --quick     # quick test (2020–2024)
-    python scripts/02_run_experiment.py --model xgboost  # single model
+M_std is shared across weight families - if predictions already exist
+in outputs/formalanalysis/experiment/{model}/standard/, training is
+skipped.  This avoids redundant computation when running 4 jobs per
+model (1 dolvol + 3 tc AUM levels).
+
+HPC usage (all 12 jobs are independent):
+  python scripts/02_run_experiment.py --model xgboost --weights dolvol
+  python scripts/02_run_experiment.py --model xgboost --weights tc --aum 500
+  python scripts/02_run_experiment.py --model elastic_net --weights dolvol
+  ...
+
+Quick test (2020-2024, ~60 months):
+  python scripts/02_run_experiment.py --model xgboost --weights dolvol --quick
 """
 
 from __future__ import annotations
 
 import argparse
-import copy
+import json
 import logging
+import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
-# ── Project imports ───────────────────────────────────────────
+# -- Project imports ---------------------------------------------------
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import load_config
+from src.config import load_config, get_data_dir
 from src.data.loader import load_panel
-from src.evaluation.two_by_two import run_all_models, run_two_by_two, save_results
+from src.models import create_model
+from src.weighting.schemes import compute_weights
 
-# ── Logging ───────────────────────────────────────────────────
+# -- Logging -----------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s  %(name)-25s  %(levelname)-7s  %(message)s",
-    datefmt="%H:%M:%S",
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("02_run_experiment")
+logger = logging.getLogger("02_experiment")
 
 
-# ── CLI ───────────────────────────────────────────────────────
+# -- CLI ---------------------------------------------------------------
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Run 2x2 experiment (one specification)")
+    p.add_argument("--model", required=True,
+                    choices=["elastic_net", "xgboost", "neural_network"])
+    p.add_argument("--weights", required=True, choices=["dolvol", "tc"])
+    p.add_argument("--aum", type=int, default=None,
+                    help="AUM in $M (e.g. 500). Required if --weights tc.")
+    p.add_argument("--quick", action="store_true",
+                    help="Quick test: 2020-2024 only")
+    return p.parse_args()
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run the 2×2 liquidity-weighted ML experiment.",
-    )
-    parser.add_argument(
-        "--quick",
-        action="store_true",
-        help="Quick mode: OOS from 2020 instead of 2000.",
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=None,
-        choices=["xgboost", "random_forest", "neural_network"],
-        help="Run a single model instead of all three.",
-    )
-    return parser.parse_args()
+# -- Rolling Window Engine ---------------------------------------------
 
+def run_rolling_training(
+    panel: pd.DataFrame,
+    features: list[str],
+    model_name: str,
+    weights: pd.Series | None,
+    config: dict,
+    seed: int,
+    label: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run rolling-window ML training and collect OOS predictions.
 
-# ── Main ──────────────────────────────────────────────────────
+    Returns
+    -------
+    (predictions_df, importance_df, native_importance_df, params_df)
+    importance_df: SHAP mean(|SHAP|) per feature per window (primary).
+    native_importance_df: gain/coef/permutation per window (secondary).
+    """
+    train_cfg = config["training"]
+    train_win = train_cfg["train_window"]
+    val_win = train_cfg["validation_window"]
+    retune_freq = train_cfg["retune_frequency"]
+    oos_start = train_cfg["oos_start"]
+    oos_end = train_cfg["oos_end"]
+    target = config["data"]["target_col"]
 
+    all_months = sorted(panel["yyyymm"].unique())
+    oos_months = [m for m in all_months if oos_start <= m <= oos_end]
 
-def main() -> None:
-    args = parse_args()
-    t0 = time.time()
+    if not oos_months:
+        raise ValueError(f"No OOS months in range [{oos_start}, {oos_end}]")
 
-    config = load_config()
-    np.random.seed(config["project"]["seed"])
-
-    logger.info("=" * 60)
-    logger.info("Step 02: Run 2×2 Experiment")
-    logger.info("=" * 60)
-
-    # ── Quick mode: shorten OOS period ──
-    if args.quick:
-        config = copy.deepcopy(config)
-        config["training"]["oos_start"] = 202001
-        logger.info("QUICK MODE: OOS from 202001 (last ~5 years)")
-
-    # ── Load data ──
-    logger.info("Loading panel …")
-    panel = load_panel(config)
     logger.info(
-        "Panel: %d rows, %d columns, months %d–%d",
-        len(panel),
-        len(panel.columns),
-        panel["yyyymm"].min(),
-        panel["yyyymm"].max(),
+        "Rolling training [%s]: model=%s, months=%d, train=%d, val=%d, retune=%d",
+        label, model_name, len(oos_months), train_win, val_win, retune_freq,
     )
 
-    # ── Run experiment ──
-    if args.model:
-        logger.info("Running single model: %s", args.model)
-        results = run_two_by_two(args.model, panel=panel, config=config)
+    predictions_all = []
+    importance_all = []       # SHAP (primary)
+    native_importance_all = [] # gain / coef / permutation (secondary)
+    params_all = []
+    current_params: dict | None = None
+    windows_since_tune = retune_freq  # Force tune on first window
+
+    for i, test_month in enumerate(oos_months):
+        test_idx = all_months.index(test_month)
+
+        # Define window boundaries
+        train_start_idx = test_idx - val_win - train_win
+        val_start_idx = test_idx - val_win
+
+        if train_start_idx < 0:
+            continue
+
+        train_months = all_months[train_start_idx:val_start_idx]
+        val_months = all_months[val_start_idx:test_idx]
+
+        # Split data
+        train_mask = panel["yyyymm"].isin(train_months)
+        val_mask = panel["yyyymm"].isin(val_months)
+        test_mask = panel["yyyymm"] == test_month
+
+        train_df = panel[train_mask].copy()
+        val_df = panel[val_mask].copy()
+        test_df = panel[test_mask].copy()
+
+        if len(train_df) < 100 or len(val_df) < 10 or len(test_df) < 50:
+            continue
+
+        # Per-window rank normalization to [0,1] — same as motivation pipeline
+        # (groupby yyyymm rank per column, no look-ahead)
+        for col in features:
+            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
+            val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
+            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
+
+        # Fill NaN with 0.5 (neutral rank) — same as motivation pipeline
+        train_df[features] = train_df[features].fillna(0.5)
+        val_df[features] = val_df[features].fillna(0.5)
+        test_df[features] = test_df[features].fillna(0.5)
+
+        X_train = train_df[features].values
+        y_train = train_df[target].values
+        X_val = val_df[features].values
+        y_val = val_df[target].values
+        X_test = test_df[features].values
+
+        # Drop NaN targets — same as motivation pipeline
+        valid_train = ~np.isnan(y_train)
+        valid_val = ~np.isnan(y_val)
+        valid_test = ~np.isnan(y_test := test_df[target].values)
+
+        if valid_train.sum() < 100 or valid_test.sum() < 30:
+            continue
+
+        X_train, y_train = X_train[valid_train], y_train[valid_train]
+        X_val, y_val = X_val[valid_val], y_val[valid_val]
+        X_test = X_test[valid_test]
+        test_df = test_df[valid_test]
+        y_test = y_test[valid_test]
+
+        # Weights for this training window (filter by valid mask)
+        w_train = None
+        w_val = None
+        if weights is not None:
+            w_train = weights.reindex(train_df.index).fillna(1.0).values[valid_train]
+            w_val = weights.reindex(val_df.index).fillna(1.0).values[valid_val]
+
+        # Tune hyperparameters if needed (same as motivation pipeline)
+        windows_since_tune += 1
+        if windows_since_tune >= retune_freq:
+            logger.info("  [%s] Tuning at month %d (%d/%d)", label, test_month, i+1, len(oos_months))
+            tuning_model = create_model(model_name, seed=seed)
+            best = tuning_model.tune_hyperparameters(
+                X_train, y_train, X_val, y_val,
+                sample_weight=w_train, sample_weight_val=w_val,
+            )
+            current_params = best
+            windows_since_tune = 0
+            params_all.append({"yyyymm": test_month, **best})
+
+        # Create fresh model with tuned config (same as motivation: create_model each month)
+        model = create_model(model_name, config=current_params, seed=seed)
+
+        # Fit on training data (same as motivation: fit on train only)
+        model.fit(X_train, y_train, sample_weight=w_train)
+
+        # Predict
+        preds = model.predict(X_test)
+
+        # Store predictions
+        pred_df = pd.DataFrame({
+            "permno": test_df["permno"].values,
+            "yyyymm": test_month,
+            "prediction": preds,
+        }, index=test_df.index)
+        predictions_all.append(pred_df)
+
+        # -- Feature importance: SHAP (primary) --
+        shap_row = {"yyyymm": test_month}
+        try:
+            if model_name == "xgboost":
+                shap_df = model.get_shap_values(
+                    X_test, feature_names=features,
+                )
+                mean_abs_shap = shap_df.abs().mean()
+                shap_row.update(mean_abs_shap.to_dict())
+            elif model_name == "neural_network":
+                shap_df = model.get_shap_values(
+                    X_test,
+                    X_background=X_train[:min(100, len(X_train))],
+                    feature_names=features,
+                    config={"use_kernel_fallback": False},
+                )
+                mean_abs_shap = shap_df.abs().mean()
+                shap_row.update(mean_abs_shap.to_dict())
+            elif model_name == "elastic_net":
+                shap_df = model.get_shap_values(
+                    X_test,
+                    X_background=X_train,
+                    feature_names=features,
+                )
+                mean_abs_shap = shap_df.abs().mean()
+                shap_row.update(mean_abs_shap.to_dict())
+        except Exception as e:
+            logger.warning(
+                "  [%s] SHAP failed at month %d: %s",
+                label, test_month, e,
+            )
+        importance_all.append(shap_row)
+
+        # -- Native importance (secondary: gain / coef / perm) --
+        native_row = {"yyyymm": test_month}
+        if model_name == "neural_network":
+            try:
+                perm_imp = model.get_permutation_importance(
+                    X_test, y_test,
+                    feature_names=features, seed=seed,
+                )
+                native_row.update(perm_imp.to_dict())
+            except Exception as e:
+                logger.warning("  [%s] Permutation importance failed: %s", label, e)
+        else:
+            imp = model.get_feature_importance(feature_names=features)
+            native_row.update(imp.to_dict())
+        native_importance_all.append(native_row)
+
+        if (i + 1) % 24 == 0:
+            logger.info("  [%s] Progress: %d/%d months", label, i+1, len(oos_months))
+
+    predictions_df = pd.concat(predictions_all) if predictions_all else pd.DataFrame()
+    importance_df = pd.DataFrame(importance_all) if importance_all else pd.DataFrame()
+    native_importance_df = pd.DataFrame(native_importance_all) if native_importance_all else pd.DataFrame()
+    params_df = pd.DataFrame(params_all) if params_all else pd.DataFrame()
+
+    return predictions_df, importance_df, native_importance_df, params_df
+
+
+# -- Main --------------------------------------------------------------
+
+def main():
+    args = parse_args()
+    config = load_config()
+
+    # Reproducibility
+    SEED = config["project"]["seed"]
+    np.random.seed(SEED)
+    os.environ["PYTHONHASHSEED"] = "0"
+
+    # Try to set TF seed if neural network
+    if args.model == "neural_network":
+        try:
+            import tensorflow as tf
+            tf.keras.utils.set_random_seed(SEED)
+        except ImportError:
+            pass
+
+    # Validate args
+    if args.weights == "tc" and args.aum is None:
+        print("ERROR: --aum required when --weights tc", file=sys.stderr)
+        sys.exit(1)
+    aum_dollars = args.aum * 1_000_000 if args.aum else None
+
+    # Override OOS period for quick test
+    if args.quick:
+        config["training"]["oos_start"] = 202001
+        logger.info("QUICK MODE: OOS 2020-01 to 2024-12")
+
+    # -- Output paths --
+    base_dir = Path(config["project"]["output_dir"]) / "formalanalysis" / "experiment"
+    model_dir = base_dir / args.model
+    std_dir = model_dir / "standard"
+
+    if args.weights == "dolvol":
+        wt_dir = model_dir / "dolvol"
     else:
-        logger.info("Running all models: %s", config["models"]["run_models"])
-        results = run_all_models(panel=panel, config=config)
+        wt_dir = model_dir / f"tc_{args.aum}m"
 
-    # ── Save ──
-    save_results(results)
+    std_dir.mkdir(parents=True, exist_ok=True)
+    wt_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Summary ──
+    # -- Load data (same as motivation Step 3 pipeline) --
+    logger.info("Loading panel data...")
+    panel = load_panel(config)
+
+    # Load 113 features from feature_list.json (same as 07_step3_ml_diagnostics.py)
+    # These are Clear Predictors that survived the 70% coverage filter in 01_process_data.py
+    data_dir = get_data_dir()
+    feature_list_path = data_dir / "feature_list.json"
+    if not feature_list_path.exists():
+        logger.error("feature_list.json not found! Run 01_process_data.py first.")
+        sys.exit(1)
+    with open(feature_list_path) as f:
+        feature_meta = json.load(f)
+    features = feature_meta["features"]
+    # Verify features exist in panel
+    missing = [f for f in features if f not in panel.columns]
+    if missing:
+        logger.warning("Features in feature_list.json but not in panel: %s", missing)
+        features = [f for f in features if f in panel.columns]
+    logger.info("Panel: %d rows, %d features, %d months",
+                len(panel), len(features), panel["yyyymm"].nunique())
+
+    # -- Compute weights for weighted training --
+    logger.info("Computing %s weights (aum=%s)...", args.weights,
+                f"${args.aum}M" if args.aum else "N/A")
+    w = compute_weights(panel, scheme=args.weights, config=config, aum=aum_dollars)
+
+    # -- Phase 1: Standard training (M_std) --
+    std_pred_path = std_dir / "predictions.parquet"
+    if std_pred_path.exists():
+        logger.info("M_std predictions already exist at %s - skipping", std_pred_path)
+        preds_std = pd.read_parquet(std_pred_path)
+    else:
+        logger.info("=== Training M_std (standard) ===")
+        t0 = time.time()
+        preds_std, imp_std, native_std, params_std = run_rolling_training(
+            panel, features, args.model,
+            weights=None,  # Standard: no weights
+            config=config, seed=SEED, label="std",
+        )
+        elapsed = time.time() - t0
+        logger.info("M_std complete: %d predictions in %.1f min", len(preds_std), elapsed/60)
+
+        # Save
+        preds_std.to_parquet(std_pred_path, index=False)
+        imp_std.to_csv(std_dir / "importance_shap.csv", index=False)
+        if len(native_std) > 0:
+            native_std.to_csv(std_dir / "importance_native.csv", index=False)
+        if len(params_std) > 0:
+            params_std.to_csv(std_dir / "tuned_params.csv", index=False)
+        logger.info("M_std saved to %s", std_dir)
+
+    # -- Phase 2: Weighted training (M_w) --
+    logger.info("=== Training M_w (weighted: %s, aum=%s) ===",
+                args.weights, f"${args.aum}M" if args.aum else "N/A")
+    t0 = time.time()
+    preds_wt, imp_wt, native_wt, params_wt = run_rolling_training(
+        panel, features, args.model,
+        weights=w,  # Weighted
+        config=config, seed=SEED, label="wt",
+    )
     elapsed = time.time() - t0
-    logger.info("\n" + "=" * 60)
-    logger.info("EXPERIMENT COMPLETE  (%.1f min)", elapsed / 60)
-    logger.info("=" * 60)
+    logger.info("M_w complete: %d predictions in %.1f min", len(preds_wt), elapsed/60)
 
-    if "summary" in results:
-        logger.info("\n%s", results["summary"].to_string(index=False, float_format="%.4f"))
+    # Save
+    preds_wt.to_parquet(wt_dir / "predictions.parquet", index=False)
+    imp_wt.to_csv(wt_dir / "importance_shap.csv", index=False)
+    if len(native_wt) > 0:
+        native_wt.to_csv(wt_dir / "importance_native.csv", index=False)
+    if len(params_wt) > 0:
+        params_wt.to_csv(wt_dir / "tuned_params.csv", index=False)
 
-    logger.info("Next step: python scripts/03_analyze_results.py")
+    # Symlink standard predictions into weighted dir for convenience
+    std_link = wt_dir / "predictions_std.parquet"
+    if not std_link.exists():
+        try:
+            std_link.symlink_to(std_pred_path.resolve())
+        except OSError:
+            pass  # Symlinks may not work on all systems
+
+    # -- Save environment metadata --
+    meta = {
+        "model": args.model,
+        "weights": args.weights,
+        "aum": args.aum,
+        "seed": SEED,
+        "n_threads": os.environ.get("OMP_NUM_THREADS", "unknown"),
+        "n_predictions_std": len(preds_std),
+        "n_predictions_wt": len(preds_wt),
+        "python_version": sys.version,
+        "timestamp": datetime.now().isoformat(),
+        "quick": args.quick,
+    }
+    try:
+        import xgboost; meta["xgboost_version"] = xgboost.__version__
+    except ImportError:
+        pass
+    try:
+        import sklearn; meta["sklearn_version"] = sklearn.__version__
+    except ImportError:
+        pass
+
+    with open(wt_dir / "meta.json", "w") as f:
+        json.dump(meta, f, indent=2)
+
+    logger.info("All done. Outputs in:\n  std: %s\n  wt:  %s", std_dir, wt_dir)
 
 
 if __name__ == "__main__":

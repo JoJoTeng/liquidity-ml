@@ -367,20 +367,9 @@ class TestShapComputation:
         assert sv.shape == (10, 5)
         assert list(sv.columns) == feature_names
 
+    @pytest.mark.skip(reason="RandomForest removed in LiquidityML v3")
     def test_random_forest_shap_values(self, tiny_data, feature_names):
-        from src.models.random_forest_model import RandomForestPredictor
-
-        X, y = tiny_data
-        model = RandomForestPredictor(
-            config={"n_estimators": 10, "max_depth": 3, "min_samples_leaf": 2},
-            seed=42,
-        )
-        model.fit(X[:40], y[:40])
-
-        sv = model.get_shap_values(X[40:], feature_names=feature_names)
-        assert isinstance(sv, pd.DataFrame)
-        assert sv.shape == (10, 5)
-        assert list(sv.columns) == feature_names
+        pass
 
     def test_xgboost_shap_additivity(self, tiny_data):
         """SHAP values + expected value should approximate predictions."""

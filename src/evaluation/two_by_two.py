@@ -41,11 +41,14 @@ from src.evaluation.statistics import (
 )
 from src.models import create_model
 from src.portfolio.construction import (
-    DEFAULT_WEIGHT_COL,
     build_portfolio_timeseries,
     compute_net_returns_all_aum,
 )
-from src.weighting import PRIMARY_SCHEME, compute_all_weights, compute_weights
+from src.weighting import compute_weights, AVAILABLE_SCHEMES
+
+# Compat shims for old code paths (v2 pipeline)
+DEFAULT_WEIGHT_COL = "weight_dolvol"
+PRIMARY_SCHEME = "dolvol"
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +189,10 @@ def _prepare_xy(
     test_norm = test_norm.dropna(subset=[target_col])
 
     # ── Compute liquidity weights (uses raw liq_* columns, not features) ──
-    weights_train = compute_weights(train_norm, scheme=PRIMARY_SCHEME)
-    weights_val = compute_weights(val_norm, scheme=PRIMARY_SCHEME)
+    from src.config import load_config as _load_config
+    _cfg = _load_config()
+    weights_train = compute_weights(train_norm, scheme=PRIMARY_SCHEME, config=_cfg)
+    weights_val = compute_weights(val_norm, scheme=PRIMARY_SCHEME, config=_cfg)
 
     assert len(weights_train) == len(train_norm), (
         f"Weight/train mismatch: {len(weights_train)} vs {len(train_norm)}"
@@ -541,9 +546,12 @@ def run_two_by_two(
 
     # Ensure portfolio weight columns exist
     if DEFAULT_WEIGHT_COL not in test_panel.columns:
-        logger.info("Computing portfolio weights for test panel …")
-        weight_df = compute_all_weights(test_panel)
-        test_panel = pd.concat([test_panel, weight_df], axis=1)
+        logger.info("Computing portfolio weights for test panel ...")
+        from src.config import load_config as _load_config
+        _cfg = _load_config()
+        test_panel[DEFAULT_WEIGHT_COL] = compute_weights(
+            test_panel, scheme=PRIMARY_SCHEME, config=_cfg,
+        )
 
     # Merge predictions
     pred_merged = test_panel.merge(
