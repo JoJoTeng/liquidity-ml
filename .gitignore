@@ -55,10 +55,16 @@ Thumbs.db
 *.key
 
 # =========================
-# Large prediction parquets (stay local only)
+# Large files (stay local only)
 # =========================
+outputs/motivation/step1/dvol/density_panel_data.csv
+outputs/motivation/step3/dvol/predictions.csv
+outputs/motivation/step3/dvol/predictions_with_quintile.csv
+outputs/motivation/step3/dvol/quintile_lookup.csv
 outputs/motivation/step3_quintile/dvol/*/predictions_*.parquet
+outputs/motivation/step3_quintile_rerank/dvol/*/predictions_*.csv
 outputs/motivation/step3_restriction/dvol/*/predictions_*.parquet
+outputs/motivation/step3_restriction_rerank/dvol/*/predictions_*.csv
 outputs/motivation/step3/dvol/fillna_issue.md
 
 # =========================

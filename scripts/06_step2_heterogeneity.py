@@ -303,6 +303,9 @@ def main():
         logger.info("Output 2.1b: Full quintile FM (%d features)", len(all_features))
         q_full = quintile_fama_macbeth(panel_full, all_features, "liq_quintile")
         q_full["coef_table"].to_csv(output_dir / "quintile_fm_coefficients_full_raw.csv", index=False)
+        q_full_fmt = format_quintile_table(q_full["coef_table"])
+        q_full_fmt.to_csv(output_dir / "quintile_fm_coefficients_full.csv", index=False)
+        logger.info("Saved formatted full quintile table (%d features)", len(q_full_fmt))
 
         # 2.2b: Coefficient plots for significant features only
         # Split into pages of 20 features each for readability
@@ -373,6 +376,10 @@ def main():
             fig.savefig(output_dir / "divergence_vs_heterogeneity_full.png",
                         dpi=150, bbox_inches="tight")
             plt.close(fig)
+
+            df_scatter["spearman_rho"] = rho_full
+            df_scatter.to_csv(output_dir / "divergence_vs_heterogeneity_full.csv", index=False)
+            logger.info("Saved divergence_vs_heterogeneity_full.csv (%d features)", len(df_scatter))
 
             meta["spearman_rho_full"] = rho_full
             logger.info("Full divergence vs heterogeneity scatter (ρ=%.3f)", rho_full)

@@ -220,7 +220,9 @@ def main():
         logger.info("Saved restriction_curve.png")
 
     with open(output_dir / "meta.json", "w") as f:
-        json.dump({"levels_run": levels, "n_features": len(features)}, f, indent=2, default=str)
+        param_source = "baseline_tuned" if baseline_tuned is not None else ("fixed_config" if fixed_params is not None else "retune_within_restriction")
+        json.dump({"levels_run": levels, "n_features": len(features),
+                    "param_source": param_source}, f, indent=2, default=str)
     logger.info("Step 3d complete. Outputs: %s", output_dir)
 
 if __name__ == "__main__":

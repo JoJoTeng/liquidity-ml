@@ -93,9 +93,15 @@ def main():
     for rname, states in regimes.items():
         rdir = output_base / rname; rdir.mkdir(parents=True, exist_ok=True)
         logger.info("=" * 60); logger.info("Regime: %s", rname)
+
+        # Save regime summary: which months belong to which state
+        regime_months = []
         for slabel, mask in states.items():
             sub = panel[mask].copy()
             nm = sub["yyyymm"].nunique()
+            months = sorted(sub["yyyymm"].unique())
+            for m in months:
+                regime_months.append({"yyyymm": m, "state": slabel, "n_stocks": int((panel["yyyymm"] == m).sum())})
             if nm < 12: logger.warning("  %s: %d months — skip", slabel, nm); continue
             logger.info("  %s: %d months, %d rows", slabel, nm, len(sub))
             # Re-normalize weights within regime subset so mean(w_tilde) = 1
@@ -105,6 +111,9 @@ def main():
                                    vw_col="liq_me_raw", title_suffix=f" — {slabel}")
             plot_weight_distribution(sub, "w_tilde", rdir / f"weights_{fn}.png",
                                     vw_col="liq_me_raw", title_suffix=f" — {slabel}")
+
+        pd.DataFrame(regime_months).to_csv(rdir / "regime_months.csv", index=False)
+        logger.info("  Saved regime_months.csv (%d rows)", len(regime_months))
 
     logger.info("Regime analysis complete: %s", output_base)
 

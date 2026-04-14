@@ -180,7 +180,9 @@ def main():
         fig.savefig(output_dir / "r2_comparison.png", dpi=150, bbox_inches="tight"); plt.close(fig)
 
     with open(output_dir / "meta.json", "w") as f:
-        json.dump({"quintiles_run": quintiles, "n_features": len(features), "fixed_params": fixed_params is not None,
+        param_source = "baseline_tuned" if baseline_tuned is not None else ("fixed_config" if fixed_params is not None else "retune_within_quintile")
+        json.dump({"quintiles_run": quintiles, "n_features": len(features),
+                    "param_source": param_source,
                     "comparison": comp.to_dict(orient="records")}, f, indent=2, default=str)
     logger.info("Step 3e complete. Outputs: %s", output_dir)
 

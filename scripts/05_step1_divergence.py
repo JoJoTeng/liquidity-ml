@@ -145,7 +145,10 @@ def main():
 
     # ── Implementability weights ──────────────────────────
     logger.info("Computing implementability weights using %s...", liq["weight_col"])
-    panel["w_tilde"] = compute_implementability_weights(panel, liq_col=liq["weight_col"])
+    panel["w_tilde_dvol"] = compute_implementability_weights(panel, liq_col=liq["weight_col"])
+    panel["w_tilde_mcap"] = compute_implementability_weights(panel, liq_col="liq_me_raw")
+    # Keep w_tilde as alias for backward compatibility
+    panel["w_tilde"] = panel["w_tilde_dvol"]
 
     # ── NYSE breakpoint quintiles ─────────────────────────
     logger.info("Assigning NYSE breakpoint quintiles using %s...", liq["quintile_col"])
@@ -187,6 +190,7 @@ def main():
     logger.info("Output 1.1: Marginal divergence computation")
     div_df = compute_marginal_divergence(panel, features, "w_tilde")
     div_df.to_parquet(output_dir / "divergence_monthly.parquet")
+    div_df.to_csv(output_dir / "divergence_monthly.csv")
     logger.info("Monthly divergences: %d months × %d features", *div_df.shape)
 
     stats = compute_divergence_stats(div_df)
@@ -336,6 +340,12 @@ def main():
         panel, density_features, "w_tilde", output_dir / "density_comparison.png",
         vw_col="liq_me_raw" if args.vw else None,
     )
+
+    # Save raw data underlying the density plots
+    density_cols = ["permno", "yyyymm", "w_tilde_dvol", "w_tilde_mcap"] + density_features
+    density_cols = [c for c in density_cols if c in panel.columns]
+    panel[density_cols].to_csv(output_dir / "density_panel_data.csv", index=False)
+    logger.info("Saved density panel data: %d rows × %d cols", len(panel), len(density_cols))
 
     # ══════════════════════════════════════════════════════
     # Summary

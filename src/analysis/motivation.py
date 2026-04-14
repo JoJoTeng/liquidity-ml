@@ -2899,7 +2899,7 @@ def plot_r2_by_quintile(
     import matplotlib.pyplot as plt
     _set_academic_style()
 
-    benchmark_label = "CS-mean" if "cs" in r2_col else "Zero"
+    benchmark_label = "CS-mean" if "cs" in r2_col else ("Historical mean" if "hist" in r2_col else "Zero")
     q_data = quintile_r2[quintile_r2["quintile"] != "Full"]
     full_r2 = quintile_r2[quintile_r2["quintile"] == "Full"][r2_col].values[0]
 

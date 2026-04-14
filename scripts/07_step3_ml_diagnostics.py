@@ -154,6 +154,12 @@ def main():
         panel, liq_col=liq["quintile_col"]
     )
 
+    # Save quintile lookup for reproducibility (used by step3d/3e as well)
+    panel[["permno", "yyyymm", "liq_quintile", "w_tilde"]].to_csv(
+        output_dir / "quintile_lookup.csv", index=False
+    )
+    logger.info("Saved quintile_lookup.csv (%d rows)", len(panel))
+
     # ══════════════════════════════════════════════════════
     # Phase 1: Train XGBoost (or load saved predictions)
     # ══════════════════════════════════════════════════════
@@ -241,14 +247,38 @@ def main():
     q_r2.to_csv(output_dir / "r2_by_quintile.csv", index=False)
     logger.info("\n%s", q_r2.to_string(index=False))
 
-    # Historical mean benchmark (expanding-window per stock)
-    logger.info("Computing historical mean benchmark (expanding-window per stock)...")
+    # Historical mean benchmark: for each OOS month t, use the mean of
+    # stock i's returns from the start of training window to t-1.
+    # Window length = train_window + val_window (132 months), matching
+    # the information set available to the ML model at prediction time.
+    train_window = config["training"]["train_window"]       # 120
+    val_window = config["training"]["validation_window"]    # 12
+    hist_window = train_window + val_window                 # 132
+    logger.info("Computing historical mean benchmark (%d-month rolling window per stock)...", hist_window)
+
+    # Use full panel returns (not just OOS predictions) so every stock has
+    # its complete return history for the rolling mean computation.
+    full_ret = panel[["permno", "yyyymm", "excess_ret"]].sort_values(["permno", "yyyymm"])
+    full_ret["r_hist"] = full_ret.groupby("permno")["excess_ret"].rolling(
+        hist_window, min_periods=12
+    ).mean().reset_index(level=0, drop=True)
+    full_ret["r_hist"] = full_ret.groupby("permno")["r_hist"].shift(1)
+
     pred_with_q = predictions.merge(
-        panel[["permno", "yyyymm", "liq_quintile"]], on=["permno", "yyyymm"], how="left",
+        panel[["permno", "yyyymm", "liq_quintile", "w_tilde"]], on=["permno", "yyyymm"], how="left",
     )
-    pred_with_q = pred_with_q.sort_values(["permno", "yyyymm"])
-    pred_with_q["r_hist"] = pred_with_q.groupby("permno")["y_true"].expanding().mean().reset_index(level=0, drop=True)
-    pred_with_q["r_hist"] = pred_with_q.groupby("permno")["r_hist"].shift(1)
+    pred_with_q = pred_with_q.merge(
+        full_ret[["permno", "yyyymm", "r_hist"]], on=["permno", "yyyymm"], how="left",
+    )
+
+    # Add cross-sectional mean benchmark (r̄_t per month, full sample)
+    r_cs = pred_with_q.groupby("yyyymm")["y_true"].mean().rename("r_cs")
+    pred_with_q = pred_with_q.merge(r_cs, on="yyyymm", how="left")
+
+    # Save predictions with quintile + weights + all benchmarks for reproducibility
+    pred_with_q.to_csv(output_dir / "predictions_with_quintile.csv", index=False)
+    logger.info("Saved predictions_with_quintile.csv (%d rows)", len(pred_with_q))
+
     pred_with_hist = pred_with_q.dropna(subset=["r_hist"])
     hist_results = []
     for q_val in sorted(pred_with_hist["liq_quintile"].dropna().unique()):
