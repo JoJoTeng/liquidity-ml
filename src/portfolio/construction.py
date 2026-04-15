@@ -153,7 +153,7 @@ def _empty_result() -> dict[str, Any]:
 
 def build_portfolio_timeseries(
     panel: pd.DataFrame,
-    predictions: pd.Series,
+    predictions: pd.DataFrame | pd.Series,
     tc_penalised: bool = False,
     aum: float | None = None,
     config: dict | None = None,
@@ -163,7 +163,10 @@ def build_portfolio_timeseries(
     Parameters
     ----------
     panel : Full panel with yyyymm, permno, ret, liq_* columns.
-    predictions : OOS predictions indexed to panel rows (subset of panel).
+    predictions : Either
+        - pd.DataFrame with columns [permno, yyyymm, prediction], or
+        - pd.Series indexed by panel row labels (legacy support).
+        Merged with panel via (permno, yyyymm) keys.
     tc_penalised : If True, use TC-penalised sort (Column 2).
     aum : AUM in dollars. Required if tc_penalised=True.
     config : Override config dict.
@@ -178,37 +181,48 @@ def build_portfolio_timeseries(
         config = _cfg
     n_q = config["portfolio"]["n_quantiles"]
 
-    # Align panel to prediction months
-    pred_months = panel.loc[predictions.index, "yyyymm"].unique()
-    pred_months = sorted(pred_months)
+    # Normalise predictions to a DataFrame with [permno, yyyymm, prediction]
+    if isinstance(predictions, pd.Series):
+        # Legacy path: index is assumed to be a subset of panel.index
+        common = panel.index.intersection(predictions.index)
+        pred_df = pd.DataFrame({
+            "permno": panel.loc[common, "permno"].values,
+            "yyyymm": panel.loc[common, "yyyymm"].values,
+            "prediction": predictions.loc[common].values,
+        })
+    else:
+        pred_df = predictions[["permno", "yyyymm", "prediction"]].copy()
 
-    # Precompute TC for sorting if needed
+    # Inner merge with panel on (permno, yyyymm) — guarantees alignment
+    panel_pred = panel.merge(pred_df, on=["permno", "yyyymm"], how="inner")
+    panel_pred = panel_pred.reset_index(drop=True)
+
+    # Precompute TC for sorting if needed — on the merged panel
     tc_for_sort = None
     if tc_penalised:
         if aum is None:
             raise ValueError("aum required for TC-penalised sort")
         from src.weighting.schemes import compute_tc_for_sorting
-        tc_for_sort = compute_tc_for_sorting(panel, aum=aum, config=config)
+        tc_for_sort = compute_tc_for_sorting(panel_pred, aum=aum, config=config)
 
+    pred_months = sorted(panel_pred["yyyymm"].unique())
     records = []
     positions_history = {}
 
     for yyyymm in pred_months:
-        month_mask = panel["yyyymm"] == yyyymm
-        pred_mask = month_mask & panel.index.isin(predictions.index)
-        month_panel = panel[pred_mask]
-        month_preds = predictions[pred_mask.values[predictions.index.isin(panel.index)]]
+        mask = panel_pred["yyyymm"] == yyyymm
+        month_panel = panel_pred[mask]
 
-        # Re-align
-        common_idx = month_panel.index.intersection(predictions.index)
-        if len(common_idx) < n_q * 2:
+        if len(month_panel) < n_q * 2:
             continue
-        month_panel = month_panel.loc[common_idx]
-        month_preds = predictions.loc[common_idx]
+
+        month_preds = pd.Series(
+            month_panel["prediction"].values, index=month_panel.index,
+        )
 
         tc_month = None
         if tc_penalised and tc_for_sort is not None:
-            tc_month = tc_for_sort.reindex(common_idx)
+            tc_month = tc_for_sort.loc[month_panel.index]
 
         result = build_long_short_portfolio(
             df=month_panel,

@@ -78,18 +78,26 @@ def _compute_tc_per_stock(
     spread_col: str,
     sigma_col: str,
     adv_col: str,
+    leg_fraction: float = 1.0,
 ) -> pd.Series:
     """Compute one-way TC per stock (Frazzini et al. 2018, Eq. 22/25).
 
     TC_it = Spread_it/2 + lambda * sigma_it * sqrt(Q_it / ADV_it)
 
-    where Q_it = AUM / N (equal-dollar trade size, N = number of stocks
-    in the cross-section - used as approximation at the training stage).
+    where Q_it = AUM / N_effective.
+
+    leg_fraction controls N_effective relative to the cross-section size:
+      - leg_fraction=1.0 (default, training weights):
+          N_effective = N (full cross-section, used at training stage)
+      - leg_fraction=0.1 (decile-sort portfolios):
+          N_effective = N * 0.1 = N_leg, matching Section 9.2 Q_it = AUM/N_leg
+          for a long-short decile portfolio (one leg holds N/10 stocks).
     """
     n_stocks = len(group)
     if n_stocks == 0:
         return pd.Series(dtype=float)
-    q_per_stock = aum / n_stocks
+    n_effective = max(1, int(n_stocks * leg_fraction))
+    q_per_stock = aum / n_effective
 
     spread = group[spread_col].copy()
     sigma = group[sigma_col].copy()
@@ -223,10 +231,11 @@ def compute_tc_for_sorting(
     aum: float,
     config: dict,
 ) -> pd.Series:
-    """Compute per-stock TC for the TC-penalised sort (Column 2).
+    """Compute per-stock TC for the TC-penalised sort (Column 2, Section 9.2).
 
-    Uses Q_it = AUM / N_leg (estimated from N_total / 10 for decile sort)
-    since the portfolio is not yet known at the sorting stage.
+    Uses Q_it = AUM / N_leg where N_leg = N / n_quantiles (typically N/10
+    for decile sort). This matches the actual trade size of a long-short
+    decile portfolio at the sorting stage.
 
     Parameters
     ----------
@@ -244,11 +253,16 @@ def compute_tc_for_sorting(
     sigma_col = f"liq_{tc_cfg['sigma_col']}"
     adv_col = f"liq_{tc_cfg['adv_col']}"
 
+    # Decile sort: leg_fraction = 1 / n_quantiles (0.1 for deciles)
+    n_quantiles = config["portfolio"]["n_quantiles"]
+    leg_fraction = 1.0 / n_quantiles
+
     parts: list[pd.Series] = []
     for yyyymm, group in df.groupby("yyyymm"):
         tc = _compute_tc_per_stock(
             group, aum=aum, lam=lam,
             spread_col=spread_col, sigma_col=sigma_col, adv_col=adv_col,
+            leg_fraction=leg_fraction,
         )
         parts.append(tc)
 
