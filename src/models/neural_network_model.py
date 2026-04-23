@@ -271,13 +271,25 @@ class NeuralNetPredictor(BaseReturnPredictor):
         if seed is None:
             seed = self.seed
 
-        # Wrap for sklearn API
+        # Wrap for sklearn API. sklearn >=1.3 validates that estimators
+        # implement fit() + get_params(), so we provide stubs.
         class _SklearnWrapper:
+            _estimator_type = "regressor"
+
             def __init__(self, model):
                 self._model = model
 
+            def fit(self, X, y, **kwargs):
+                return self  # no-op: model is already trained
+
             def predict(self, X):
                 return self._model.predict(X.astype(np.float32), verbose=0).flatten()
+
+            def get_params(self, deep=True):
+                return {}
+
+            def set_params(self, **params):
+                return self
 
         wrapper = _SklearnWrapper(self.model)
         result = sklearn_perm_importance(
@@ -354,6 +366,12 @@ class NeuralNetPredictor(BaseReturnPredictor):
 
         if isinstance(sv, list):
             sv = sv[0]
+
+        # TF DeepExplainer in shap >=0.44 returns shape (N, P, 1) for
+        # single-output regression; squeeze the trailing dim.
+        sv = np.asarray(sv)
+        if sv.ndim == 3 and sv.shape[-1] == 1:
+            sv = sv.squeeze(-1)
 
         # Pad back to full test size if subsampled
         if explain_idx is not None:
