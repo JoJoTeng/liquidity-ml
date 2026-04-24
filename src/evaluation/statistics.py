@@ -68,6 +68,12 @@ ANNUALIZE_FACTOR: int = 12  # monthly → annual
 # ══════════════════════════════════════════════════════════════
 
 
+# Process-level cache for Fama-French factors. These are identical across
+# every call in a single run, so we fetch once per (n_factors, config_hash)
+# and reuse. Clears automatically when the Python process exits.
+_FF_FACTOR_CACHE: dict[int, pd.DataFrame] = {}
+
+
 def load_ff_factors(n_factors: int = 5, config: dict | None = None) -> pd.DataFrame:
     """Load Fama-French factor data.
 
@@ -81,6 +87,18 @@ def load_ff_factors(n_factors: int = 5, config: dict | None = None) -> pd.DataFr
     DataFrame with columns: yyyymm, Mkt-RF, SMB, HML [, RMW, CMA [, Mom]].
     All factor values in decimal (e.g. 0.01 = 1%).
     """
+    # Check process-level cache first (keyed by n_factors; config is
+    # effectively stable across a single run)
+    if n_factors in _FF_FACTOR_CACHE:
+        return _FF_FACTOR_CACHE[n_factors].copy()
+
+    result = _load_ff_factors_uncached(n_factors=n_factors, config=config)
+    _FF_FACTOR_CACHE[n_factors] = result.copy()
+    return result
+
+
+def _load_ff_factors_uncached(n_factors: int, config: dict | None) -> pd.DataFrame:
+    """Actual factor-loading logic (no cache). See load_ff_factors for docs."""
     if config is None:
         config = _cfg
     data_dir = get_data_dir()

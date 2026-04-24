@@ -275,7 +275,6 @@ def compute_net_returns(
     spread_col = f"liq_{tc_cfg['spread_col']}"
     sigma_col = f"liq_{tc_cfg['sigma_col']}"
     adv_col = f"liq_{tc_cfg['adv_col']}"
-    spread_cap = tc_cfg.get("spread_cap", 0.05)
 
     # Build lookup: (permno, yyyymm) -> {spread, sigma, adv, ret}
     lookup_cols = ["permno", "yyyymm", "ret"]
@@ -335,7 +334,7 @@ def compute_net_returns(
                 sigma = _safe_val(row, sigma_col, 0.02)
                 adv = _safe_val(row, adv_col, 1e6)
 
-                spread = min(abs(spread), spread_cap)
+                spread = abs(spread)
                 adv = max(adv, 1e3)
 
                 # Frazzini et al. Eq. 25 with actual DeltaQ

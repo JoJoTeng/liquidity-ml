@@ -1,0 +1,75 @@
+metric,value
+SR_gross(1A),1.841364044311509
+SR_net(1A),-2.052611224299044
+SR_gross(1B),0.8437872858734558
+SR_net(1B),-1.4209508157074575
+SR_gross(2A),1.8003280749960184
+SR_net(2A),-2.0314277170236825
+SR_gross(2B),0.7857833851031751
+SR_net(2B),-1.442935701951891
+Net training effect,0.021183507275361446
+Net portfolio effect,0.6316604085915865
+Net total effect,0.609675522347153
+Net interaction,-0.043168393519794845
+Training share (%),3.474554332410843
+"LW p-val (training, net)",0.20415916816636673
+"LW p-val (total, net)",0.008598280343931213
+"LW p-val (H1, net)",0.992001599680064
+Gross training effect,-0.04103596931549047
+Gross portfolio effect,-0.9975767584380532
+Gross total effect,-1.0555806592083337
+"LW p-val (training, gross)",0.9734053189362127
+"LW p-val (total, gross)",0.9992001599680064
+"LW p-val (H1, gross)",0.0015996800639872025
+alpha_capm(1A)_annual,-0.37370619800998456
+alpha_capm(1A)_tstat,-6.477399938908628
+alpha_capm(1A)_pvalue,9.331661475047025e-11
+alpha_capm(1B)_annual,-0.31080747298841044
+alpha_capm(1B)_tstat,-4.940026732360266
+alpha_capm(1B)_pvalue,7.811186123822936e-07
+alpha_capm(2A)_annual,-0.3726430953591022
+alpha_capm(2A)_tstat,-6.517685978852542
+alpha_capm(2A)_pvalue,7.140026834908483e-11
+alpha_capm(2B)_annual,-0.3157482724166335
+alpha_capm(2B)_tstat,-5.025795438743208
+alpha_capm(2B)_pvalue,5.013500817933724e-07
+alpha_ff3(1A)_annual,-0.3746571613991425
+alpha_ff3(1A)_tstat,-6.621722609736359
+alpha_ff3(1A)_pvalue,3.550368382964024e-11
+alpha_ff3(1B)_annual,-0.30823465694266616
+alpha_ff3(1B)_tstat,-5.126424039068086
+alpha_ff3(1B)_pvalue,2.952971171397949e-07
+alpha_ff3(2A)_annual,-0.373376349999597
+alpha_ff3(2A)_tstat,-6.648484544814614
+alpha_ff3(2A)_pvalue,2.9612606786611e-11
+alpha_ff3(2B)_annual,-0.3132631505572333
+alpha_ff3(2B)_tstat,-5.200987134664064
+alpha_ff3(2B)_pvalue,1.982328255725001e-07
+alpha_ff5(1A)_annual,-0.3725741478403488
+alpha_ff5(1A)_tstat,-6.278439816425338
+alpha_ff5(1A)_pvalue,3.4198735677139816e-10
+alpha_ff5(1B)_annual,-0.31211723524838003
+alpha_ff5(1B)_tstat,-5.226793593508304
+alpha_ff5(1B)_pvalue,1.7247485517644744e-07
+alpha_ff5(2A)_annual,-0.37236812526308716
+alpha_ff5(2A)_tstat,-6.271097811867063
+alpha_ff5(2A)_pvalue,3.5851130505573394e-10
+alpha_ff5(2B)_annual,-0.3168448500064555
+alpha_ff5(2B)_tstat,-5.296562606820325
+alpha_ff5(2B)_pvalue,1.1800289239525185e-07
+alpha_ff5_mom(1A)_annual,-0.37855485651898024
+alpha_ff5_mom(1A)_tstat,-6.528589527402375
+alpha_ff5_mom(1A)_pvalue,6.639192333974128e-11
+alpha_ff5_mom(1B)_annual,-0.3157640524443964
+alpha_ff5_mom(1B)_tstat,-5.442621397162179
+alpha_ff5_mom(1B)_pvalue,5.250215679693244e-08
+alpha_ff5_mom(2A)_annual,-0.3780321528784697
+alpha_ff5_mom(2A)_tstat,-6.497252197538823
+alpha_ff5_mom(2A)_pvalue,8.180027257910127e-11
+alpha_ff5_mom(2B)_annual,-0.3205989012816599
+alpha_ff5_mom(2B)_tstat,-5.507173327879969
+alpha_ff5_mom(2B)_pvalue,3.646412013612339e-08
+Turnover (1A),2.094225910864187
+Turnover (1B),1.7542944322535792
+Turnover (2A),2.0860321649818236
+Turnover (2B),1.7378722181790773

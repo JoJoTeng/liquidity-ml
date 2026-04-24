@@ -444,7 +444,6 @@ portfolio:
 transaction_costs:
   spread_col: "BidAskSpread"
   spread_scale: 1.0 # Use raw CZ Corwin-Schultz spread (no downscaling)
-  spread_cap: 0.05 # Cap spread at 5% (clip outliers)
   lambda_market_impact: 0.1 # Frazzini et al. (2018) Eq. 12
   sigma_col: "daily_sigma" # 21-day rolling daily return volatility
   adv_col: "dvol_21d" # average daily dollar volume

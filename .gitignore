@@ -67,6 +67,10 @@ outputs/motivation/step3_restriction/dvol/*/predictions_*.parquet
 outputs/motivation/step3_restriction_rerank/dvol/*/predictions_*.csv
 outputs/motivation/step3/dvol/fillna_issue.md
 
+# Formal-analysis prediction parquets (regenerable from HPC training)
+outputs/formalanalysis/experiment/*/*/predictions.parquet
+outputs/formalanalysis/experiment/*/*/predictions_std.parquet
+
 # =========================
 # Claude Code (local session state)
 # =========================

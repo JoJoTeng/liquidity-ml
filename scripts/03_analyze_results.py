@@ -31,7 +31,19 @@ import argparse
 import json
 import logging
 import sys
+import warnings
 from pathlib import Path
+
+# Suppress upstream library deprecation noise. These warnings come from
+# pandas_datareader (date_parser) and pandas itself (groupby.apply future
+# behaviour) — neither is actionable from our code.
+warnings.filterwarnings(
+    "ignore", category=FutureWarning, message=".*date_parser.*"
+)
+warnings.filterwarnings(
+    "ignore", category=DeprecationWarning,
+    message=".*DataFrameGroupBy.apply operated on the grouping columns.*"
+)
 
 import numpy as np
 import pandas as pd
@@ -258,6 +270,19 @@ def compute_prediction_2(
             "feature": feat, "mean_shap_std": mean_std, "mean_shap_wt": mean_wt,
             "delta": delta, "t_stat": t_stat, "p_value": p_val, "n_windows": int(valid.sum()),
         })
+    if not rows:
+        logger.warning(
+            "  SHAP CSVs have no feature columns — skipping Prediction 2. "
+            "(Likely NN due to earlier SHAP bug; re-run NN jobs with the fix "
+            "to populate importance_shap.csv.)"
+        )
+        return {
+            "importance_shift": pd.DataFrame(
+                columns=["feature", "mean_shap_std", "mean_shap_wt",
+                         "delta", "t_stat", "p_value", "n_windows"]
+            ),
+        }
+
     shift_df = pd.DataFrame(rows).sort_values("delta", ascending=False)
 
     result = {"importance_shift": shift_df}
