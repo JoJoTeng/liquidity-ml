@@ -28,7 +28,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_config, get_data_dir
-from src.data.loader import load_panel, LIQUIDITY_COLS, NON_FEATURE_COLS
+from src.data.loader import load_panel, NON_FEATURE_COLS
 from src.analysis.motivation import (
     load_signaldoc,
     get_motivation_features,
@@ -123,7 +123,7 @@ def main() -> None:
             panel[f"raw_{col}"] = panel[col].copy()
             logger.info("Saved raw copy: raw_%s", col)
 
-    # ── 6. Rank-transform features to [0, 1] ─────────────────
+    # ── 5. Rank-transform features to [0, 1] ─────────────────
     logger.info("Rank-transforming %d features to [0, 1]...", len(features))
     panel = rank_transform_01(panel, features)
 

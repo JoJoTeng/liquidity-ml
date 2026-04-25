@@ -26,10 +26,8 @@ liquidity_ml/
 ├── src/
 │   ├── config.py              ← load_config(), get_data_dir(), get_output_dir()
 │   ├── data/
-│   │   └── loader.py          ← load_panel(), get_feature_names(), normalize_features()
-│   │                            Feature lists: SELECTED_FEATURES (86),
-│   │                            TRADABLE_FEATURES (8), ILLIQUIDITY_FEATURES (8),
-│   │                            TRADABLE_FEATURES_EXT (38), ILLIQUIDITY_FEATURES_EXT (12)
+│   │   └── loader.py          ← load_panel(), normalize_features(),
+│   │                            H2 groups: TRADABLE_FEATURES/ILLIQUIDITY_FEATURES
 │   ├── weighting/
 │   │   ├── __init__.py        ← compute_weights(), compute_all_weights(), PRIMARY_SCHEME
 │   │   └── schemes.py         ← 4 weighting schemes (Eq. 8-11)
@@ -43,12 +41,10 @@ liquidity_ml/
 │   │   └── construction.py    ← long-short decile portfolios, transaction costs,
 │   │                            compute_net_returns_all_aum()
 │   ├── evaluation/
-│   │   ├── statistics.py      ← sharpe_ratio(), bootstrap_sharpe_test() [Ledoit-Wolf],
+│   │   └── statistics.py      ← sharpe_ratio(), bootstrap_sharpe_test() [Ledoit-Wolf],
 │   │   │                        newey_west_tstat(), factor_alpha(), oos_r_squared(),
 │   │   │                        oos_r_squared_monthly(),
 │   │   │                        paired_ttest(), compute_effect_decomposition()
-│   │   └── two_by_two.py      ← _rolling_predict(), run_two_by_two(), run_all_models(),
-│   │                            save_results()
 │   └── analysis/
 │       └── feature_importance.py ← load_importance(), test_h2_group_shift(),
 │                                   test_h2_per_feature(), cross_model_h2_summary(),
@@ -58,7 +54,6 @@ liquidity_ml/
 │   ├── test_weighting.py
 │   ├── test_portfolio.py
 │   ├── test_statistics.py
-│   ├── test_two_by_two.py
 │   └── test_feature_importance.py
 ├── data/                      ← raw + processed data
 └── outputs/
@@ -74,10 +69,9 @@ liquidity_ml/
 5. `scripts/01_process_data.py` — orchestrate load + weights + save
 6. `src/portfolio/construction.py` — long-short portfolios + transaction costs
 7. `src/evaluation/statistics.py` — statistical tests
-8. `src/evaluation/two_by_two.py` — 2×2 framework with rolling windows
-9. `scripts/02_run_experiment.py` — run the experiment (all 3 models)
-10. `src/analysis/feature_importance.py` — SHAP analysis + H2 testing
-11. `scripts/03_analyze_results.py` — tables, figures, hypothesis tests (H1–H4)
+8. `scripts/02_run_experiment.py` — run the formal experiment
+9. `src/analysis/feature_importance.py` — SHAP analysis + H2 testing
+10. `scripts/03_analyze_results.py` — tables, figures, hypothesis tests
 
 ## ML Models (2 active + 1 pending)
 Each model runs independently through the 2×2 framework.
@@ -137,31 +131,32 @@ H1 and H3 are tested on both net and gross returns:
 - All AUM levels: in `net_results.csv` and `hypothesis_tests.json` `net_results` sub-dict.
 
 ## Feature Groups (for H2)
-- **Illiquidity (15):** Size, Price, DolVol, BidAskSpread, zerotrade1M/6M/12M, PriceDelayRsq, BetaLiquidityPS, Herf, IdioVol3F, IdioVolAHT, RealizedVol, ReturnSkew, MaxRet
-- **Tradable (15):** Mom12m, Mom6m, IndMom, High52, BMdec, CF, cfp, GP, RoE, CBOperProf, AssetGrowth, ChInv, Investment, hire, Tax
-- Extended versions also defined: ILLIQUIDITY_FEATURES_EXT, TRADABLE_FEATURES_EXT
+- **Illiquidity (15):** Size, Price, DolVol, BidAskSpread, zerotrade1M/6M/12M, PriceDelayRsq, BetaLiquidityPS, Illiquidity, IdioVol3F, IdioVolAHT, RealizedVol, ReturnSkew, MaxRet
+- **Tradable (15):** Mom12m, Mom6m, IndMom, STreversal, BM, CF, cfp, GP, RoE, CBOperProf, AssetGrowth, ChInv, Investment, hire, Tax
+- Extended versions follow Prediction 2's Step 2 empirical split:
+  ILLIQUIDITY_FEATURES_EXT = Q1-only predictors (43);
+  TRADABLE_FEATURES_EXT = Q5-only plus both-Q1-and-Q5 predictors (13).
 
-## Weighting Schemes (Equations 11–14)
+## Weighting Schemes
 All normalized to mean=1.0 within each cross-section.
 
-Scheme E — TC-Stock Full (Primary):
-  w_i = 1 / (1 + κ · TC_stock_i)
-  TC_stock_i = S_i/2 + λ · σ_i / √ADV_i
-  κ = 1.0, λ = 0.1 (Frazzini et al. 2018). AUM-invariant.
+Family 1 — Dollar Volume:
+  w_i = DolVol_i / mean(DolVol_t)
+  AUM-independent.
 
-Scheme C — Bid-Ask Spread (Robustness):
-  w_i = 1 / (1 + Spread_i)
-  where Spread_i = BidAskSpread (from CZ signed predictors, raw scale)
+Family 2 — Softmax on Rank:
+  w_i = exp(λ · percentile_i) / mean_j exp(λ · percentile_j)
+  AUM-independent. The formal grid runs λ = 2 and λ = 3, with percentile
+  based on dvol_21d within each month.
 
-Scheme A — Softmax on Rank (Robustness):
-  w_i = exp(λ · percentile_i) / Σ_j exp(λ · percentile_j)
-  λ = 2.0, percentile based on dvol_21d
-
-Scheme B — Linear Dollar Volume (Robustness):
-  w_i = DolVol_i / mean(DolVol)
-
-Scheme D — Quintile Discrete (Robustness):
-  Q5 (most liquid): 5.0, Q4: 3.0, Q3: 1.0, Q2: 0.3, Q1 (most illiquid): 0.1
+Family 3 — Transaction Cost:
+  w_i = exp(-alpha_t · TC_i)
+  TC_i = Spread_i/2 + λ · σ_i · sqrt(Q_i / ADV_i)
+  AUM-dependent. By default σ_i is daily-scaled lagged 12-month
+  excess-return volatility (`liq_excess_sigma_12m_daily`) and λ = 0.1.
+  Training weights use alpha_t = 3 / median_i(TC_i). Optional anchor
+  calibration can set λ so a 1% ADV trade produces 10 bps of price impact
+  at σ_bar.
 
 ## Data Columns After Fetch (00_fetch_data.py output)
 The signed_predictors_all_wide.csv contains:
@@ -172,10 +167,10 @@ The signed_predictors_all_wide.csv contains:
 - me_raw — raw market equity (for capacity analysis)
 - dvol_monthly — monthly dollar volume (|prc| × vol_in_shares)
 - dvol_21d — 21-day trailing avg dollar volume (PRIMARY liquidity measure, Eq. 14)
-- dvol_6m — 6-month rolling avg dollar volume
-- lambda_tc — price impact = 0.2 × 21 / dvol_6m (Frazzini-style)
-- liu_lm — Liu (2006) composite illiquidity LM_12 (from daily CRSP)
-- BidAskSpread — from CZ predictors (used for Scheme C weighting)
+- BidAskSpread — from CZ predictors (raw copy used for TC model)
+- daily_sigma — legacy 21-day rolling daily return volatility
+- excess_sigma_12m — lagged 12-month excess-return volatility
+- excess_sigma_12m_daily — daily-scaled excess_sigma_12m (current TC sigma input)
 
 ## Data Conventions
 - Dates: yyyymm integer (e.g. 202301 for Jan 2023)
@@ -187,27 +182,28 @@ The signed_predictors_all_wide.csv contains:
 ## Training Protocol
 - Rolling window: 120 months train, 12 months validation, 1 month test
 - OOS period: 2000-01 to 2024-12
-- Hyperparameter re-tuning every 24 months
+- Hyperparameter re-tuning every 12 months
 - Monthly rebalancing
 
 ## Portfolio Construction
 - Decile portfolios: Long Q10 (highest predicted), Short Q1
-- Liquidity filter: remove bottom 40% by dvol_21d
-- Position cap: 5% max per stock (iterative redistribution)
-- No-trade buffer: disabled (buffer_quantiles = 0, full rebalance each month)
+- No liquidity filter: TC-penalised sort replaces explicit filtering
+- No position cap: equal-dollar within each decile leg
+- Monthly full rebalance with turnover-adjusted net returns
 
 ## Transaction Costs (Frazzini et al. 2018, Eq. 12)
-TC_i = (Spread_i × spread_scale)/2 + λ · σ_i · √(Q_i / ADV_i), where λ = 0.1
-- spread_scale = 1.0 (raw CZ Corwin-Schultz spread, no downscaling)
-- spread_cap = 5% (clips outliers)
-- AUM scenarios: $100M, $500M, $1B, $5B
-Net return columns in saved CSVs: `ret_ls_net_{100M,500M,1B,5B}`
+TC_i = Spread_i/2 + λ · σ_i · √(Q_i / ADV_i), where λ = 0.1
+- Uses raw CZ Corwin-Schultz spread through `liq_BidAskSpread`
+- Uses daily-scaled lagged 12-month excess-return volatility through `liq_excess_sigma_12m_daily`
+- Optional lambda calibration anchors 1% ADV impact to 10 bps
+- AUM scenarios: $10M, $100M, $500M, $1B
+Net return columns in saved CSVs: `ret_ls_net_{10M,100M,500M,1B}`
 
 ## Experiment Outputs (02_run_experiment.py)
 Per model in `outputs/experiment/{model_name}/`:
 - `predictions.parquet` — permno, yyyymm, y_true, pred_std, pred_wt
 - `gross_returns_{1A,1B,2A,2B}.csv` — yyyymm, ret_long_short
-- `net_returns_{1A,1B,2A,2B}.csv` — yyyymm, ret_ls_net_{100M,500M,1B,5B}
+- `net_returns_{1A,1B,2A,2B}.csv` — yyyymm, ret_ls_net_{10M,100M,500M,1B}
 - `feature_importance_{std,wt}.csv` — rows=yyyymm, cols=features (gain)
 - `shap_importance_{std,wt}.csv` — rows=yyyymm, cols=features (mean|SHAP|)
 - `effect_decomposition.json` — sharpe_ratios, effects, lw_* tests, factor_alphas
@@ -256,7 +252,8 @@ pytest tests/ -v                                     # all tests (160 total)
 - Benchmark: **zero** (Campbell & Thompson 2008) — appropriate for excess return predictions
 - Null hypothesis: expected excess returns are zero (no predictability)
 - Positive R² means model beats the zero benchmark
-- Implemented in `src/evaluation/two_by_two.py`: `predictions["expanding_mean"] = 0.0`
+- Current formal analyses compute OOS R² in `scripts/03_analyze_results.py`
+  and `scripts/07_step3_ml_diagnostics.py`.
 
 ## XGBoost Hyperparameters (Notable)
 - `min_child_weight: 10` (was 100 — old value produced only ~12 unique predictions)
@@ -271,6 +268,6 @@ Directly penalizes costly-to-trade stocks at portfolio construction stage.
 Implementation: add `tc_penalize` parameter to `src/portfolio/construction.py`.
 
 ## Testing
-Run: `pytest tests/ -v -m "not slow"` (159 tests, ~7s)
-The 1 slow test (`test_nn_requires_background`) requires PyTorch initialization.
-Test files: test_weighting, test_portfolio, test_statistics, test_two_by_two, test_feature_importance.
+Run: `pytest tests/ -v -m "not slow"`.
+The optional SHAP/NN tests require `shap` and TensorFlow.
+Test files: test_weighting, test_portfolio, test_statistics, test_feature_importance.

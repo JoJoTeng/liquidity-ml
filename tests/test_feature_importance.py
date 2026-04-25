@@ -248,13 +248,13 @@ class TestH2PerFeature:
 
 class TestCategorizeFeature:
     def test_tradable(self):
-        assert _categorize_feature("Mom12m") == "tradable"
+        assert _categorize_feature("CBOperProf") == "tradable"
 
     def test_illiquidity(self):
-        assert _categorize_feature("IdioVol3F") == "illiquidity"
+        assert _categorize_feature("AM") == "illiquidity"
 
     def test_other(self):
-        assert _categorize_feature("SomeRandomFeature") == "other"
+        assert _categorize_feature("IdioVol3F") == "other"
 
 
 # ── TestLoadImportance ───────────────────────────────────────

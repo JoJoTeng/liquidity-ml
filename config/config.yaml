@@ -19,12 +19,15 @@ data:
   start_yyyymm: 198901
   end_yyyymm: 202412
 
-  id_cols: ["permno", "yyyymm"]
+  id_cols: [ "permno", "yyyymm" ]
   target_col: "excess_ret"
   return_col: "ret"
 
-  # Feature groups for mechanism analysis (Hypothesis 2)
-  # Core groups: narrow, cleanest exemplars for the main test
+  # Feature groups for mechanism analysis (Hypothesis 2).
+  # These lists are constrained to the final 113-feature training universe
+  # saved in data/feature_list.json by scripts/01_process_data.py.
+  # Narrow groups are economic-taxonomy groups; they describe interpretable
+  # liquidity/friction proxies versus standard anomaly/fundamental signals.
   illiquidity_features:
     - Size
     - Price
@@ -35,7 +38,7 @@ data:
     - zerotrade12M
     - PriceDelayRsq
     - BetaLiquidityPS
-    - Herf
+    - Illiquidity
     - IdioVol3F
     - IdioVolAHT
     - RealizedVol
@@ -46,8 +49,8 @@ data:
     - Mom12m
     - Mom6m
     - IndMom
-    - High52
-    - BMdec
+    - STreversal
+    - BM
     - CF
     - cfp
     - GP
@@ -59,313 +62,114 @@ data:
     - hire
     - Tax
 
-  # Extended groups: broader sets for robustness checks
-  # Report both narrow (above) and extended results
+  # Extended groups are empirical Prediction 2 groups from Step 2.
+  # They are not a broad economic taxonomy.
+  # They are used for Prediction 2 feature-importance reallocation.
+  # These are empirical Step 2 groups from quintile_fm_coefficients_full_raw.csv.
+  # illiquidity_features_extended = significant only in Q1, expected to lose
+  # importance under weighted training. tradable_features_extended = significant
+  # in Q5 only or in both Q1 and Q5, expected to gain or remain stable.
   illiquidity_features_extended:
-    # Core 8
-    - IdioVol3F
-    - IdioVolAHT
-    - zerotrade1M
-    - zerotrade6M
-    - zerotrade12M
-    - MaxRet
-    - VolSD
-    - BetaLiquidityPS
-    # Microstructure / trading frictions
+    # Q1-only predictive features (43)
+    - AM
+    - AbnormalAccruals
+    - AnalystRevision
+    - AnnouncementReturn
+    - AssetGrowth
+    - BM
+    - BMdec
+    - BPEBM
+    - Beta
     - BidAskSpread
+    - BookLeverage
+    - CF
+    - CashProd
+    - ChAssetTurnover
+    - ChEQ
+    - ChTax
+    - CompEquIss
+    - DelNetFin
     - DolVol
-    - Size
-    - Price
-    - Illiquidity # Amihud (2002) illiquidity
-    - std_turn # turnover volatility
-    - ShareVol # share volume
-    - PriceDelayRsq # price delay (Hou & Moskowitz 2005)
-    # Volatility / tail risk
-    - ReturnSkew
-    - ReturnSkew3F
-    - RealizedVol # realized volatility
-    - betaVIX # systematic volatility beta
-    - Beta # CAPM beta
-    - BetaTailRisk # tail risk beta
-    - CoskewACX # coskewness
-    - Coskewness # Harvey & Siddique coskewness
-    - SmileSlope # options implied vol skew
-    - OptionVolume1 # option-to-stock volume
-    # Institutional / information frictions
-    - RIO_Disp
-    - RIO_MB
-    - RIO_Turnover
-    - RIO_Volatility
-    - DelBreadth # breadth of ownership change
-    - ChNAnalyst # change in analyst coverage
-    - ForecastDispersion # analyst disagreement
-    # Industry concentration
-    - Herf
-    - HerfBE
-
-  tradable_features_extended:
-    # Core 8
+    - EarningsStreak
+    - FEPS
+    - Illiquidity
+    - IndMom
+    - IndRetBig
+    - IntanBM
     - Mom12m
     - Mom6m
-    - BMdec
-    - GP
-    - AssetGrowth
-    - RoE
-    - CF
-    - CBOperProf
-    # Momentum variants
-    - Mom12mOffSeason
-    - MomOffSeason
-    - MomSeason
     - MomSeasonShort
-    - IndMom
-    - IntMom
-    - ResidualMomentum
-    - LRreversal
-    - STreversal
-    - MomRev
-    - High52 # 52-week high (George & Hwang 2004)
-    - Mom6mJunk
-    - MomVol
-    - FirmAgeMom
-    - MomSeason06YrPlus
-    - MomSeason11YrPlus
-    - MomSeason16YrPlus
-    - MomOffSeason06YrPlus
-    - MomOffSeason16YrPlus
-    - CustomerMomentum
-    - retConglomerate
-    - iomom_cust
-    - iomom_supp
-    - IndRetBig
-    # Value / fundamentals
-    - BPEBM
-    - EBM
-    - cfp
-    - BookLeverage
-    - EquityDuration
-    - BM
-    - EP
-    - EntMult
-    - NetDebtPrice
-    - IntanBM
-    - IntanCFP
-    - IntanEP
-    - IntanSP
-    - AM
-    - Leverage
     - NetPayoutYield
-    - PayoutYield
-    - DivYieldST
-    - fgr5yrLag
-    - sfe
-    # Investment
-    - Investment
-    - InvestPPEInv
-    - grcapx
-    - grcapx3y
-    - ChInv
-    - ChInvIA
-    - InvGrowth
-    - GrAdExp
-    - OrderBacklog
-    - OrderBacklogChg
-    - tang
-    # Earnings / announcements / analyst
-    - EarningsSurprise
-    - RevenueSurprise
-    - AnnouncementReturn
-    - EarningsStreak
-    - EarningsConsistency
-    - EarningsForecastDisparity
-    - EarnSupBig
-    - FEPS
-    - REV6
-    - ChangeInRecommendation
-    - AnalystRevision
-    - ChForecastAccrual
-    - ExclExp
-    - MeanRankRevGrowth
-    # Profitability
-    - CashProd
     - OPLeverage
-    - roaq
-    - MS
-    - Frontier
-    - Cash
-    - OrgCap
-    - PS
-    # R&D / intangibles
-    - RD
-    - RDcap
-    - RDS
-    - RDAbility
-    - PatentsRD
-    - CitationsRD
-    # Accruals
-    - Accruals
-    - TotalAccruals
-    - NOA
-    - dNoa
-    - AbnormalAccruals
-    - AccrualsBM
     - PctAcc
-    - PctTotAcc
-    - DelCOA
-    - DelCOL
-    - DelEqu
-    - DelFINL
-    - DelLTI
-    - DelNetFin
-    - ChAssetTurnover
-    - ChNNCOA
-    - ChNWC
-    - ChEQ
-    # Issuance / corporate actions
+    - Price
+    - REV6
+    - RealizedVol
+    - ReturnSkew
+    - ReturnSkew3F
+    - RevenueSurprise
     - ShareIss1Y
     - ShareIss5Y
-    - hire
+    - Tax
     - XFIN
-    - NetEquityFinance
-    - NetDebtFinance
-    - CompEquIss
-    - CompositeDebtIssuance
-    # Dividend policy / capital structure / corporate events
-    - DivSeason
-    - CredRatDG
-    - ExchSwitch
-    - SurpriseRD
-    # Tax / other fundamentals
-    - Tax
-    - ChTax
-    - OScore
-    - Governance
-    - Activism1
-
-  # 75 curated features with coverage from 1972 onward.
-  # NaN filled with 0.0 after rank-quantile normalization (neutral rank).
-  # All 160 CZ clear predictors are available in the data; this subset
-  # focuses on features with broad temporal coverage.
-  selected_features:
-    - AM
-    - Accruals
-    - AnnouncementReturn
-    - AssetGrowth
-    - BetaLiquidityPS
-    - BidAskSpread
-    - BMdec
-    - BookLeverage
-    - BPEBM
-    - Cash
-    - CBOperProf
-    - CF
-    - cfp
-    - CashProd
-    - ChAssetTurnover
-    - ChEQ
-    - ChInv
-    - ChInvIA
-    - ChNWC
-    - ChNNCOA
-    - ChTax
-    - Coskewness
-    - CoskewACX
-    - DelCOA
-    - DelCOL
-    - DelEqu
-    - DelFINL
-    - DelLTI
-    - DelNetFin
-    - DivYieldST
-    - EP
-    - High52
-    - RealizedVol
-    - DolVol
-    - EBM
-    - EarningsSurprise
-    - EquityDuration
-    - Illiquidity
-    - GP
-    - grcapx
-    - Herf
-    - IdioVol3F
-    - IdioVolAHT
-    - PriceDelayRsq
-    - IndMom
-    - IntMom
-    - InvestPPEInv
-    - Investment
-    - LRreversal
-    - Leverage
-    - MaxRet
-    - MS
-    - Mom12m
-    - Mom12mOffSeason
-    - Mom6m
-    - MomOffSeason
-    - MomSeason
-    - MomSeasonShort
-    - NOA
-    - OPLeverage
-    - OrgCap
-    - PS
-    - PctAcc
-    - Price
-    - Beta
-    - RD
-    - RDS
-    - ResidualMomentum
-    - ReturnSkew
-    - ReturnSkew3F
-    - RevenueSurprise
-    - RoE
-    - STreversal
-    - ShareIss1Y
-    - Size
-    - Tax
-    - TotalAccruals
-    - VolSD
-    - dNoa
-    - hire
+    - grcapx3y
     - roaq
-    - std_turn
-    - tang
-    - zerotrade1M
-    - zerotrade6M
-    - zerotrade12M
+
+  tradable_features_extended:
+    # Q5-only predictive features (4)
+    - CBOperProf
+    - ChNNCOA
+    - Leverage
+    - MomSeason11YrPlus
+    # Significant in both Q1 and Q5 (9)
+    - Cash
+    - EarningsSurprise
+    - MeanRankRevGrowth
+    - MomSeason
+    - MomSeason06YrPlus
+    - RD
+    - STreversal
+    - TrendFactor
+    - betaVIX
 
 # ----------------------------------------------------------
-# Liquidity (raw columns from 00_fetch_data.py)
+# Liquidity (raw/helper columns copied to liq_* by src/data/loader.py)
 # ----------------------------------------------------------
 liquidity:
   primary: "dvol_21d" # 21-day trailing avg dollar volume (Eq. 14)
+  # Columns that need raw liq_* copies for current weighting, quintile,
+  # robustness, and transaction-cost code.
   measures:
     - dvol_21d # PRIMARY: 21-day trailing avg dollar volume (from daily CRSP)
-    - dvol_6m # 6-month rolling avg monthly dollar volume
-    # - dvol_monthly # monthly dollar volume
-    - me_raw # market equity
-    - lambda_tc # price impact (Frazzini-style)
-    - BidAskSpread # bid-ask spread (from CZ predictors)
-    - liu_lm # Liu (2006) composite illiquidity LM_12 (from daily CRSP)
-    - daily_sigma # 21-day rolling daily return volatility (for TC model)
-    # - DolVol # dollar volume (from CZ predictors)
+    - me_raw # market cap robustness / value-weighted deployment proxy
+    - BidAskSpread # TC model spread input; raw copy of predictor
+    - daily_sigma # legacy 21-day daily return volatility
+    - excess_sigma_12m # monthly 12-month excess-return volatility
+    - excess_sigma_12m_daily # daily-scaled excess_sigma_12m for daily ADV impact
 
 # ----------------------------------------------------------
 # Weighting Schemes (Equations 11–14)
 # ----------------------------------------------------------
 weighting:
-  # LiquidityML v3: two weight families
-  # Family 1: dolvol - Eq.21 DolVol/median(DolVol), AUM-independent
-  # Family 2: tc - Eq.23 exp(-alpha*TC), AUM-dependent
-  # Old schemes (softmax_rank, quintile_discrete, bid_ask_spread) removed.
+  # Family 1: dolvol - DolVol/mean(DolVol), AUM-independent
+  # Family 2: softmax_rank - exp(lambda * rank(DolVol)), AUM-independent
+  # Family 3: tc - Eq.23 exp(-alpha*TC), AUM-dependent
+  # This block only selects the default training-weight family.
+  # dolvol and softmax_rank use liquidity.primary; tc uses transaction_costs below.
   primary: "dolvol"
+  # Default softmax-rank lambda used when --softmax-lambda is omitted.
+  softmax_rank_lambda: 2.0
+  # Formal softmax-rank robustness grid. scripts/02_run_experiment.py reads
+  # an individual value through --softmax-lambda; generate_hpc_jobs.sh runs
+  # both values and writes separate folders: softmax_rank_lam2 and lam3.
+  softmax_rank_lambdas: [ 2.0, 3.0 ]
 
 # ----------------------------------------------------------
 # ML Models (3 models, each run with standard + weighted)
 # ----------------------------------------------------------
 models:
   # Active models run in the 2×2 framework independently.
-  # Neural network pending fix (BatchNorm single-sample crash).
+  # Neural network is active; BatchNorm is safe with the rolling-window batch sizes.
   run_models:
     - elastic_net
     - xgboost
@@ -376,8 +180,8 @@ models:
     l1_ratio: 0.5
     max_iter: 10000
     search_space:
-      alpha: [0.00001, 0.0001, 0.001, 0.01, 0.1]
-    n_random_search: 5  # full grid = 5, all evaluated
+      alpha: [ 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1 ]
+    n_random_search: 6 # full grid = 6, all evaluated
 
   xgboost:
     n_estimators: 1000
@@ -389,29 +193,28 @@ models:
     reg_alpha: 0.0
     reg_lambda: 0.1
     search_space:
-      max_depth: [2, 3, 4]
-      learning_rate: [0.001, 0.01, 0.05]
-      n_estimators: [300, 500, 1000]
-      min_child_weight: [10, 50, 100]
-    n_random_search: 108  # full grid = 81 combos, all evaluated
+      max_depth: [ 2, 3, 4 ]
+      learning_rate: [ 0.001, 0.01, 0.05 ]
+      n_estimators: [ 300, 500, 1000 ]
+      min_child_weight: [ 10, 50, 100, 200 ]
+    n_random_search: 108 # full grid = 108 combos, all evaluated
 
   neural_network:
-    hidden_layers: [32, 16, 8]  # GKX (2020) NN3 — best architecture
+    hidden_layers: [ 32, 16, 8 ] # GKX (2020) NN3 — best architecture
     activation: "relu"
-    batch_norm: true             # Algorithm 7 — after ReLU
-    dropout: 0.0                 # not used by GKX
-    batch_size: 10000            # Table A.5
-    epochs: 100                  # Table A.5
-    patience: 5                  # Table A.5
+    batch_norm: true # Algorithm 7 — after ReLU
+    dropout: 0.0 # not used by GKX
+    batch_size: 10000 # Table A.5
+    epochs: 100 # Table A.5
+    patience: 5 # Table A.5
     learning_rate: 0.001
     l1_penalty: 0.00001
     weight_decay: 0.0
-    n_ensemble_seeds: 1          # no ensemble
+    n_ensemble_seeds: 1 # no ensemble
     search_space:
-      learning_rate: [0.001, 0.01]
-      l1_penalty: [0.00001, 0.001]
-    # Total grid: 2 LR x 2 L1 = 4 combos, best selected via validation
-
+      learning_rate: [ 0.001, 0.003, 0.01 ]
+      l1_penalty: [ 0.00001, 0.0001, 0.001 ]
+    # Total grid: 3 LR x 3 L1 = 9 combos, best selected via validation
 # ----------------------------------------------------------
 # Training Protocol
 # ----------------------------------------------------------
@@ -438,18 +241,26 @@ portfolio:
   # No liquidity filter - TC-penalised sort (Column 2) replaces it.
   # No position cap - equal-dollar within each decile leg.
 
-# ----------------------------------------------------------
-# Transaction Cost Model
-# ----------------------------------------------------------
+  # ----------------------------------------------------------
+  # Transaction Cost Model
+  # ----------------------------------------------------------
 transaction_costs:
   spread_col: "BidAskSpread"
-  spread_scale: 1.0 # Use raw CZ Corwin-Schultz spread (no downscaling)
   lambda_market_impact: 0.1 # Frazzini et al. (2018) Eq. 12
-  sigma_col: "daily_sigma" # 21-day rolling daily return volatility
+  weight_alpha:
+    mode: "inverse_median" # alpha_t = scale / median(TC_t)
+    scale: 3.0 # primary TC-weight intensity; median-cost raw penalty is exp(-3)
+  lambda_calibration:
+    enabled: false # If true: lambda = anchor_impact / (sqrt(anchor_trade_frac_adv) * sigma_bar)
+    anchor_trade_frac_adv: 0.01 # 1% ADV trade
+    anchor_impact: 0.001 # 10 bps price impact
+    sigma_bar_stat: "median" # median or mean over the input panel
+  sigma_col: "excess_sigma_12m_daily" # daily-scaled 12-month excess-return volatility
   adv_col: "dvol_21d" # average daily dollar volume
   aum_scenarios:
-    - 100_000_000   # $100M - small fund
-    - 500_000_000   # $500M - primary specification
+    - 10_000_000 # $10M - small fund
+    - 100_000_000 # $100M - medium fund
+    - 500_000_000 # $500M - primary specification
     - 1_000_000_000 # $1B - large fund
 
 # ----------------------------------------------------------
@@ -461,12 +272,12 @@ inference:
   significance_level: 0.05
   one_sided_test: true
   calibrate_block_length: false # LW (2008) Algorithm 3.1 — true is very expensive
-  block_grid: [2, 4, 6, 8, 10] # block sizes for bootstrap Sharpe test
+  block_grid: [ 2, 4, 6, 8, 10 ] # block sizes for bootstrap Sharpe test
   factor_models:
-    capm: ["Mkt-RF"]
-    ff3: ["Mkt-RF", "SMB", "HML"]
-    ff5: ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
-    ff5_mom: ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom"]  # Primary for v3
+    capm: [ "Mkt-RF" ]
+    ff3: [ "Mkt-RF", "SMB", "HML" ]
+    ff5: [ "Mkt-RF", "SMB", "HML", "RMW", "CMA" ]
+    ff5_mom: [ "Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom" ] # Primary for v3
 
 # ----------------------------------------------------------
 # SHAP Analysis (Hypothesis 2)

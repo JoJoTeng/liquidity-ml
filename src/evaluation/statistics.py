@@ -4,7 +4,7 @@ Statistical Inference
 Statistical tests for the 2×2 experimental framework.
 
 Implements:
-  1. Sharpe ratio computation (annualized)
+  1. Sharpe ratio computation
   2. Newey-West HAC t-statistics for mean returns
   3. Factor alpha regressions (CAPM, FF3, FF5) with Newey-West SEs
   4. GRS test (Gibbons, Ross, Shanken 1989)
@@ -193,13 +193,14 @@ def _load_ff_factors_uncached(n_factors: int, config: dict | None) -> pd.DataFra
 # ══════════════════════════════════════════════════════════════
 
 
-def sharpe_ratio(returns: np.ndarray | pd.Series, annualize: bool = True) -> float:
-    """Annualized Sharpe ratio.
+def sharpe_ratio(returns: np.ndarray | pd.Series, annualize: bool = False) -> float:
+    """Sharpe ratio for monthly returns.
 
     Parameters
     ----------
     returns : Monthly excess returns (already excess or long-short).
-    annualize : If True, multiply by sqrt(12).
+    annualize : If True, multiply by sqrt(12). Defaults to False so the
+        returned value matches the monthly frequency of the input series.
 
     Returns
     -------
@@ -1146,7 +1147,7 @@ def compute_effect_decomposition(
     """
     cells = {"1A": returns_1a, "1B": returns_1b, "2A": returns_2a, "2B": returns_2b}
 
-    # Sharpe ratios
+    # Sharpe ratios are monthly by default, matching the monthly return inputs.
     sharpes = {k: sharpe_ratio(v) for k, v in cells.items()}
 
     # Effect decomposition

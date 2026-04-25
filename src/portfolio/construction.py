@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import load_config
+from src.weighting.schemes import resolve_market_impact_lambda
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,8 @@ def build_long_short_portfolio(
     tc_penalised: bool = False,
     tc_per_stock: pd.Series | None = None,
     n_quantiles: int = 10,
+    long_quantile: int | None = None,
+    short_quantile: int = 1,
 ) -> dict[str, Any]:
     """Build a long-short decile portfolio for a single cross-section.
 
@@ -76,6 +79,8 @@ def build_long_short_portfolio(
     tc_penalised : If True, sort on (predictions - tc_per_stock) for Column 2.
     tc_per_stock : One-way TC per stock (required if tc_penalised=True).
     n_quantiles : Number of quantiles (default 10 for deciles).
+    long_quantile : Quantile to hold long. Defaults to the top quantile.
+    short_quantile : Quantile to hold short. Defaults to the bottom quantile.
 
     Returns
     -------
@@ -96,14 +101,23 @@ def build_long_short_portfolio(
     else:
         work["_signal"] = work["_pred"]
 
+    if long_quantile is None:
+        long_quantile = n_quantiles
+    if not (1 <= short_quantile <= n_quantiles):
+        raise ValueError("short_quantile must be between 1 and n_quantiles")
+    if not (1 <= long_quantile <= n_quantiles):
+        raise ValueError("long_quantile must be between 1 and n_quantiles")
+    if long_quantile == short_quantile:
+        raise ValueError("long_quantile and short_quantile must differ")
+
     if len(work) < n_quantiles * 2:
         return _empty_result()
 
     # -- Decile assignment ------
     work["_decile"] = _assign_deciles(work["_signal"], n_quantiles)
 
-    long_df = work[work["_decile"] == n_quantiles]   # Q10 = highest signal
-    short_df = work[work["_decile"] == 1]             # Q1 = lowest signal
+    long_df = work[work["_decile"] == long_quantile]
+    short_df = work[work["_decile"] == short_quantile]
 
     if len(long_df) < 2 or len(short_df) < 2:
         return _empty_result()
@@ -179,7 +193,10 @@ def build_portfolio_timeseries(
     """
     if config is None:
         config = _cfg
-    n_q = config["portfolio"]["n_quantiles"]
+    portfolio_cfg = config["portfolio"]
+    n_q = portfolio_cfg["n_quantiles"]
+    long_q = portfolio_cfg.get("long_quantile", n_q)
+    short_q = portfolio_cfg.get("short_quantile", 1)
 
     # Normalise predictions to a DataFrame with [permno, yyyymm, prediction]
     if isinstance(predictions, pd.Series):
@@ -230,6 +247,8 @@ def build_portfolio_timeseries(
             tc_penalised=tc_penalised,
             tc_per_stock=tc_month,
             n_quantiles=n_q,
+            long_quantile=long_q,
+            short_quantile=short_q,
         )
 
         result["yyyymm"] = yyyymm
@@ -267,14 +286,19 @@ def compute_net_returns(
       2. DeltaQ_it = |target_position - drifted_position|
       3. TC_it = Spread/2 + lambda * sigma * sqrt(DeltaQ_it / ADV)
       4. Portfolio TC = sum over all traded stocks
+
+    The returned ``raw_trade_sum`` is the long-leg plus short-leg sum of
+    absolute weight changes. Reported ``turnover`` follows the standard
+    convention, ``0.5 * raw_trade_sum``; transaction costs still use the full
+    raw trade sum because one-way costs are paid on both buys and sells.
     """
     if config is None:
         config = _cfg
     tc_cfg = config["transaction_costs"]
-    lam = tc_cfg["lambda_market_impact"]
     spread_col = f"liq_{tc_cfg['spread_col']}"
     sigma_col = f"liq_{tc_cfg['sigma_col']}"
     adv_col = f"liq_{tc_cfg['adv_col']}"
+    lam = resolve_market_impact_lambda(panel, config, sigma_col=sigma_col)
 
     # Build lookup: (permno, yyyymm) -> {spread, sigma, adv, ret}
     lookup_cols = ["permno", "yyyymm", "ret"]
@@ -286,6 +310,8 @@ def compute_net_returns(
 
     months = sorted(positions_history.keys())
     tc_series = {}
+    raw_trade_sum_series = {}
+    turnover_series = {}
 
     # Track drifted positions (evolve with actual returns)
     prev_pos_long: dict[int, float] = {}
@@ -302,11 +328,12 @@ def compute_net_returns(
             drifted_short: dict[int, float] = {}
         else:
             prev_yyyymm = months[i - 1]
-            drifted_long = _drift_positions(prev_pos_long, prev_yyyymm, yyyymm, lookup)
-            drifted_short = _drift_positions(prev_pos_short, prev_yyyymm, yyyymm, lookup)
+            drifted_long = _drift_positions(prev_pos_long, prev_yyyymm, lookup)
+            drifted_short = _drift_positions(prev_pos_short, prev_yyyymm, lookup)
 
         # Compute TC for each leg
         total_tc = 0.0
+        raw_trade_sum = 0.0
         for target, drifted, leg_name in [
             (target_long, drifted_long, "long"),
             (target_short, drifted_short, "short"),
@@ -320,12 +347,19 @@ def compute_net_returns(
                 if delta_w < 1e-10:
                     continue
 
+                raw_trade_sum += delta_w
+
                 # Dollar trade amount
                 delta_q = delta_w * aum
 
-                # Look up stock characteristics
+                # Look up stock characteristics. If an eliminated holding is
+                # absent from the current cross-section, use its previous-month
+                # TC inputs rather than a blunt default.
+                fallback_yyyymm = None
+                if target_w == 0.0 and drifted_w > 0.0 and i > 0:
+                    fallback_yyyymm = months[i - 1]
                 try:
-                    row = lookup.loc[(permno, yyyymm)]
+                    row = _lookup_trade_row(lookup, permno, yyyymm, fallback_yyyymm)
                 except KeyError:
                     total_tc += delta_w * 0.005  # 50bps default
                     continue
@@ -335,7 +369,6 @@ def compute_net_returns(
                 adv = _safe_val(row, adv_col, 1e6)
 
                 spread = abs(spread)
-                adv = max(adv, 1e3)
 
                 # Frazzini et al. Eq. 25 with actual DeltaQ
                 half_spread = spread / 2.0
@@ -345,6 +378,8 @@ def compute_net_returns(
                 total_tc += delta_w * tc_i
 
         tc_series[yyyymm] = total_tc
+        raw_trade_sum_series[yyyymm] = raw_trade_sum
+        turnover_series[yyyymm] = 0.5 * raw_trade_sum
 
         # Store current positions for next month's drift
         prev_pos_long = target_long.copy()
@@ -353,22 +388,44 @@ def compute_net_returns(
     # Merge TC into gross returns
     result = gross_returns.copy()
     result["transaction_cost"] = result["yyyymm"].map(tc_series).fillna(0.0)
+    result["raw_trade_sum"] = result["yyyymm"].map(raw_trade_sum_series).fillna(0.0)
+    result["turnover"] = result["yyyymm"].map(turnover_series).fillna(0.0)
     result["ret_long_short_net"] = result["ret_long_short"] - result["transaction_cost"]
     return result
+
+
+def _lookup_trade_row(
+    lookup: pd.DataFrame,
+    permno: int,
+    yyyymm: int,
+    fallback_yyyymm: int | None = None,
+):
+    """Lookup TC inputs, optionally falling back for eliminated holdings."""
+    try:
+        return lookup.loc[(permno, yyyymm)]
+    except KeyError:
+        if fallback_yyyymm is not None:
+            return lookup.loc[(permno, fallback_yyyymm)]
+        raise
 
 
 def _drift_positions(
     positions: dict[int, float],
     from_yyyymm: int,
-    to_yyyymm: int,
     lookup: pd.DataFrame,
 ) -> dict[int, float]:
-    """Drift positions forward by one month using actual returns."""
+    """Compute pre-rebalance weights after holding-period return drift.
+
+    ``load_panel`` forward-shifts ``ret``, so ``lookup[(permno, from_yyyymm)]``
+    is the raw return earned between ``from_yyyymm`` and the next rebalance.
+    The final division normalises within the leg, matching
+    w_i(1 + r_i) / sum_j w_j(1 + r_j).
+    """
     if not positions:
         return {}
 
     drifted = {}
-    total_value = 0.0
+    leg_value_after_returns = 0.0
 
     for permno, w in positions.items():
         try:
@@ -376,14 +433,13 @@ def _drift_positions(
             ret = row["ret"] if not pd.isna(row["ret"]) else 0.0
         except KeyError:
             ret = 0.0
-        new_val = w * (1.0 + ret)
-        drifted[permno] = new_val
-        total_value += new_val
+        value_after_return = w * (1.0 + ret)
+        drifted[permno] = value_after_return
+        leg_value_after_returns += value_after_return
 
-    # Renormalise to sum to ~1
-    if total_value > 0:
+    if leg_value_after_returns > 0:
         for permno in drifted:
-            drifted[permno] /= total_value
+            drifted[permno] /= leg_value_after_returns
 
     return drifted
 

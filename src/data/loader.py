@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 _cfg = load_config()
 
-SELECTED_FEATURES: list[str] = _cfg["data"]["selected_features"]
 ILLIQUIDITY_FEATURES: list[str] = _cfg["data"]["illiquidity_features"]
 TRADABLE_FEATURES: list[str] = _cfg["data"]["tradable_features"]
 ILLIQUIDITY_FEATURES_EXT: list[str] = _cfg["data"]["illiquidity_features_extended"]
@@ -38,7 +37,7 @@ _WEIGHT_SCHEMES = ["softmax_rank", "linear_dolvol", "bid_ask_spread", "tc_stock"
 NON_FEATURE_COLS: set[str] = {
     "permno", "yyyymm", "ret", "excess_ret",
     "me_raw", "dvol_monthly", "dvol_6m", "dvol_21d", "lambda_tc", "liu_lm",
-    "daily_sigma", "exchcd",
+    "daily_sigma", "excess_sigma_12m", "excess_sigma_12m_daily", "exchcd",
 } | {f"liq_{m}" for m in _cfg["liquidity"]["measures"]} | {f"weight_{s}" for s in _WEIGHT_SCHEMES}
 
 
@@ -116,7 +115,17 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
     panel["excess_ret"] = panel[ret_col] - panel["RF"]
     panel = panel.drop(columns=["RF"])
 
-    # ── 5. Create liq_ prefixed copies (before normalization)
+    # ── 5. PDF-style volatility for square-root impact calibration ─────
+    # Computed before the target shift, so month t uses returns through t.
+    panel = panel.sort_values(["permno", "yyyymm"])
+    panel["excess_sigma_12m"] = panel.groupby("permno")["excess_ret"].transform(
+        lambda x: x.rolling(12, min_periods=6).std()
+    )
+    # Square-root impact uses daily ADV. Convert the monthly rolling sigma to a
+    # daily scale so the volatility and volume horizons are internally aligned.
+    panel["excess_sigma_12m_daily"] = panel["excess_sigma_12m"] / np.sqrt(21.0)
+
+    # ── 6. Create liq_ prefixed copies (before normalization)
     liq_measures = config["liquidity"]["measures"]
     for col in liq_measures:
         if col in panel.columns:
@@ -124,19 +133,18 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
         else:
             logger.warning("Liquidity measure '%s' not found in panel", col)
 
-    # ── 6. Forward-shift target ─────────────────────────────
+    # ── 7. Forward-shift target ─────────────────────────────
     #   Month t features predict month t+1 return
-    panel = panel.sort_values(["permno", "yyyymm"])
     panel["excess_ret"] = panel.groupby("permno")["excess_ret"].shift(-1)
     panel["ret"] = panel.groupby("permno")["ret"].shift(-1)
 
-    # ── 7. Filter date range ────────────────────────────────
+    # ── 8. Filter date range ────────────────────────────────
     start = config["data"]["start_yyyymm"]
     end = config["data"]["end_yyyymm"]
     panel = panel[(panel["yyyymm"] >= start) & (panel["yyyymm"] <= end)]
     logger.info("Date filter [%d, %d]: %d rows", start, end, len(panel))
 
-    # ── 8. Drop NaN targets ─────────────────────────────────
+    # ── 9. Drop NaN targets ─────────────────────────────────
     n_before = len(panel)
     panel = panel.dropna(subset=["excess_ret", "ret"])
     logger.info("Dropped %d rows with NaN target", n_before - len(panel))
@@ -144,7 +152,9 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
     # ── Summary ─────────────────────────────────────────────
     non_feature_cols = {"permno", "yyyymm", "ret", "excess_ret", "exchcd",
                         "me_raw", "dvol_monthly", "dvol_21d", "dvol_6m",
-                        "lambda_tc", "liu_lm", "daily_sigma", "BidAskSpread"}
+                        "lambda_tc", "liu_lm", "daily_sigma",
+                        "excess_sigma_12m", "excess_sigma_12m_daily",
+                        "BidAskSpread"}
     liq_cols = [c for c in panel.columns if c.startswith("liq_")]
     non_feature_cols.update(liq_cols)
     features = [c for c in panel.columns if c not in non_feature_cols]
@@ -161,22 +171,6 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
 
     panel = panel.reset_index(drop=True)
     return panel
-
-
-def get_feature_names(panel: pd.DataFrame) -> list[str]:
-    """Return the curated predictor feature names present in the panel.
-
-    Uses the hand-picked ``selected_features`` list from config (75
-    predictors with coverage from 1972 onward).  Only returns features
-    that actually exist in ``panel.columns`` so callers never get
-    KeyError on missing columns.
-    """
-    panel_cols = set(panel.columns)
-    present = [f for f in SELECTED_FEATURES if f in panel_cols]
-    missing = [f for f in SELECTED_FEATURES if f not in panel_cols]
-    if missing:
-        logger.warning("Selected features missing from panel: %s", missing)
-    return present
 
 
 def normalize_features(

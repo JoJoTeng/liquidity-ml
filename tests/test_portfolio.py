@@ -37,6 +37,8 @@ def single_month():
         "liq_dvol_21d": rng.lognormal(mean=18, sigma=2, size=n),
         "liq_BidAskSpread": rng.uniform(0.001, 0.05, size=n),
         "liq_daily_sigma": rng.uniform(0.005, 0.04, size=n),
+        "liq_excess_sigma_12m": rng.uniform(0.04, 0.25, size=n),
+        "liq_excess_sigma_12m_daily": rng.uniform(0.04, 0.25, size=n) / np.sqrt(21.0),
     })
 
 
@@ -104,6 +106,36 @@ class TestBuildLongShort:
         # Long + short = 2 deciles out of 10 = 20% of 500 = 100 stocks
         assert total == 100
 
+    def test_custom_long_short_quantiles(self):
+        """Configured long/short quantiles should control selected legs."""
+        n = 100
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+        })
+        predictions = pd.Series(np.arange(n), index=df.index)
+
+        result = build_long_short_portfolio(
+            df,
+            predictions,
+            n_quantiles=10,
+            long_quantile=9,
+            short_quantile=2,
+        )
+
+        assert set(result["positions_long"]) == set(range(10081, 10091))
+        assert set(result["positions_short"]) == set(range(10011, 10021))
+
+    def test_invalid_long_short_quantiles(self, single_month, predictions):
+        with pytest.raises(ValueError, match="must differ"):
+            build_long_short_portfolio(
+                single_month,
+                predictions,
+                long_quantile=1,
+                short_quantile=1,
+            )
+
     def test_tc_penalised_sort(self, single_month, predictions, tc_per_stock):
         result_std = build_long_short_portfolio(
             single_month, predictions, tc_penalised=False)
@@ -141,13 +173,13 @@ class TestDriftPositions:
             "ret": [0.10, -0.05],
         }).set_index(["permno", "yyyymm"])
 
-        drifted = _drift_positions(positions, 202301, 202302, lookup)
+        drifted = _drift_positions(positions, 202301, lookup)
         assert drifted[10001] > drifted[10002]
         assert abs(sum(drifted.values()) - 1.0) < 1e-10
 
     def test_empty_positions(self):
         lookup = pd.DataFrame()
-        drifted = _drift_positions({}, 202301, 202302, lookup)
+        drifted = _drift_positions({}, 202301, lookup)
         assert drifted == {}
 
 
@@ -169,3 +201,41 @@ class TestComputeNetReturns:
         net_df = compute_net_returns(
             returns_df, pos_hist, single_month, aum=500_000_000, config=_cfg)
         assert net_df["ret_long_short_net"].iloc[0] <= net_df["ret_long_short"].iloc[0]
+        assert net_df["raw_trade_sum"].iloc[0] == pytest.approx(2.0)
+        assert net_df["turnover"].iloc[0] == pytest.approx(1.0)
+
+    def test_eliminated_asset_uses_previous_tc_inputs(self):
+        cfg = load_config()
+        cfg["transaction_costs"]["sigma_col"] = "excess_sigma_12m"
+        cfg["transaction_costs"]["lambda_market_impact"] = 0.1
+        cfg["transaction_costs"]["lambda_calibration"]["enabled"] = False
+
+        panel = pd.DataFrame({
+            "permno": [10001, 10002],
+            "yyyymm": [202301, 202302],
+            "ret": [0.0, 0.0],
+            "liq_BidAskSpread": [0.02, 0.02],
+            "liq_excess_sigma_12m": [0.10, 0.10],
+            "liq_dvol_21d": [100_000_000.0, 100_000_000.0],
+        })
+        returns_df = pd.DataFrame({
+            "yyyymm": [202301, 202302],
+            "ret_long_short": [0.0, 0.0],
+        })
+        pos_hist = {
+            202301: {"long": {10001: 1.0}, "short": {}},
+            202302: {"long": {}, "short": {}},
+        }
+
+        net_df = compute_net_returns(
+            returns_df,
+            pos_hist,
+            panel,
+            aum=1_000_000,
+            config=cfg,
+        )
+
+        expected = 0.02 / 2 + 0.1 * 0.10 * np.sqrt(1_000_000 / 100_000_000)
+        assert net_df.loc[net_df["yyyymm"] == 202302, "transaction_cost"].iloc[0] == pytest.approx(expected)
+        assert net_df.loc[net_df["yyyymm"] == 202302, "raw_trade_sum"].iloc[0] == pytest.approx(1.0)
+        assert net_df.loc[net_df["yyyymm"] == 202302, "turnover"].iloc[0] == pytest.approx(0.5)

@@ -52,7 +52,7 @@ from scipy import stats
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_config
-from src.data.loader import load_panel, get_feature_names
+from src.data.loader import load_panel
 from src.evaluation.statistics import (
     sharpe_ratio,
     bootstrap_sharpe_test,
@@ -79,7 +79,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="Analyze formal experiment results")
     p.add_argument("--model", default=None,
                     choices=["elastic_net", "xgboost", "neural_network"])
-    p.add_argument("--weights", default=None, choices=["dolvol", "tc"])
+    p.add_argument("--weights", default=None,
+                    choices=["dolvol", "softmax_rank", "tc"])
     p.add_argument("--no-figures", action="store_true")
     return p.parse_args()
 
@@ -107,15 +108,34 @@ def discover_experiments(base_dir: Path) -> list[dict]:
             if dirname == "dolvol":
                 weight_family = "dolvol"
                 aum_label = None
+                softmax_lambda = None
+            elif dirname == "softmax_rank":
+                # Backward-compatible default folder: lambda comes from config
+                # at training time, historically lambda=2.
+                weight_family = "softmax_rank"
+                aum_label = None
+                softmax_lambda = None
+            elif dirname.startswith("softmax_rank_lam"):
+                weight_family = "softmax_rank"
+                aum_label = None
+                token = dirname.removeprefix("softmax_rank_lam")
+                try:
+                    softmax_lambda = float(
+                        token.replace("m", "-").replace("p", ".")
+                    )
+                except ValueError:
+                    softmax_lambda = None
             elif dirname.startswith("tc_"):
                 weight_family = "tc"
                 aum_label = dirname
+                softmax_lambda = None
             else:
                 continue
             specs.append({
                 "model": model_name,
                 "weight_family": weight_family,
                 "aum_label": aum_label,
+                "softmax_lambda": softmax_lambda,
                 "std_dir": std_dir,
                 "wt_dir": wt_dir,
                 "spec_label": f"{model_name}_{dirname}",
@@ -549,13 +569,12 @@ def compute_table_12(preds_std, preds_wt, panel, aum, config):
         effects, LW tests, factor alphas per cell)
       - training_share : training_effect / total_effect * 100
       - cells : {cell: DataFrame with gross + net returns per month}
-      - turnover : target-to-target turnover per cell (informative only; the
-        actual TC engine uses drifted positions — see compute_net_returns)
+      - turnover : drift-adjusted conventional turnover per cell, computed as
+        0.5 * sum(|target_w - drifted_w|) from compute_net_returns
     """
     logger.info("  Building 2x2 portfolios at AUM=$%.0fM...", aum / 1e6)
 
     cells = {}
-    positions = {}
     for cell_name, preds, tc_pen in [
         ("1A", preds_std, False), ("1B", preds_std, True),
         ("2A", preds_wt, False), ("2B", preds_wt, True),
@@ -568,7 +587,6 @@ def compute_table_12(preds_std, preds_wt, panel, aum, config):
         )
         net_df = compute_net_returns(ret_df, pos_hist, panel, aum=aum, config=config)
         cells[cell_name] = net_df
-        positions[cell_name] = pos_hist
 
     # Align to common months
     common = set(cells["1A"]["yyyymm"])
@@ -579,6 +597,33 @@ def compute_table_12(preds_std, preds_wt, panel, aum, config):
     aligned = {}
     for k, df in cells.items():
         aligned[k] = df[df["yyyymm"].isin(common)].sort_values("yyyymm")
+
+    return_summary = {}
+    for cell_name, df in aligned.items():
+        return_summary[cell_name] = {
+            "gross_return_monthly": df["ret_long_short"].mean(),
+            "gross_return_annual": df["ret_long_short"].mean() * 12,
+            "net_return_monthly": df["ret_long_short_net"].mean(),
+            "net_return_annual": df["ret_long_short_net"].mean() * 12,
+            "gross_sr_monthly": sharpe_ratio(
+                df["ret_long_short"].values,
+                annualize=False,
+            ),
+            "net_sr_monthly": sharpe_ratio(
+                df["ret_long_short_net"].values,
+                annualize=False,
+            ),
+            "gross_sr_annual": sharpe_ratio(
+                df["ret_long_short"].values,
+                annualize=True,
+            ),
+            "net_sr_annual": sharpe_ratio(
+                df["ret_long_short_net"].values,
+                annualize=True,
+            ),
+            "tc_mean_monthly": df["transaction_cost"].mean(),
+            "tc_median_monthly": df["transaction_cost"].median(),
+        }
 
     # Net decomposition (primary — Section 9.5)
     decomp_net = compute_effect_decomposition(
@@ -603,26 +648,25 @@ def compute_table_12(preds_std, preds_wt, panel, aum, config):
     total = decomp_net["total_effect"]
     training_share = (decomp_net["training_effect"] / total * 100) if abs(total) > 1e-10 else np.nan
 
-    # Turnover (target-to-target; informative only — not the TC engine's value)
+    # Turnover from the same drift-adjusted trades used by the TC engine.
+    # Exclude the first month because it is initial portfolio formation rather
+    # than a rebalance.
     turnover = {}
-    for cell_name, pos_hist in positions.items():
-        months = sorted(pos_hist.keys())
-        mt = []
-        for i in range(1, len(months)):
-            prev, curr = pos_hist[months[i - 1]], pos_hist[months[i]]
-            turn = 0.0
-            for leg in ["long", "short"]:
-                all_p = set(prev[leg]) | set(curr[leg])
-                turn += sum(abs(curr[leg].get(p, 0) - prev[leg].get(p, 0)) for p in all_p)
-            mt.append(turn)
-        turnover[cell_name] = np.mean(mt) if mt else np.nan
+    raw_trade_sum = {}
+    for cell_name, df in aligned.items():
+        turnover_values = df["turnover"].iloc[1:] if "turnover" in df else pd.Series(dtype=float)
+        raw_trade_values = df["raw_trade_sum"].iloc[1:] if "raw_trade_sum" in df else pd.Series(dtype=float)
+        turnover[cell_name] = turnover_values.mean() if len(turnover_values) else np.nan
+        raw_trade_sum[cell_name] = raw_trade_values.mean() if len(raw_trade_values) else np.nan
 
     return {
         "decomposition": decomp_net,
         "decomposition_gross": decomp_gross,
         "training_share": training_share,
         "cells": aligned,
+        "return_summary": return_summary,
         "turnover": turnover,
+        "raw_trade_sum": raw_trade_sum,
     }
 
 
@@ -795,15 +839,57 @@ def main():
             d_gross = t12["decomposition_gross"]
 
             rows = []
-            # Panel A: Sharpe ratios (gross + net) per cell
+            # Panel A: returns, transaction costs, and Sharpe ratios per cell
+            ret_summary = t12["return_summary"]
             for cell in ["1A", "1B", "2A", "2B"]:
                 rows.append({
+                    "metric": f"Gross return monthly ({cell})",
+                    "value": ret_summary[cell]["gross_return_monthly"],
+                })
+                rows.append({
+                    "metric": f"Gross return annualized ({cell})",
+                    "value": ret_summary[cell]["gross_return_annual"],
+                })
+                rows.append({
+                    "metric": f"Net return monthly ({cell})",
+                    "value": ret_summary[cell]["net_return_monthly"],
+                })
+                rows.append({
+                    "metric": f"Net return annualized ({cell})",
+                    "value": ret_summary[cell]["net_return_annual"],
+                })
+                rows.append({
+                    "metric": f"TC mean monthly ({cell})",
+                    "value": ret_summary[cell]["tc_mean_monthly"],
+                })
+                rows.append({
+                    "metric": f"TC median monthly ({cell})",
+                    "value": ret_summary[cell]["tc_median_monthly"],
+                })
+                rows.append({
+                    "metric": f"SR_gross_monthly({cell})",
+                    "value": ret_summary[cell]["gross_sr_monthly"],
+                })
+                rows.append({
+                    "metric": f"SR_net_monthly({cell})",
+                    "value": ret_summary[cell]["net_sr_monthly"],
+                })
+                rows.append({
+                    "metric": f"SR_gross_annualized({cell})",
+                    "value": ret_summary[cell]["gross_sr_annual"],
+                })
+                rows.append({
+                    "metric": f"SR_net_annualized({cell})",
+                    "value": ret_summary[cell]["net_sr_annual"],
+                })
+                # Backward-compatible aliases used by earlier table exports.
+                rows.append({
                     "metric": f"SR_gross({cell})",
-                    "value": d_gross["sharpe_ratios"][cell],
+                    "value": ret_summary[cell]["gross_sr_annual"],
                 })
                 rows.append({
                     "metric": f"SR_net({cell})",
-                    "value": d_net["sharpe_ratios"][cell],
+                    "value": ret_summary[cell]["net_sr_annual"],
                 })
 
             # Panel B: Net decomposition (primary — Section 9.5)
@@ -849,11 +935,15 @@ def main():
                         "value": a.get("alpha_pvalue", np.nan),
                     })
 
-            # Panel E: Turnover (target-to-target; informative only)
+            # Panel E: drift-adjusted turnover.
             for cell in ["1A", "1B", "2A", "2B"]:
                 rows.append({
                     "metric": f"Turnover ({cell})",
                     "value": t12["turnover"].get(cell, np.nan),
+                })
+                rows.append({
+                    "metric": f"Raw trade sum ({cell})",
+                    "value": t12["raw_trade_sum"].get(cell, np.nan),
                 })
 
             pd.DataFrame(rows).to_csv(tables_dir / f"table_12_{sl}_{al}.csv", index=False)

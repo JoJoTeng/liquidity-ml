@@ -63,9 +63,9 @@ class TestSharpeRatio:
         # Constant returns: mean=0.01, std~0.04
         rng = np.random.RandomState(1)
         r = rng.normal(0.01, 0.04, size=10000)
-        sr = sharpe_ratio(r, annualize=True)
-        # Expected: 0.01/0.04 * sqrt(12) ≈ 0.866
-        assert abs(sr - 0.866) < 0.05
+        sr = sharpe_ratio(r)
+        # Expected monthly Sharpe: 0.01/0.04 ≈ 0.25
+        assert abs(sr - 0.25) < 0.02
 
     def test_zero_volatility(self):
         r = np.array([0.01] * 50)
@@ -82,7 +82,7 @@ class TestSharpeRatio:
     def test_no_annualization(self):
         r = np.array([0.01, 0.02, 0.03, 0.04, 0.05])
         sr_ann = sharpe_ratio(r, annualize=True)
-        sr_raw = sharpe_ratio(r, annualize=False)
+        sr_raw = sharpe_ratio(r)
         np.testing.assert_allclose(sr_ann, sr_raw * np.sqrt(12), atol=1e-10)
 
     def test_negative_sharpe(self):

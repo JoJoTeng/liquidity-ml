@@ -5,7 +5,8 @@ Rolling-window ML training for the formal analysis.
 
 Each invocation trains ONE specification:
   - One model (elastic_net / xgboost / neural_network)
-  - One weight family + AUM (dolvol or tc at a given AUM)
+  - One weight family + AUM/lambda when needed
+    (dolvol, softmax_rank at a chosen lambda, or tc at a given AUM)
 
 Produces:
   - M_std (standard training) predictions + importance
@@ -14,11 +15,14 @@ Produces:
 
 M_std is shared across weight families - if predictions already exist
 in outputs/formalanalysis/experiment/{model}/standard/, training is
-skipped.  This avoids redundant computation when running 4 jobs per
-model (1 dolvol + 3 tc AUM levels).
+skipped.  This avoids redundant computation when running multiple
+weighted jobs per model.
 
-HPC usage (all 12 jobs are independent):
+HPC usage:
   python scripts/02_run_experiment.py --model xgboost --weights dolvol
+  python scripts/02_run_experiment.py --model xgboost --weights softmax_rank --softmax-lambda 2
+  python scripts/02_run_experiment.py --model xgboost --weights softmax_rank --softmax-lambda 3
+  python scripts/02_run_experiment.py --model xgboost --weights tc --aum 10
   python scripts/02_run_experiment.py --model xgboost --weights tc --aum 500
   python scripts/02_run_experiment.py --model elastic_net --weights dolvol
   ...
@@ -64,12 +68,24 @@ def parse_args():
     p = argparse.ArgumentParser(description="Run 2x2 experiment (one specification)")
     p.add_argument("--model", required=True,
                     choices=["elastic_net", "xgboost", "neural_network"])
-    p.add_argument("--weights", required=True, choices=["dolvol", "tc"])
+    p.add_argument("--weights", required=True,
+                    choices=["dolvol", "softmax_rank", "tc"])
     p.add_argument("--aum", type=int, default=None,
                     help="AUM in $M (e.g. 500). Required if --weights tc.")
+    p.add_argument("--softmax-lambda", type=float, default=None,
+                    help=(
+                        "Override weighting.softmax_rank_lambda. "
+                        "Only valid when --weights softmax_rank."
+                    ))
     p.add_argument("--quick", action="store_true",
                     help="Quick test: 2020-2024 only")
     return p.parse_args()
+
+
+def _lambda_label(lam: float) -> str:
+    """Compact filesystem-safe label, e.g. 3 -> lam3 and 2.5 -> lam2p5."""
+    token = f"{lam:g}".replace("-", "m").replace(".", "p")
+    return f"lam{token}"
 
 
 # -- Rolling Window Engine ---------------------------------------------
@@ -294,7 +310,26 @@ def main():
     if args.weights == "tc" and args.aum is None:
         print("ERROR: --aum required when --weights tc", file=sys.stderr)
         sys.exit(1)
+    if args.weights != "softmax_rank" and args.softmax_lambda is not None:
+        print(
+            "ERROR: --softmax-lambda is only valid when --weights softmax_rank",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     aum_dollars = args.aum * 1_000_000 if args.aum else None
+
+    softmax_lam = None
+    if args.weights == "softmax_rank":
+        softmax_lam = (
+            args.softmax_lambda
+            if args.softmax_lambda is not None
+            else config.get("weighting", {}).get("softmax_rank_lambda", 2.0)
+        )
+        softmax_lam = float(softmax_lam)
+        if not np.isfinite(softmax_lam) or softmax_lam < 0:
+            print("ERROR: --softmax-lambda must be finite and non-negative", file=sys.stderr)
+            sys.exit(1)
+        config.setdefault("weighting", {})["softmax_rank_lambda"] = softmax_lam
 
     # Override OOS period for quick test
     if args.quick:
@@ -306,10 +341,12 @@ def main():
     model_dir = base_dir / args.model
     std_dir = model_dir / "standard"
 
-    if args.weights == "dolvol":
-        wt_dir = model_dir / "dolvol"
-    else:
+    if args.weights == "tc":
         wt_dir = model_dir / f"tc_{args.aum}m"
+    elif args.weights == "softmax_rank" and args.softmax_lambda is not None:
+        wt_dir = model_dir / f"softmax_rank_{_lambda_label(softmax_lam)}"
+    else:
+        wt_dir = model_dir / args.weights
 
     std_dir.mkdir(parents=True, exist_ok=True)
     wt_dir.mkdir(parents=True, exist_ok=True)
@@ -337,7 +374,10 @@ def main():
                 len(panel), len(features), panel["yyyymm"].nunique())
 
     # -- Compute weights for weighted training --
-    logger.info("Computing %s weights (aum=%s)...", args.weights,
+    weight_label = args.weights
+    if args.weights == "softmax_rank":
+        weight_label = f"softmax_rank(lambda={softmax_lam:g})"
+    logger.info("Computing %s weights (aum=%s)...", weight_label,
                 f"${args.aum}M" if args.aum else "N/A")
     w = compute_weights(panel, scheme=args.weights, config=config, aum=aum_dollars)
 
@@ -368,7 +408,7 @@ def main():
 
     # -- Phase 2: Weighted training (M_w) --
     logger.info("=== Training M_w (weighted: %s, aum=%s) ===",
-                args.weights, f"${args.aum}M" if args.aum else "N/A")
+                weight_label, f"${args.aum}M" if args.aum else "N/A")
     t0 = time.time()
     preds_wt, imp_wt, native_wt, params_wt = run_rolling_training(
         panel, features, args.model,
@@ -398,7 +438,9 @@ def main():
     meta = {
         "model": args.model,
         "weights": args.weights,
+        "weight_spec": wt_dir.name,
         "aum": args.aum,
+        "softmax_rank_lambda": softmax_lam,
         "seed": SEED,
         "n_threads": os.environ.get("OMP_NUM_THREADS", "unknown"),
         "n_predictions_std": len(preds_std),

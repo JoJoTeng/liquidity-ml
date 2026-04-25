@@ -2,7 +2,7 @@
 
 > **Project:** LiquidityML v3 — 2x2 formal experiment (Sections 7–9 of the paper).
 > **Branch:** `formalanalysis`
-> **Goal:** Train all 12 model × weight specifications on HPC and generate the full set of tables and figures for the paper.
+> **Goal:** Train all 21 model × weight specifications on HPC and generate the full set of tables and figures for the paper.
 
 ---
 
@@ -11,15 +11,30 @@
 | Dimension | Values |
 |---|---|
 | Models | Elastic-Net, XGBoost, Neural Network |
-| Weight families | `dolvol` (Eq. 21, AUM-independent), `tc` (Eq. 23, AUM-dependent) |
-| AUM scenarios | $100M, $500M, $1B (TC only) |
-| Total specs | **12 jobs** = 3 models × (1 dolvol + 3 TC AUM levels) |
+| Weight families | `dolvol` (DolVol/mean(DolVol), AUM-independent), `softmax_rank` at lambda 2 and lambda 3 (AUM-independent), `tc` (Eq. 23, AUM-dependent, alpha scale 3.0) |
+| AUM scenarios | $10M, $100M, $500M, $1B (TC only) |
+| Total specs | **21 jobs** = 3 models × (1 DolVol + 2 softmax-rank lambdas + 4 TC AUM levels) |
+
+Current `dolvol` definition:
+- `w_it = DolVol_it / mean_i(DolVol_it)` within each month.
+- This is intentionally mean-normalized, so the cross-sectional average sample weight equals 1.
+- If an older draft says the denominator is the median, treat that as superseded by the current code/config.
+
+Current `tc` definition:
+- `TC_it = Spread_it / 2 + lambda * sigma_it * sqrt(Q_it / ADV_it)`.
+- `w_it = exp(-alpha_t * TC_it)`, with `alpha_t = 3.0 / median_i(TC_it)`.
+- Weights are mean-normalized within each month before being passed as sample weights.
+
+Current `softmax_rank` definition:
+- `rank_it` is the within-month percentile rank of `DolVol_it`.
+- `w_it = exp(lambda * rank_it) / mean_i(exp(lambda * rank_it))`.
+- Current formal lambda grid: `lambda = 2` and `lambda = 3`.
 
 Each job trains:
 - **M_std** — standard (unweighted) model, shared across weight families within a model
 - **M_w** — weighted model for that specific weight spec
 
-**M_std sharing:** The first job to run for a given model creates `outputs/formalanalysis/experiment/{model}/standard/predictions.parquet`. Subsequent jobs for the same model check for this file and skip M_std training. So effectively you train 3 M_std's + 12 M_w's = 15 model fits across rolling windows.
+**M_std sharing:** The first job to run for a given model creates `outputs/formalanalysis/experiment/{model}/standard/predictions.parquet`. Subsequent jobs for the same model check for this file and skip M_std training. So effectively you train 3 M_std's + 21 M_w's = 24 model fits across rolling windows.
 
 ---
 
@@ -29,7 +44,7 @@ Each job trains:
 |---|---|---|
 | Script | `07_step3_ml_diagnostics.py` + `10_quintile...` + `12_progressive...` | `02_run_experiment.py` (unified) |
 | Models | XGBoost only (M_std) | Elastic-Net + XGBoost + NN (M_std + M_w) |
-| Weighting | None (standard) | dolvol + tc weights |
+| Weighting | None (standard) | dolvol + softmax_rank + tc weights |
 | Hyperparameter tuning | Grid search (81 combos) | Grid search (81 combos XGB, 5 EN, 4 NN) |
 | Dependencies | xgboost, sklearn, pandas | + tensorflow, shap |
 | Output dir | `outputs/motivation/step3/dvol/` | `outputs/formalanalysis/experiment/{model}/{weight}/` |
@@ -182,23 +197,23 @@ rm -f jobs/*.sh logs/*
 
 ---
 
-## Part C: Create & Submit Jobs (12 total)
+## Part C: Create & Submit Jobs (21 total)
 
 ### Overview
 
 | Job type | Count | Runtime (est.) | Notes |
 |---|---|---|---|
-| Elastic-Net × 4 weight specs | 4 | ~4h each | Fast (linear model) |
-| XGBoost × 4 weight specs | 4 | ~24h each | Medium (81-combo grid × many windows) |
-| Neural Network × 4 weight specs | 4 | ~48h each | Slow (TF + ensemble optional) |
+| Elastic-Net × 7 weight specs | 7 | ~4h each | Fast (linear model) |
+| XGBoost × 7 weight specs | 7 | ~24h each | Medium (81-combo grid × many windows) |
+| Neural Network × 7 weight specs | 7 | ~48h each | Slow (TF + ensemble optional) |
 
-**Total wall-clock if run sequentially:** ~300h (~12 days). **In parallel:** ~48h (limited by slowest NN job).
+**Total wall-clock if run sequentially:** ~532h (~22 days). **In parallel:** ~48h (limited by slowest NN job).
 
 ### M_std sharing
 
-The first job to run per model trains M_std and saves it. Subsequent jobs for the same model reuse it. To maximize parallelism, submit **one job per model first** (to train M_std), then submit the other 3 jobs per model with a dependency. Or submit all 12 at once and accept that M_std gets trained once per model by whichever job wins the race.
+The first job to run per model trains M_std and saves it. Subsequent jobs for the same model reuse it. To avoid duplicate M_std training, submit **one job per model first** (to train M_std), then submit the other 6 jobs per model with a dependency. Or submit all 21 at once and accept that M_std gets trained once per model by whichever job wins the race.
 
-**Recommended: submit all 12 independently.** M_std check-and-skip logic is based on file existence; if two jobs start M_std at the same time they will both train it (wasting ~24h × 2 for XGBoost). To avoid this, use a dependency chain (see C2).
+**Recommended: use the dependency chain.** M_std check-and-skip logic is based on file existence; if two jobs start M_std at the same time they may both train it. To maximize wall-clock speed and avoid wasted compute, use C2.
 
 ### C1. Option 1 — Use the provided generator script
 
@@ -217,7 +232,7 @@ sed -i 's|VENV=.*|VENV="source ~/formal_env/bin/activate"|' \
 bash scripts/generate_hpc_jobs.sh
 ```
 
-This creates `jobs/{elastic_net,xgboost,neural_network}_{dolvol,tc_100m,tc_500m,tc_1000m}.sh` — 12 job scripts total.
+This creates `jobs/{elastic_net,xgboost,neural_network}_{dolvol,softmax_rank_lam2,softmax_rank_lam3,tc_10m,tc_100m,tc_500m,tc_1000m}.sh` — 21 job scripts total.
 
 ### C2. Option 2 — Dependency chain (M_std shared cleanly)
 
@@ -234,21 +249,23 @@ bash scripts/generate_hpc_jobs.sh
 for MODEL in elastic_net xgboost neural_network; do
     DOLVOL_ID=$(sbatch --parsable jobs/${MODEL}_dolvol.sh)
     echo "${MODEL} dolvol (M_std trained here): $DOLVOL_ID"
-    for AUM in 100 500 1000; do
+    sbatch --dependency=afterok:$DOLVOL_ID jobs/${MODEL}_softmax_rank_lam2.sh
+    sbatch --dependency=afterok:$DOLVOL_ID jobs/${MODEL}_softmax_rank_lam3.sh
+    for AUM in 10 100 500 1000; do
         sbatch --dependency=afterok:$DOLVOL_ID jobs/${MODEL}_tc_${AUM}m.sh
     done
 done
-echo "Submitted 12 jobs total (3 DolVol + 9 TC with dependency)"
+echo "Submitted 21 jobs total (3 DolVol + 6 softmax_rank + 12 TC with dependency)"
 ```
 
-### C3. Option 3 — Submit all 12 independently (fastest wall clock, may duplicate M_std)
+### C3. Option 3 — Submit all 21 independently (fastest wall clock, may duplicate M_std)
 
 ```bash
 cd /data/home/tew775/liquidity-ml-formal
 bash scripts/generate_hpc_jobs.sh --submit
 ```
 
-This submits all 12 jobs at once. Each model's M_std may be trained by the first TC/dolvol job to start.
+This submits all 21 jobs at once. Each model's M_std may be trained by the first weighted job to start.
 
 ### C4. Monitor
 
@@ -283,7 +300,7 @@ cd /data/home/tew775/liquidity-ml-formal
 for MODEL in elastic_net xgboost neural_network; do
     echo "=== $MODEL ==="
     ls -lh outputs/formalanalysis/experiment/$MODEL/standard/predictions.parquet 2>/dev/null
-    for WT in dolvol tc_100m tc_500m tc_1000m; do
+    for WT in dolvol softmax_rank_lam2 softmax_rank_lam3 tc_10m tc_100m tc_500m tc_1000m; do
         echo "  $WT:"
         ls -lh outputs/formalanalysis/experiment/$MODEL/$WT/predictions.parquet 2>/dev/null
     done
@@ -351,7 +368,10 @@ outputs/formalanalysis/
 │   │   │   ├── importance_native.csv
 │   │   │   ├── tuned_params.csv
 │   │   │   └── meta.json
-│   │   ├── tc_100m/                        # M_w (weighted by TC at $100M AUM)
+│   │   ├── softmax_rank_lam2/              # M_w (weighted by softmax DolVol rank, lambda=2)
+│   │   ├── softmax_rank_lam3/              # M_w (weighted by softmax DolVol rank, lambda=3)
+│   │   ├── tc_10m/                         # M_w (weighted by TC at $10M AUM)
+│   │   ├── tc_100m/
 │   │   ├── tc_500m/
 │   │   └── tc_1000m/
 │   ├── xgboost/                            # (same subfolder structure)
@@ -367,7 +387,8 @@ outputs/formalanalysis/
     │   ├── prediction_3_{spec}.csv                 # Weighted vs restriction curve
     │   ├── prediction_4_{spec}.csv                 # Cumulative SE differential
     │   ├── table_11_{spec}.csv                     # Within-quintile SR
-    │   ├── table_12_{spec}_100M.csv                # 2x2 decomposition at $100M
+    │   ├── table_12_{spec}_10M.csv                 # 2x2 decomposition at $10M
+    │   ├── table_12_{spec}_100M.csv                # $100M
     │   ├── table_12_{spec}_500M.csv                # $500M (primary)
     │   ├── table_12_{spec}_1B.csv                  # $1B
     │   └── hypothesis_tests.json                   # Consolidated H1–H4 tests
@@ -377,7 +398,7 @@ outputs/formalanalysis/
         └── se_diff_{spec}.png                      # Prediction 4 time series
 ```
 
-where `{spec}` = e.g. `xgboost_dolvol`, `xgboost_tc_500m`, `elastic_net_dolvol`, etc. (12 specs total).
+where `{spec}` = e.g. `xgboost_dolvol`, `xgboost_softmax_rank_lam3`, `xgboost_tc_500m`, etc. (21 specs total).
 
 ---
 
@@ -561,12 +582,12 @@ bash scripts/generate_hpc_jobs.sh --submit
 - [ ] (Optional) `outputs/motivation/step2/` and `outputs/motivation/step3_restriction_rerank/` uploaded if running Predictions 2 & 3 on Apocrita
 - [ ] Import smoke tests pass (A5)
 - [ ] Quick test with `--quick` flag succeeds (~30 min, optional but recommended)
-- [ ] 12 job scripts generated in `jobs/`
+- [ ] 21 job scripts generated in `jobs/`
 - [ ] Paths in `jobs/*.sh` point to `/data/home/tew775/liquidity-ml-formal` and `~/formal_env`
 
 ### After jobs complete
-- [ ] All 12 jobs finished (`squeue --me` shows empty)
-- [ ] `predictions.parquet` exists for all 3 models × 4 weight specs (12 files) plus 3 standard/ (total 15 files)
+- [ ] All 21 jobs finished (`squeue --me` shows empty)
+- [ ] `predictions.parquet` exists for all 3 models × 7 weight specs (21 files) plus 3 standard/ (total 24 files)
 - [ ] Optional: run `03_analyze_results.py` on Apocrita for a fast sanity check
 - [ ] Download `outputs/formalanalysis/experiment/` to Mac
 - [ ] Run `03_analyze_results.py` locally to generate tables + figures
