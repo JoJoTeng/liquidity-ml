@@ -5,6 +5,7 @@ xgboost>=2.0
 tensorflow>=2.15
 shap>=0.43
 statsmodels>=0.14
+scipy>=1.10
 matplotlib>=3.7
 seaborn>=0.13
 pyyaml>=6.0
