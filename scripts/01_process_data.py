@@ -2,12 +2,13 @@
 01 — Process Data
 ==================
 Load the raw panel from 00_fetch_data.py, select features from SignalDoc.csv
-(Clear Predictors, ~142 features), rank-transform to [0, 1],
-compute liquidity weights, and save the analysis-ready panel.
+(Clear Predictors), rank-transform to [0, 1], keep configured raw liquidity
+copies, and save the analysis-ready panel.
 
 Input:  data/signed_predictors_all_wide.csv  (from 00_fetch_data.py)
         data/SignalDoc.csv                    (CZ Signal Documentation)
 Output: data/processed_panel.parquet
+        data/feature_list.json
         config/feature_categories.json        (feature → category mapping)
 
 Usage:
@@ -28,12 +29,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_config, get_data_dir
-from src.data.loader import load_panel, NON_FEATURE_COLS
+from src.data.loader import load_panel, normalize_features
 from src.analysis.motivation import (
     load_signaldoc,
     get_motivation_features,
     build_feature_categories,
-    rank_transform_01,
 )
 
 # ── Logging ───────────────────────────────────────────────────
@@ -117,7 +117,7 @@ def main() -> None:
 
     # ── 4. Save raw copies of robustness liquidity measures ────
     # These get rank-transformed below, but NYSE quintile assignment
-    # in 05_step1_divergence.py needs raw values.
+    # in 02_motivation_step1_divergence.py needs raw values.
     for col in ["Illiquidity", "BidAskSpread"]:
         if col in panel.columns:
             panel[f"raw_{col}"] = panel[col].copy()
@@ -125,7 +125,7 @@ def main() -> None:
 
     # ── 5. Rank-transform features to [0, 1] ─────────────────
     logger.info("Rank-transforming %d features to [0, 1]...", len(features))
-    panel = rank_transform_01(panel, features)
+    panel = normalize_features(panel, features)
 
     # Verify range
     feat_min = panel[features].min().min()
@@ -150,7 +150,7 @@ def main() -> None:
         100 * n_nan / n_total,
     )
 
-    # ── 7. (Weights computed in 05_step1_divergence.py, not here) ──
+    # ── 7. (Weights computed in 02_motivation_step1_divergence.py, not here) ──
 
     # ── 8. Save processed panel ───────────────────────────────
     out_path = data_dir / "processed_panel.parquet"
@@ -189,7 +189,7 @@ def main() -> None:
     logger.info("  Target NaN:      %d", panel["excess_ret"].isna().sum())
     logger.info("  Feature NaN:     %d (kept as NaN, no global fill)", panel[features].isna().sum().sum())
     logger.info("")
-    logger.info("Next step: python scripts/05_step1_divergence.py")
+    logger.info("Next step: python scripts/02_motivation_step1_divergence.py")
 
 
 if __name__ == "__main__":

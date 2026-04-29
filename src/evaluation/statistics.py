@@ -111,81 +111,65 @@ def _load_ff_factors_uncached(n_factors: int, config: dict | None) -> pd.DataFra
             ff[col] = ff[col] / 100.0
         return ff[["yyyymm", "Mkt-RF", "SMB", "HML"]]
 
-    # n_factors >= 5: load FF5
-    ff5 = None
-    try:
-        import pandas_datareader.data as web
-
-        ff_all = web.DataReader(
-            "F-F_Research_Data_5_Factors_2x3",
-            "famafrench",
-            start="1972-01-01",
-            end="2024-12-31",
-        )
-        ff5 = ff_all[0] / 100.0
-        ff5.index = ff5.index.to_timestamp("M")
-        ff5["yyyymm"] = ff5.index.year * 100 + ff5.index.month
-        ff5 = ff5.reset_index(drop=True)
-        ff5 = ff5[["yyyymm", "Mkt-RF", "SMB", "HML", "RMW", "CMA"]]
-        logger.info("Loaded FF5 factors via pandas_datareader (%d rows)", len(ff5))
-
-    except Exception as e:
-        logger.warning("pandas_datareader FF5 fetch failed (%s); trying local CSV", e)
-        ff5_path = data_dir / "ff5_factors.csv"
-        if ff5_path.exists():
-            ff5 = pd.read_csv(ff5_path)
-            ff5 = ff5.rename(columns={"Date": "yyyymm"})
-            for col in ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]:
-                if col in ff5.columns:
-                    ff5[col] = ff5[col] / 100.0
-            ff5 = ff5[["yyyymm", "Mkt-RF", "SMB", "HML", "RMW", "CMA"]]
-
-    if ff5 is None:
-        logger.warning("FF5 data unavailable; returning FF3 only")
+    # n_factors >= 5: load local FF5 CSV. The repository analysis should be
+    # reproducible offline, so do not attempt a network fetch here.
+    ff5_path = data_dir / "ff5_factors.csv"
+    if not ff5_path.exists():
+        logger.warning("Local FF5 file not found at %s; returning FF3 only", ff5_path)
         return load_ff_factors(n_factors=3, config=config)
+
+    ff5 = pd.read_csv(ff5_path)
+    ff5 = ff5.rename(columns={"Date": "yyyymm"})
+    required_ff5 = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
+    missing_ff5 = [col for col in ["yyyymm", *required_ff5] if col not in ff5.columns]
+    if missing_ff5:
+        raise ValueError(
+            f"{ff5_path} is missing required columns: {missing_ff5}. "
+            "Expected Date,Mkt-RF,SMB,HML,RMW,CMA."
+        )
+
+    ff5["yyyymm"] = pd.to_numeric(ff5["yyyymm"], errors="coerce")
+    for col in required_ff5:
+        ff5[col] = pd.to_numeric(ff5[col], errors="coerce") / 100.0
+    ff5 = ff5.dropna(subset=["yyyymm"])[["yyyymm", *required_ff5]]
+    ff5["yyyymm"] = ff5["yyyymm"].astype(int)
+    logger.info("Loaded FF5 factors from local CSV (%d rows)", len(ff5))
 
     if n_factors <= 5:
         return ff5
 
-    # n_factors == 6: add Momentum (UMD)
-    mom = None
-    try:
-        import pandas_datareader.data as web
+    # n_factors == 6: add local Momentum (UMD) CSV.
+    mom_path = data_dir / "momentum_factor.csv"
+    if not mom_path.exists():
+        logger.warning("Local Momentum file not found at %s; returning FF5 only", mom_path)
+        return ff5
 
-        mom_all = web.DataReader(
-            "F-F_Momentum_Factor",
-            "famafrench",
-            start="1972-01-01",
-            end="2024-12-31",
-        )
-        mom = mom_all[0] / 100.0
-        mom.index = mom.index.to_timestamp("M")
-        mom["yyyymm"] = mom.index.year * 100 + mom.index.month
-        mom = mom.reset_index(drop=True)
-        # Column is typically "Mom   " with trailing spaces
-        mom_col = [c for c in mom.columns if "Mom" in c or "WML" in c or "UMD" in c]
+    mom = pd.read_csv(mom_path)
+    mom = mom.rename(columns={"Date": "yyyymm"})
+    if "Mom" not in mom.columns:
+        mom_col = [
+            c for c in mom.columns
+            if "Mom" in c.strip() or "WML" in c.strip() or "UMD" in c.strip()
+        ]
         if mom_col:
             mom = mom.rename(columns={mom_col[0]: "Mom"})
-        mom = mom[["yyyymm", "Mom"]]
-        logger.info("Loaded Momentum factor via pandas_datareader (%d rows)", len(mom))
 
-    except Exception as e:
-        logger.warning("pandas_datareader Mom fetch failed (%s); trying local CSV", e)
-        mom_path = data_dir / "momentum_factor.csv"
-        if mom_path.exists():
-            mom = pd.read_csv(mom_path)
-            mom = mom.rename(columns={"Date": "yyyymm"})
-            if "Mom" in mom.columns:
-                mom["Mom"] = mom["Mom"] / 100.0
-            mom = mom[["yyyymm", "Mom"]]
+    missing_mom = [col for col in ["yyyymm", "Mom"] if col not in mom.columns]
+    if missing_mom:
+        raise ValueError(
+            f"{mom_path} is missing required columns: {missing_mom}. "
+            "Expected Date,Mom."
+        )
 
-    if mom is not None:
-        ff6 = ff5.merge(mom, on="yyyymm", how="inner")
-        logger.info("FF5+Mom: %d rows after merge", len(ff6))
-        return ff6
-    else:
-        logger.warning("Momentum factor unavailable; returning FF5 only")
-        return ff5
+    mom["yyyymm"] = pd.to_numeric(mom["yyyymm"], errors="coerce")
+    mom["Mom"] = pd.to_numeric(mom["Mom"], errors="coerce") / 100.0
+    mom = mom.dropna(subset=["yyyymm"])[["yyyymm", "Mom"]]
+    mom["yyyymm"] = mom["yyyymm"].astype(int)
+    logger.info("Loaded Momentum factor from local CSV (%d rows)", len(mom))
+
+    ff6 = ff5.merge(mom, on="yyyymm", how="inner")
+    logger.info("FF5+Mom: %d rows after merge", len(ff6))
+    return ff6
 
 
 # ══════════════════════════════════════════════════════════════

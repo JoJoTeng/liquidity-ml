@@ -262,38 +262,59 @@ class TestCategorizeFeature:
 
 class TestLoadImportance:
     def test_load_shap_from_disk(self, tmp_path):
-        model_dir = tmp_path / "xgboost"
-        model_dir.mkdir()
+        std_dir = tmp_path / "xgboost" / "standard"
+        wt_dir = tmp_path / "xgboost" / "dolvol"
+        std_dir.mkdir(parents=True)
+        wt_dir.mkdir(parents=True)
 
         df = pd.DataFrame(
-            {"feat1": [0.1, 0.2], "feat2": [0.3, 0.4]},
-            index=[200001, 200002],
+            {
+                "yyyymm": [200001, 200002],
+                "feat1": [0.1, 0.2],
+                "feat2": [0.3, 0.4],
+            },
         )
-        df.to_csv(model_dir / "shap_importance_std.csv")
-        df.to_csv(model_dir / "shap_importance_wt.csv")
+        df.to_csv(std_dir / "importance_shap.csv", index=False)
+        df.to_csv(wt_dir / "importance_shap.csv", index=False)
 
-        result = load_importance("xgboost", "shap", output_dir=tmp_path)
+        result = load_importance(
+            "xgboost",
+            weight_spec="dolvol",
+            importance_type="shap",
+            output_dir=tmp_path,
+        )
         assert "standard" in result and "weighted" in result
         assert list(result["standard"].columns) == ["feat1", "feat2"]
         assert len(result["standard"]) == 2
 
     def test_load_gain_from_disk(self, tmp_path):
-        model_dir = tmp_path / "xgboost"
-        model_dir.mkdir()
+        std_dir = tmp_path / "xgboost" / "standard"
+        wt_dir = tmp_path / "xgboost" / "dolvol"
+        std_dir.mkdir(parents=True)
+        wt_dir.mkdir(parents=True)
 
         df = pd.DataFrame(
-            {"feat1": [0.5, 0.6]},
-            index=[200001, 200002],
+            {"yyyymm": [200001, 200002], "feat1": [0.5, 0.6]},
         )
-        df.to_csv(model_dir / "feature_importance_std.csv")
-        df.to_csv(model_dir / "feature_importance_wt.csv")
+        df.to_csv(std_dir / "importance_native.csv", index=False)
+        df.to_csv(wt_dir / "importance_native.csv", index=False)
 
-        result = load_importance("xgboost", "gain", output_dir=tmp_path)
+        result = load_importance(
+            "xgboost",
+            weight_spec="dolvol",
+            importance_type="gain",
+            output_dir=tmp_path,
+        )
         assert result["standard"]["feat1"].iloc[0] == pytest.approx(0.5)
 
     def test_file_not_found_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            load_importance("xgboost", "shap", output_dir=tmp_path)
+            load_importance(
+                "xgboost",
+                weight_spec="dolvol",
+                importance_type="shap",
+                output_dir=tmp_path,
+            )
 
 
 # ── TestCrossModelSummary ────────────────────────────────────
@@ -302,9 +323,11 @@ class TestLoadImportance:
 class TestCrossModelSummary:
     def test_structure(self, tmp_path):
         """Create mock data for 2 models, verify output DataFrame."""
-        for name in ["xgboost", "random_forest"]:
-            model_dir = tmp_path / name
-            model_dir.mkdir()
+        for name in ["xgboost", "elastic_net"]:
+            std_dir = tmp_path / name / "standard"
+            wt_dir = tmp_path / name / "dolvol"
+            std_dir.mkdir(parents=True)
+            wt_dir.mkdir(parents=True)
             rng = np.random.RandomState(42)
 
             tradable = TRADABLE_FEATURES[:2]
@@ -314,13 +337,14 @@ class TestCrossModelSummary:
             df = pd.DataFrame(
                 rng.exponential(0.01, size=(10, len(features))),
                 columns=features,
-                index=range(200001, 200011),
             )
-            df.to_csv(model_dir / "shap_importance_std.csv")
-            df.to_csv(model_dir / "shap_importance_wt.csv")
+            df.insert(0, "yyyymm", range(200001, 200011))
+            df.to_csv(std_dir / "importance_shap.csv", index=False)
+            df.to_csv(wt_dir / "importance_shap.csv", index=False)
 
         result = cross_model_h2_summary(
-            model_names=["xgboost", "random_forest"],
+            model_names=["xgboost", "elastic_net"],
+            weight_spec="dolvol",
             output_dir=tmp_path,
         )
         assert len(result) == 2
@@ -353,6 +377,7 @@ class TestShapComputation:
         return [f"feat_{i}" for i in range(5)]
 
     def test_xgboost_shap_values(self, tiny_data, feature_names):
+        pytest.importorskip("shap")
         from src.models.xgboost_model import XGBoostPredictor
 
         X, y = tiny_data
@@ -367,12 +392,9 @@ class TestShapComputation:
         assert sv.shape == (10, 5)
         assert list(sv.columns) == feature_names
 
-    @pytest.mark.skip(reason="RandomForest removed in LiquidityML v3")
-    def test_random_forest_shap_values(self, tiny_data, feature_names):
-        pass
-
     def test_xgboost_shap_additivity(self, tiny_data):
         """SHAP values + expected value should approximate predictions."""
+        pytest.importorskip("shap")
         from src.models.xgboost_model import XGBoostPredictor
 
         X, y = tiny_data
@@ -396,6 +418,7 @@ class TestShapComputation:
     @pytest.mark.slow
     def test_nn_requires_background(self, tiny_data, feature_names):
         """NeuralNet should raise ValueError without X_background."""
+        pytest.importorskip("tensorflow")
         from src.models.neural_network_model import NeuralNetPredictor
 
         X, y = tiny_data

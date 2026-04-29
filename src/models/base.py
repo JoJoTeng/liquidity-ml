@@ -4,7 +4,7 @@ Base Model Interface
 Abstract base class for all ML models in the framework.
 Ensures consistent API for standard and weighted training.
 
-All 3 models (XGBoost, Random Forest, Neural Network) inherit from this.
+All active model classes (Elastic-Net, XGBoost, Neural Network) inherit from this.
 Each must support sample_weight in .fit() for liquidity-weighted training.
 """
 

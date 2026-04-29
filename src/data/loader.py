@@ -1,19 +1,20 @@
 """
 Data Loader
 ============
-Load the processed panel, define feature lists, and provide
+Load the raw/processed panels, define feature lists, and provide
 cross-sectional normalization.
 
 This module is the data backbone. All downstream modules depend on it:
 - Weighting schemes: need raw liq_* columns
-- Models: need normalized feature arrays
+- Models: need normalized feature arrays from processed_panel.parquet
 - Portfolio construction: need permno/yyyymm identifiers
-- Evaluation framework: needs per-window normalization
+- Evaluation framework: can normalize raw inputs or consume pre-normalized panels
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -32,13 +33,15 @@ ILLIQUIDITY_FEATURES_EXT: list[str] = _cfg["data"]["illiquidity_features_extende
 TRADABLE_FEATURES_EXT: list[str] = _cfg["data"]["tradable_features_extended"]
 LIQUIDITY_COLS: list[str] = [f"liq_{m}" for m in _cfg["liquidity"]["measures"]]
 
-_WEIGHT_SCHEMES = ["softmax_rank", "linear_dolvol", "bid_ask_spread", "tc_stock", "quintile_discrete"]
-
-NON_FEATURE_COLS: set[str] = {
+CORE_NON_FEATURE_COLS: set[str] = {
     "permno", "yyyymm", "ret", "excess_ret",
-    "me_raw", "dvol_monthly", "dvol_6m", "dvol_21d", "lambda_tc", "liu_lm",
-    "daily_sigma", "excess_sigma_12m", "excess_sigma_12m_daily", "exchcd",
-} | {f"liq_{m}" for m in _cfg["liquidity"]["measures"]} | {f"weight_{s}" for s in _WEIGHT_SCHEMES}
+    "me_raw", "dvol_21d", "excess_sigma_12m", "excess_sigma_12m_daily", "exchcd",
+}
+
+NON_FEATURE_COLS: set[str] = (
+    CORE_NON_FEATURE_COLS
+    | {f"liq_{m}" for m in _cfg["liquidity"]["measures"]}
+)
 
 
 # ── Public API ───────────────────────────────────────────────
@@ -115,7 +118,7 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
     panel["excess_ret"] = panel[ret_col] - panel["RF"]
     panel = panel.drop(columns=["RF"])
 
-    # ── 5. PDF-style volatility for square-root impact calibration ─────
+    # ── 5. Trailing volatility for transaction-cost impact ─────
     # Computed before the target shift, so month t uses returns through t.
     panel = panel.sort_values(["permno", "yyyymm"])
     panel["excess_sigma_12m"] = panel.groupby("permno")["excess_ret"].transform(
@@ -150,14 +153,8 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
     logger.info("Dropped %d rows with NaN target", n_before - len(panel))
 
     # ── Summary ─────────────────────────────────────────────
-    non_feature_cols = {"permno", "yyyymm", "ret", "excess_ret", "exchcd",
-                        "me_raw", "dvol_monthly", "dvol_21d", "dvol_6m",
-                        "lambda_tc", "liu_lm", "daily_sigma",
-                        "excess_sigma_12m", "excess_sigma_12m_daily",
-                        "BidAskSpread"}
     liq_cols = [c for c in panel.columns if c.startswith("liq_")]
-    non_feature_cols.update(liq_cols)
-    features = [c for c in panel.columns if c not in non_feature_cols]
+    features = [c for c in panel.columns if c not in NON_FEATURE_COLS]
     logger.info(
         "Panel ready: %d rows, %d permnos, dates %d–%d, "
         "%d features, %d liq_ columns",
@@ -173,21 +170,56 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
     return panel
 
 
+def load_processed_panel(data_dir=None) -> pd.DataFrame:
+    """Load the analysis-ready panel produced by ``scripts/01_process_data.py``.
+
+    This panel keeps the selected model features rank-normalized to [0, 1]
+    while preserving raw liquidity copies such as ``liq_dvol_21d`` for weights,
+    quintiles, and transaction-cost calculations.
+    """
+    data_dir = get_data_dir() if data_dir is None else Path(data_dir)
+    panel_path = data_dir / "processed_panel.parquet"
+    if not panel_path.exists():
+        raise FileNotFoundError(
+            f"{panel_path} not found. Run scripts/01_process_data.py first."
+        )
+    logger.info("Loading processed panel: %s", panel_path)
+    panel = pd.read_parquet(panel_path)
+    logger.info("Processed panel: %d rows, %d columns", len(panel), len(panel.columns))
+    return panel
+
+
+def rank_to_unit_interval(x: pd.Series) -> pd.Series:
+    """Map non-missing cross-sectional ranks to [0, 1].
+
+    Average ranks are used for ties. Missing values remain missing so callers
+    can decide whether to apply the neutral fill value of 0.5.
+    """
+    ranks = x.rank(method="average")
+    n = int(ranks.notna().sum())
+    if n == 0:
+        return ranks
+    if n == 1:
+        return ranks.where(ranks.isna(), 0.5)
+    return (ranks - 1.0) / (n - 1.0)
+
+
 def normalize_features(
     df: pd.DataFrame,
     features: list[str],
 ) -> pd.DataFrame:
-    """Cross-sectional rank normalization to [0, 1].
+    """Cross-sectional quantile-rank normalization to [0, 1].
 
     For each feature and each month (yyyymm cross-section):
-        rank non-NaN values → percentile rank in [0, 1].
+        average-rank non-NaN values, then map ranks to [0, 1] via
+        (rank - 1) / (n_nonmissing - 1).
 
     Following GKX (2020). NaN values remain NaN (neutral fill = 0.5
     is done downstream, not here).
 
-    This function is intentionally separate from load_panel so that the
-    rolling-window framework can normalize each train/val/test split
-    independently, preventing look-ahead bias.
+    This function is intentionally separate from ``load_panel``. It is used by
+    ``01_process_data.py`` to create the processed panel, and can also be used
+    directly by analyses that start from raw features.
 
     Parameters
     ----------
@@ -201,5 +233,5 @@ def normalize_features(
     """
     out = df.copy()
     for col in features:
-        out[col] = out.groupby("yyyymm")[col].rank(pct=True)
+        out[col] = out.groupby("yyyymm")[col].transform(rank_to_unit_interval)
     return out

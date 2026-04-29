@@ -2,7 +2,6 @@
 Elastic-Net Return Predictor
 =============================
 Linear model with combined L1 + L2 regularisation.
-Replaces Random Forest in the LiquidityML v3 model set.
 
 Supports sample_weight natively via sklearn's ElasticNet.
 Hyperparameter tuning: grid/random search (same pattern as XGBoost).

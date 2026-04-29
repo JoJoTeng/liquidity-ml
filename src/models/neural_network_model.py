@@ -312,9 +312,12 @@ class NeuralNetPredictor(BaseReturnPredictor):
         feature_names: list[str] | None = None,
         config: dict[str, Any] | None = None,
     ) -> pd.DataFrame:
-        """Compute SHAP values using KernelExplainer (works with any Keras model)."""
-        import shap
+        """Compute SHAP values using DeepExplainer with optional Kernel fallback.
 
+        If ``config["max_test_samples"]`` is set, only the sampled test rows are
+        returned. This keeps downstream mean(|SHAP|) aggregates from being
+        diluted by zero-padded unexplained observations.
+        """
         if not self.is_fitted:
             raise RuntimeError("Model not fitted.")
         if X_background is None:
@@ -322,6 +325,8 @@ class NeuralNetPredictor(BaseReturnPredictor):
                 "X_background is required for NeuralNet SHAP. "
                 "Pass a subsample of training data."
             )
+
+        import shap
 
         cfg = config or {}
         n_bg = cfg.get("background_samples", 100)
@@ -373,16 +378,11 @@ class NeuralNetPredictor(BaseReturnPredictor):
         if sv.ndim == 3 and sv.shape[-1] == 1:
             sv = sv.squeeze(-1)
 
-        # Pad back to full test size if subsampled
-        if explain_idx is not None:
-            full_sv = np.zeros((len(X_test), X_test.shape[1]))
-            full_sv[explain_idx] = sv
-            sv = full_sv
-
         if feature_names is None:
             feature_names = [f"f{i}" for i in range(X_test.shape[1])]
 
-        return pd.DataFrame(sv, columns=feature_names)
+        index = explain_idx if explain_idx is not None else None
+        return pd.DataFrame(sv, columns=feature_names, index=index)
 
     def tune_hyperparameters(
         self,

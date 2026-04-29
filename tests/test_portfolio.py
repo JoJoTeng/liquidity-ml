@@ -36,7 +36,6 @@ def single_month():
         "ret": rng.normal(0.01, 0.05, size=n),
         "liq_dvol_21d": rng.lognormal(mean=18, sigma=2, size=n),
         "liq_BidAskSpread": rng.uniform(0.001, 0.05, size=n),
-        "liq_daily_sigma": rng.uniform(0.005, 0.04, size=n),
         "liq_excess_sigma_12m": rng.uniform(0.04, 0.25, size=n),
         "liq_excess_sigma_12m_daily": rng.uniform(0.04, 0.25, size=n) / np.sqrt(21.0),
     })

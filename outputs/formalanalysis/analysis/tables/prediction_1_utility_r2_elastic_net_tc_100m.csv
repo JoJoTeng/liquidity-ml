@@ -1,4 +1,0 @@
-metric,r2_std_pct,r2_wt_pct
-Standard (equal-weighted),0.2454642910850846,0.24548974377546218
-Utility-weighted (dollar-volume),-0.09580037213705594,-0.0955764065918352
-Gap (standard - utility),0.34126466322214055,0.34106615036729737

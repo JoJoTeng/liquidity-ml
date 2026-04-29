@@ -143,8 +143,6 @@ liquidity:
     - dvol_21d # PRIMARY: 21-day trailing avg dollar volume (from daily CRSP)
     - me_raw # market cap robustness / value-weighted deployment proxy
     - BidAskSpread # TC model spread input; raw copy of predictor
-    - daily_sigma # legacy 21-day daily return volatility
-    - excess_sigma_12m # monthly 12-month excess-return volatility
     - excess_sigma_12m_daily # daily-scaled excess_sigma_12m for daily ADV impact
 
 # ----------------------------------------------------------
@@ -159,8 +157,8 @@ weighting:
   primary: "dolvol"
   # Default softmax-rank lambda used when --softmax-lambda is omitted.
   softmax_rank_lambda: 2.0
-  # Formal softmax-rank robustness grid. scripts/02_run_experiment.py reads
-  # an individual value through --softmax-lambda; generate_hpc_jobs.sh runs
+  # Formal softmax-rank robustness grid. scripts/20_formal_run_experiment.py
+  # reads an individual value through --softmax-lambda; generate_hpc_jobs.sh runs
   # both values and writes separate folders: softmax_rank_lam2 and lam3.
   softmax_rank_lambdas: [ 2.0, 3.0 ]
 
@@ -227,7 +225,7 @@ training:
   oos_end: 202412 # December 2024
 
   preprocessing:
-    normalization: "rank_quantile" # rank -> [0, 1] via rank(pct=True)
+    normalization: "rank_quantile" # average rank -> [0, 1] within month
     missing_fill: 0.5 # midpoint of [0, 1]
 
 # ----------------------------------------------------------

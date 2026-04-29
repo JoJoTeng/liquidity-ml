@@ -23,13 +23,127 @@ import pandas as pd
 from scipy.stats import gaussian_kde
 
 from src.config import load_config
-from src.data.loader import NON_FEATURE_COLS
+from src.data.loader import NON_FEATURE_COLS, normalize_features
 from src.evaluation.statistics import newey_west_tstat
 from src.weighting import compute_weights
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────
+
+MOTIVATION_LIQUIDITY_OPTIONS = {
+    "dvol": {
+        "scheme": "raw_level",
+        "source_col": "liq_dvol_21d",
+        "weight_col": "w_tilde_dvol",
+        "quintile_col": "liq_dvol_21d",
+        "ascending": True,
+        "label": "Dollar Volume (21-day)",
+    },
+    "mcap": {
+        "scheme": "raw_level",
+        "source_col": "liq_me_raw",
+        "weight_col": "w_tilde_mcap",
+        "quintile_col": "liq_me_raw",
+        "ascending": True,
+        "label": "Market Capitalization",
+    },
+    "tc": {
+        "scheme": "tc",
+        "source_col": None,
+        "weight_col": "w_tilde_tc",
+        "quintile_col": "w_tilde_tc",
+        "ascending": True,
+        "label": "Transaction-cost weight",
+        "requires_aum": True,
+    },
+}
+
+
+def get_motivation_liquidity_config(name: str) -> dict:
+    """Return metadata for one active motivation liquidity option.
+
+    Active choices are ``dvol``, ``mcap``, and computed ``tc``.
+    """
+    try:
+        return MOTIVATION_LIQUIDITY_OPTIONS[name].copy()
+    except KeyError as exc:
+        choices = ", ".join(MOTIVATION_LIQUIDITY_OPTIONS)
+        raise ValueError(
+            f"Unknown motivation liquidity option {name!r}. Available: {choices}"
+        ) from exc
+
+
+def get_motivation_liquidity_choices() -> list[str]:
+    """Return active motivation liquidity option names for CLI choices."""
+    return list(MOTIVATION_LIQUIDITY_OPTIONS.keys())
+
+
+def get_motivation_liquidity_key(name: str, aum_millions: float | None = None) -> str:
+    """Return a stable output-folder key for the selected motivation proxy."""
+    if name != "tc":
+        return name
+    aum_millions = 500.0 if aum_millions is None else float(aum_millions)
+    if aum_millions.is_integer():
+        aum_label = str(int(aum_millions))
+    else:
+        aum_label = ("%g" % aum_millions).replace(".", "p")
+    return f"tc_{aum_label}m"
+
+
+def ensure_motivation_weight_column(
+    panel: pd.DataFrame,
+    name: str,
+    config: dict | None = None,
+    aum_millions: float | None = None,
+) -> str:
+    """Ensure the requested motivation weight column exists and return its name.
+
+    For ``dvol`` and ``tc``, this reuses the formal weighting implementation so
+    the motivation pipeline and formal experiment share the same formulas and
+    missing-value handling. For ``mcap``, this creates mean-one weights from the
+    raw market-cap level because market cap is a motivation robustness proxy,
+    not a formal training-weight family.
+    """
+    liq = get_motivation_liquidity_config(name)
+    weight_col = liq["weight_col"]
+    if weight_col in panel.columns:
+        return weight_col
+    config = config or load_config()
+
+    if name == "dvol":
+        panel[weight_col] = compute_weights(panel, scheme="dolvol", config=config)
+        return weight_col
+
+    if liq["scheme"] == "raw_level":
+        panel[weight_col] = _compute_raw_level_mean_one_weights(
+            panel, liq_col=liq["source_col"]
+        )
+        return weight_col
+
+    if liq["scheme"] != "tc":
+        raise ValueError(f"Unsupported motivation liquidity scheme: {liq['scheme']}")
+
+    aum_millions = 500.0 if aum_millions is None else float(aum_millions)
+    aum_dollars = aum_millions * 1_000_000
+
+    tc_cfg = config["transaction_costs"]
+    required = [
+        f"liq_{tc_cfg['spread_col']}",
+        f"liq_{tc_cfg['sigma_col']}",
+        f"liq_{tc_cfg['adv_col']}",
+    ]
+    missing = [col for col in required if col not in panel.columns]
+    if missing:
+        raise KeyError(
+            "TC motivation weights require columns missing from panel: "
+            + ", ".join(missing)
+        )
+
+    panel[weight_col] = compute_weights(
+        panel, scheme="tc", config=config, aum=aum_dollars
+    )
+    return weight_col
 
 # 15 focal characteristics from Table 1 of the motivation document.
 # Keys = CZ Acronym (or CRSP-derived name), values = (category, rationale).
@@ -46,7 +160,7 @@ FOCAL_CHARACTERISTICS = {
     "Beta": ("Risk", "Systematic risk"),
     "Illiquidity": ("Liquidity", "Amihud illiquidity"),
     "zerotrade12M": ("Liquidity", "Zero-trading days"),
-    "Size": ("Other", "Log market capitalization"),
+    "Size": ("Liquidity", "Log market capitalization / capacity proxy"),
     "AnnouncementReturn": ("Other", "Earnings announcement return"),
     "BidAskSpread": ("Liquidity", "Transaction cost proxy"),
 }
@@ -90,6 +204,7 @@ CZ_TO_BROAD = {
     "volume": "Liquidity",
     "informed trading": "Liquidity",
     "turnover": "Liquidity",
+    "size": "Liquidity",
     # Risk
     "risk": "Risk",
     "volatility": "Risk",
@@ -104,7 +219,7 @@ CZ_TO_BROAD = {
     "R&D": "Quality",
     "payout indicator": "Quality",
     # Other — everything not listed above
-    # (other, size, short sale constraints, ownership, recommendation, info proxy)
+    # (other, short sale constraints, ownership, recommendation, info proxy)
 }
 
 
@@ -125,7 +240,12 @@ def get_motivation_features(
     panel: pd.DataFrame,
     exclude_binary_threshold: int = 5,
 ) -> list[str]:
-    """Select Clear + Likely predictors, excluding binary and circular features.
+    """Select the final motivation feature set.
+
+    Start from SignalDoc Clear Predictors, exclude discrete predictors, add the
+    CRSP-derived predictors and required focal characteristics, then keep only
+    columns available in the panel. The >70% missingness filter is applied later
+    in ``scripts/01_process_data.py``.
 
     Parameters
     ----------
@@ -229,35 +349,15 @@ def build_feature_categories(
     return result
 
 
-def rank_transform_01(
-    panel: pd.DataFrame, feature_cols: list[str]
-) -> pd.DataFrame:
-    """Cross-sectional percentile rank within each month → [0, 1].
-
-    Following Gu et al. (2020). NaN values remain NaN.
-    """
-    out = panel.copy()
-    for col in feature_cols:
-        out[col] = out.groupby("yyyymm")[col].rank(pct=True)
-    return out
-
-
-def compute_implementability_weights(
+def _compute_raw_level_mean_one_weights(
     panel: pd.DataFrame,
-    liq_col: str = "liq_dvol_21d",
+    liq_col: str,
 ) -> pd.Series:
-    """Compute w̃_it = liquidity_it / mean(liquidity_t) per month.
+    """Compute raw-level mean-one weights within each month.
 
-    Parameters
-    ----------
-    liq_col : Raw liquidity column to use. Default is 'liq_dvol_21d'
-        (21-day trailing avg dollar volume). Alternatives:
-        'liq_me_raw' (market cap), 'raw_Illiquidity' (Amihud),
-        'raw_BidAskSpread' (bid-ask spread).
-        For Amihud/spread, higher = less liquid, so invert before normalizing.
+    This is currently used for the market-cap robustness proxy. Formal dvol
+    and TC weights should use ``src.weighting.compute_weights`` instead.
     """
-    invert = liq_col in ("raw_Illiquidity", "raw_BidAskSpread")
-
     results = []
     for _, group in panel.groupby("yyyymm"):
         vals = group[liq_col].copy()
@@ -265,9 +365,6 @@ def compute_implementability_weights(
         if pd.isna(median_val):
             median_val = 1.0
         vals = vals.fillna(median_val).clip(lower=1e-8)
-
-        if invert:
-            vals = 1.0 / vals  # higher illiquidity → lower weight
 
         mean_w = vals.mean()
         if mean_w == 0 or pd.isna(mean_w):
@@ -288,9 +385,9 @@ def assign_nyse_quintiles(
 
     Parameters
     ----------
-    sort_col : Column to sort on (e.g., 'liq_dvol_21d', 'Illiquidity').
+    sort_col : Column to sort on (e.g., 'liq_dvol_21d' or 'liq_me_raw').
     ascending : If True, higher values = more liquid (dvol, me_raw).
-        If False, higher values = more illiquid (Amihud, spread).
+        If False, higher values = less implementable or more costly.
         Q1 = most illiquid, Q5 = most liquid regardless of direction.
     """
 
@@ -1015,6 +1112,9 @@ def quintile_fama_macbeth(
     For each quintile q=1..5 and each month t:
         r_i,t+1 = α_q,t + x'_it β_q,t + ε   for i ∈ Q_q,t
 
+    Missing feature values are filled with the neutral rank 0.5, matching the
+    ML pipeline convention. Rows are dropped only for missing returns.
+
     Returns
     -------
     dict with keys:
@@ -1025,6 +1125,8 @@ def quintile_fama_macbeth(
     quintiles = sorted(panel[quintile_col].dropna().unique())
     quintiles = [int(q) for q in quintiles]
     months = sorted(panel["yyyymm"].unique())
+    n_regressors = 1 + len(focal_features)
+    min_obs = max(30, 2 * n_regressors)
 
     # Collect monthly coefficients per quintile
     monthly_coefs = {q: [] for q in quintiles}
@@ -1038,10 +1140,7 @@ def quintile_fama_macbeth(
             X_df = qdf[focal_features].copy()
 
             valid = ~np.isnan(y)
-            for col in focal_features:
-                valid &= X_df[col].notna()
-
-            if valid.sum() < 30:
+            if valid.sum() < min_obs:
                 continue
 
             y_v = y[valid]
@@ -1158,6 +1257,44 @@ def format_quintile_table(
     return formatted
 
 
+def _joint_gamma_f_test(
+    gamma_df: pd.DataFrame,
+    features: list[str],
+    min_months: int = 12,
+) -> tuple[float, float, tuple[int, int]]:
+    """Hotelling-style joint test that the mean gamma vector equals zero.
+
+    This implements the time-series test described as regressing the monthly
+    gamma-vector estimates on a constant and testing that the constant vector
+    is zero:
+
+        T² = T * g_bar' S^{-1} g_bar
+        F  = ((T - k) / (k * (T - 1))) * T²  ~  F(k, T-k)
+    """
+    gamma_mat = gamma_df[features].dropna()
+    T = len(gamma_mat)
+    k = len(features)
+    df = (k, T - k)
+
+    if T < min_months or T <= k:
+        return np.nan, np.nan, df
+
+    gamma_means = gamma_mat.mean().values
+    cov_mat = gamma_mat.cov().values
+    try:
+        cov_inv = np.linalg.inv(cov_mat)
+    except np.linalg.LinAlgError:
+        return np.nan, np.nan, df
+
+    hotelling_t2 = float(T * gamma_means @ cov_inv @ gamma_means)
+    f_stat = float((T - k) / (k * (T - 1)) * hotelling_t2)
+
+    from scipy.stats import f as f_dist
+
+    f_pvalue = float(1 - f_dist.cdf(f_stat, k, T - k))
+    return f_stat, f_pvalue, df
+
+
 def interaction_fama_macbeth(
     panel: pd.DataFrame,
     focal_features: list[str],
@@ -1187,26 +1324,25 @@ def interaction_fama_macbeth(
     beta_list = []
     gamma_list = []
     n_features = len(focal_features)
+    n_regressors = 1 + 2 * n_features
+    min_obs = max(100, 2 * n_regressors)
 
     for m in months:
         mdf = panel[panel["yyyymm"] == m].copy()
 
         y = mdf[return_col].values
         L = mdf[liq_col].values
+        valid = ~np.isnan(y) & ~np.isnan(L)
 
         if use_dummy:
             L = (L > np.nanmedian(L)).astype(float)
 
-        # Build X = [1, x_1..x_15, x_1*L..x_15*L]
-        X_main = mdf[focal_features].values
+        # Build X = [1, x_1..x_p, x_1*L..x_p*L].
+        # Missing features use neutral rank 0.5, as in the ML pipeline.
+        X_main = mdf[focal_features].fillna(0.5).values
         X_interact = X_main * L[:, np.newaxis]
 
-        # Valid mask
-        valid = ~np.isnan(y) & ~np.isnan(L)
-        for j in range(n_features):
-            valid &= ~np.isnan(X_main[:, j])
-
-        if valid.sum() < 100:
+        if valid.sum() < min_obs:
             continue
 
         y_v = y[valid]
@@ -1219,7 +1355,7 @@ def interaction_fama_macbeth(
         except np.linalg.LinAlgError:
             continue
 
-        # Extract: beta_all[0]=intercept, [1..15]=main, [16..30]=interaction
+        # Extract: beta_all[0]=intercept, then p main effects and p interactions.
         beta_row = {"yyyymm": m}
         gamma_row = {"yyyymm": m}
         for i, feat in enumerate(focal_features):
@@ -1274,32 +1410,14 @@ def interaction_fama_macbeth(
 
     coef_table = pd.DataFrame(results)
 
-    # Joint F-test: H0: all γ = 0
-    # Use time-series F-statistic on the monthly γ estimates
-    gamma_mat = gamma_df[focal_features].dropna()
-    if len(gamma_mat) >= 12:
-        gamma_means = gamma_mat.mean().values
-        T = len(gamma_mat)
-        k = len(focal_features)
-        # Covariance of mean estimates (simple, not NW — for F-test)
-        cov_mat = gamma_mat.cov().values / T
-        try:
-            cov_inv = np.linalg.inv(cov_mat)
-            f_stat = float(gamma_means @ cov_inv @ gamma_means / k)
-            from scipy.stats import f as f_dist
-            f_pvalue = float(1 - f_dist.cdf(f_stat, k, T - k))
-        except np.linalg.LinAlgError:
-            f_stat = np.nan
-            f_pvalue = np.nan
-    else:
-        f_stat = np.nan
-        f_pvalue = np.nan
+    # Joint F-test: H0 that the time-series mean gamma vector is zero.
+    f_stat, f_pvalue, f_df = _joint_gamma_f_test(gamma_df, focal_features)
 
     return {
         "coef_table": coef_table,
         "f_test_stat": f_stat,
         "f_test_pvalue": f_pvalue,
-        "f_test_df": (k, T - k),
+        "f_test_df": f_df,
         "n_months": len(beta_df),
     }
 
@@ -1452,219 +1570,19 @@ def plot_divergence_vs_heterogeneity(
 # ═════════════════════════════════════════════════════════════
 
 
-def rolling_xgboost_predict(
+def _rolling_model_filter_core(
     panel: pd.DataFrame,
     features: list[str],
-    config: dict | None = None,
-    return_col: str = "excess_ret",
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Train baseline XGBoost with rolling windows, collect OOS predictions.
-
-    Protocol:
-      - 120 months train + 12 months validation + 1 month test (rolling)
-      - Train starts from 198901
-      - Retune every 12 months using validation set MSE
-      - Between retunes, refit with fixed best params on train set
-      - Per-window rank normalization to [0,1] (no look-ahead)
-      - NaN fill with 0.5 after ranking
-
-    Returns
-    -------
-    predictions : DataFrame [permno, yyyymm, y_true, y_pred]
-    importances : DataFrame rows=yyyymm (test month), cols=features (gain)
-    """
-    import itertools
-    import time as _time
-    from src.models import create_model
-
-    if config is None:
-        config = load_config()
-
-    train_cfg = config["training"]
-    train_window = train_cfg["train_window"]           # 120
-    val_window = train_cfg["validation_window"]        # 12
-    oos_start = train_cfg.get("oos_start", 200001)
-    seed = config["project"]["seed"]
-
-    all_months = sorted(panel["yyyymm"].unique())
-    oos_months = [m for m in all_months if m >= oos_start]
-
-    retune_freq = 12  # retune every year
-
-    predictions_list = []
-    importance_list = []
-    tuned_params_list = []
-    best_params = None
-    months_since_retune = retune_freq  # force retune on first window
-    t_start = _time.time()
-    n_done = 0
-
-    logger.info(
-        "Rolling XGBoost: %d OOS months, retune every %d months, "
-        "train %d + val %d months, grid size %d",
-        len(oos_months), retune_freq, train_window, val_window,
-        np.prod([len(v) for v in config["models"]["xgboost"].get("search_space", {}).values()]),
-    )
-
-    for i, test_month in enumerate(oos_months):
-        test_idx = all_months.index(test_month)
-
-        if test_idx < train_window + val_window:
-            continue
-
-        train_start = test_idx - train_window - val_window
-        val_start = test_idx - val_window
-
-        train_months_list = all_months[train_start:val_start]
-        val_months_list = all_months[val_start:test_idx]
-
-        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
-        val_df = panel[panel["yyyymm"].isin(val_months_list)].copy()
-        test_df = panel[panel["yyyymm"] == test_month].copy()
-
-        if len(train_df) < 100 or len(test_df) < 50:
-            continue
-
-        # Per-window rank normalization to [0,1] (no look-ahead)
-        for col in features:
-            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
-            val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
-            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
-
-        # Fill NaN with 0.5 (neutral rank)
-        train_df[features] = train_df[features].fillna(0.5)
-        val_df[features] = val_df[features].fillna(0.5)
-        test_df[features] = test_df[features].fillna(0.5)
-
-        X_train = train_df[features].values
-        y_train = train_df[return_col].values
-        X_val = val_df[features].values
-        y_val = val_df[return_col].values
-        X_test = test_df[features].values
-        y_test = test_df[return_col].values
-
-        # Drop NaN targets
-        valid_train = ~np.isnan(y_train)
-        valid_val = ~np.isnan(y_val)
-        valid_test = ~np.isnan(y_test)
-        if valid_train.sum() < 100 or valid_test.sum() < 30:
-            continue
-
-        X_train, y_train = X_train[valid_train], y_train[valid_train]
-        X_val, y_val = X_val[valid_val], y_val[valid_val]
-        X_test, y_test = X_test[valid_test], y_test[valid_test]
-
-        # Retune hyperparameters every 12 months using validation set
-        if months_since_retune >= retune_freq:
-            xgb_cfg = config["models"]["xgboost"]
-            search_space = xgb_cfg.get("search_space", {})
-            keys = list(search_space.keys())
-            values = list(search_space.values())
-            n_trials = xgb_cfg.get("n_random_search", 150)
-
-            full_grid_size = 1
-            for v in values:
-                full_grid_size *= len(v)
-
-            rng = np.random.RandomState(seed)
-            if full_grid_size <= n_trials:
-                param_grid = [dict(zip(keys, v)) for v in itertools.product(*values)]
-            else:
-                param_grid = []
-                for _ in range(n_trials):
-                    combo = {k: v[rng.randint(len(v))] for k, v in zip(keys, values)}
-                    param_grid.append(combo)
-
-            best_mse = np.inf
-            for params in param_grid:
-                trial_cfg = {**xgb_cfg, **params}
-                m = create_model("xgboost", config=trial_cfg, seed=seed)
-                m.fit(X_train, y_train)
-                preds = m.predict(X_val)
-                mse = np.mean((y_val - preds) ** 2)
-                if mse < best_mse:
-                    best_mse = mse
-                    best_params = trial_cfg
-
-            months_since_retune = 0
-            logger.info(
-                "Month %d: RETUNED XGBoost via validation set (best params: %s)",
-                test_month,
-                {k: best_params.get(k) for k in keys},
-            )
-
-        # Train XGBoost with best params on full train set
-        model = create_model("xgboost", config=best_params, seed=seed)
-        model.fit(X_train, y_train)
-
-        # Predict
-        y_pred = model.predict(X_test)
-
-        # Collect predictions
-        test_valid = test_df[valid_test]
-        pred_df = pd.DataFrame({
-            "permno": test_valid["permno"].values,
-            "yyyymm": test_valid["yyyymm"].values,
-            "y_true": y_test,
-            "y_pred": y_pred,
-        })
-        predictions_list.append(pred_df)
-
-        # Feature importance (gain-based)
-        imp = model.get_feature_importance(features)
-        imp_row = {"yyyymm": test_month}
-        imp_row.update(imp.to_dict())
-        importance_list.append(imp_row)
-
-        # Save tuned params for this window
-        tuned_params_list.append({"yyyymm": test_month, **best_params})
-
-        months_since_retune += 1
-        n_done += 1
-
-        # Progress with ETA
-        elapsed = _time.time() - t_start
-        avg_per_month = elapsed / n_done
-        remaining = avg_per_month * (len(oos_months) - i - 1)
-        remaining_min = remaining / 60
-
-        if (i + 1) % 6 == 0 or i == 0 or months_since_retune == 1:
-            logger.info(
-                "Progress: %d/%d months (%.0f%%) | month %d%s | "
-                "%.1f s/month | ETA: %.0f min",
-                i + 1, len(oos_months), 100 * (i + 1) / len(oos_months),
-                test_month,
-                " [RETUNED]" if months_since_retune == 1 else "",
-                avg_per_month, remaining_min,
-            )
-
-    if not predictions_list:
-        logger.warning("No valid OOS months produced")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    predictions = pd.concat(predictions_list, ignore_index=True)
-    importances = pd.DataFrame(importance_list).set_index("yyyymm")
-    tuned_params = pd.DataFrame(tuned_params_list).set_index("yyyymm")
-
-    logger.info(
-        "Rolling XGBoost complete: %d OOS months, %d predictions",
-        len(importances), len(predictions),
-    )
-    return predictions, importances, tuned_params
-
-
-def _rolling_xgboost_core(
-    panel: pd.DataFrame,
-    features: list[str],
+    model_name: str,
     config: dict,
     return_col: str,
     train_filter_fn,
     test_filter_fn,
-    fixed_params: dict | None = None,
     baseline_tuned_params: pd.DataFrame | None = None,
-    label: str = "XGB",
+    rerank_after_filter: bool = True,
+    label: str | None = None,
 ) -> pd.DataFrame:
-    """Shared rolling-window XGBoost core for restricted/quintile models.
+    """Shared rolling-window core for filtered-universe motivation models.
 
     Parameters
     ----------
@@ -1672,27 +1590,31 @@ def _rolling_xgboost_core(
         Returns filtered (train_df, val_df).
     test_filter_fn : callable(test_df)
         Returns filtered test_df.
-    fixed_params : If provided, use these same params every month (no retuning).
     baseline_tuned_params : DataFrame indexed by yyyymm with per-window params
         from the baseline model. If provided, uses baseline's tuned params for each
-        test month. Takes precedence over fixed_params.
+        test month. If omitted, the model retunes inside the filtered universe.
+    rerank_after_filter
+        If True, re-rank-normalize features after applying the restricted
+        universe filter. If False, keep the already processed full-cross-section
+        ranks from ``processed_panel.parquet``.
     """
-    import itertools
     import time as _time
     from src.models import create_model
 
+    label = label or model_name
     train_cfg = config["training"]
     train_window = train_cfg["train_window"]
     val_window = train_cfg["validation_window"]
+    retune_freq = train_cfg.get("retune_frequency", 12)
     oos_start = train_cfg.get("oos_start", 200001)
+    oos_end = train_cfg.get("oos_end", 999999)
     seed = config["project"]["seed"]
 
     all_months = sorted(panel["yyyymm"].unique())
-    oos_months = [m for m in all_months if m >= oos_start]
+    oos_months = [m for m in all_months if oos_start <= m <= oos_end]
 
-    retune_freq = 12
     predictions_list = []
-    best_params = fixed_params
+    best_params = None
     months_since_retune = retune_freq
     t_start = _time.time()
     n_done = 0
@@ -1712,10 +1634,9 @@ def _rolling_xgboost_core(
         val_df = panel[panel["yyyymm"].isin(val_months_list)].copy()
         test_df = panel[panel["yyyymm"] == test_month].copy()
 
-        # Filter FIRST to restricted/quintile universe,
-        # then re-rank WITHIN the filtered sample.
-        # This avoids feature compression (e.g., Size compressed to [0.8, 1.0]
-        # when only Q5 stocks remain after full-cross-section ranking).
+        # Filter first to the restricted/quintile universe. The caller chooses
+        # whether to re-rank features inside that filtered universe or keep the
+        # already processed full-cross-section ranks.
         train_df, val_df = train_filter_fn(
             train_df, val_df, all_months, train_months_list, val_months_list
         )
@@ -1724,11 +1645,10 @@ def _rolling_xgboost_core(
         if len(train_df) < 100 or len(test_df) < 20:
             continue
 
-        # Re-rank within filtered universe so features are uniform [0,1]
-        for col in features:
-            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
-            val_df[col] = val_df.groupby("yyyymm")[col].rank(pct=True)
-            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
+        if rerank_after_filter:
+            train_df = normalize_features(train_df, features)
+            val_df = normalize_features(val_df, features)
+            test_df = normalize_features(test_df, features)
 
         train_df[features] = train_df[features].fillna(0.5)
         val_df[features] = val_df[features].fillna(0.5)
@@ -1744,56 +1664,44 @@ def _rolling_xgboost_core(
         valid_train = ~np.isnan(y_train)
         valid_val = ~np.isnan(y_val)
         valid_test = ~np.isnan(y_test)
-        if valid_train.sum() < 100 or valid_test.sum() < 10:
+        if valid_train.sum() < 100 or valid_val.sum() < 10 or valid_test.sum() < 10:
             continue
 
         X_train, y_train = X_train[valid_train], y_train[valid_train]
         X_val, y_val = X_val[valid_val], y_val[valid_val]
         X_test, y_test = X_test[valid_test], y_test[valid_test]
 
-        # Determine params: baseline_tuned > fixed > retune
-        if baseline_tuned_params is not None and test_month in baseline_tuned_params.index:
-            best_params = baseline_tuned_params.loc[test_month].to_dict()
-        elif fixed_params is None and months_since_retune >= retune_freq:
-            xgb_cfg = config["models"]["xgboost"]
-            search_space = xgb_cfg.get("search_space", {})
-            keys = list(search_space.keys())
-            values = list(search_space.values())
-            n_trials = xgb_cfg.get("n_random_search", 150)
-
-            full_grid_size = 1
-            for v in values:
-                full_grid_size *= len(v)
-
-            rng = np.random.RandomState(seed)
-            if full_grid_size <= n_trials:
-                param_grid = [dict(zip(keys, v)) for v in itertools.product(*values)]
-            else:
-                param_grid = []
-                for _ in range(n_trials):
-                    combo = {k: v[rng.randint(len(v))] for k, v in zip(keys, values)}
-                    param_grid.append(combo)
-
-            best_mse = np.inf
-            for params in param_grid:
-                trial_cfg = {**xgb_cfg, **params}
-                m = create_model("xgboost", config=trial_cfg, seed=seed)
-                m.fit(X_train, y_train)
-                preds = m.predict(X_val)
-                mse = np.mean((y_val - preds) ** 2)
-                if mse < best_mse:
-                    best_mse = mse
-                    best_params = trial_cfg
-
+        # Determine params. Baseline tuned files only record retune months, so
+        # carry the most recent baseline parameter row forward between tuning
+        # dates. If no baseline params are supplied, retune inside the filtered
+        # universe.
+        if baseline_tuned_params is not None:
+            available_months = baseline_tuned_params.index[
+                baseline_tuned_params.index <= test_month
+            ]
+            if len(available_months) == 0:
+                continue
+            row = baseline_tuned_params.loc[available_months.max()]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[-1]
+            best_params = {}
+            for k, v in row.to_dict().items():
+                if k == "yyyymm" or v is None:
+                    continue
+                if isinstance(v, (float, np.floating)) and np.isnan(v):
+                    continue
+                best_params[k] = v
+        elif months_since_retune >= retune_freq:
+            tuning_model = create_model(model_name, seed=seed)
+            best_params = tuning_model.tune_hyperparameters(
+                X_train, y_train, X_val, y_val
+            )
             months_since_retune = 0
             logger.info(
-                "%s month %d: RETUNED (best: %s)", label, test_month,
-                {k: best_params.get(k) for k in keys},
+                "%s month %d: RETUNED", label, test_month,
             )
-        elif fixed_params is not None and best_params is None:
-            best_params = fixed_params
 
-        model = create_model("xgboost", config=best_params, seed=seed)
+        model = create_model(model_name, config=best_params, seed=seed)
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
 
@@ -1818,7 +1726,7 @@ def _rolling_xgboost_core(
                 "%s progress: %d/%d (%.0f%%) | month %d%s | ETA: %.0f min",
                 label, i + 1, len(oos_months),
                 100 * (i + 1) / len(oos_months), test_month,
-                " [RETUNED]" if months_since_retune == 1 and fixed_params is None else "",
+                " [RETUNED]" if months_since_retune == 1 and baseline_tuned_params is None else "",
                 remaining / 60,
             )
 
@@ -1834,21 +1742,22 @@ def _rolling_xgboost_core(
     return predictions
 
 
-def rolling_xgboost_predict_restricted(
+def rolling_model_predict_restricted(
     panel: pd.DataFrame,
     features: list[str],
     min_quintile: int,
+    model_name: str = "xgboost",
     quintile_col: str = "liq_quintile",
     config: dict | None = None,
     return_col: str = "excess_ret",
-    fixed_params: dict | None = None,
     baseline_tuned_params: pd.DataFrame | None = None,
+    rerank_after_filter: bool = True,
 ) -> pd.DataFrame:
-    """Train XGBoost on a restricted universe (drop illiquid quintiles).
+    """Train a model on a restricted universe (drop illiquid quintiles).
 
     Per Section 5.2(d): filters train/val to quintile >= min_quintile.
-    Test set includes ALL stocks (no filter). Uses fixed baseline
-    hyperparameters to isolate training composition effect.
+    Test set includes ALL stocks (no filter). The caller decides whether to use
+    baseline tuned params or retune inside the restricted universe.
 
     Quintile assignment uses the last month of the training window.
     """
@@ -1872,30 +1781,32 @@ def rolling_xgboost_predict_restricted(
     def test_filter(test_df):
         return test_df  # no filter on test set
 
-    return _rolling_xgboost_core(
-        panel, features, config, return_col,
+    return _rolling_model_filter_core(
+        panel, features, model_name, config, return_col,
         train_filter_fn=train_filter,
         test_filter_fn=test_filter,
-        fixed_params=fixed_params,
         baseline_tuned_params=baseline_tuned_params,
-        label=f"XGB_MQ{min_quintile}+",
+        rerank_after_filter=rerank_after_filter,
+        label=f"{model_name}_MQ{min_quintile}+",
     )
 
 
-def rolling_xgboost_predict_quintile(
+def rolling_model_predict_quintile(
     panel: pd.DataFrame,
     features: list[str],
     quintile: int,
+    model_name: str = "xgboost",
     quintile_col: str = "liq_quintile",
     config: dict | None = None,
     return_col: str = "excess_ret",
-    fixed_params: dict | None = None,
     baseline_tuned_params: pd.DataFrame | None = None,
+    rerank_after_filter: bool = True,
 ) -> pd.DataFrame:
-    """Train XGBoost on a single liquidity quintile.
+    """Train a model on a single liquidity quintile.
 
     Per Section 5.2(e): filters train/val/test to the specified quintile.
-    Uses fixed baseline hyperparameters.
+    The caller decides whether to use baseline tuned params or retune inside
+    the quintile.
 
     Quintile assignment uses the last month of the training window.
     """
@@ -1919,539 +1830,14 @@ def rolling_xgboost_predict_quintile(
     def test_filter(test_df):
         return test_df[test_df[quintile_col] == quintile].copy()
 
-    return _rolling_xgboost_core(
-        panel, features, config, return_col,
+    return _rolling_model_filter_core(
+        panel, features, model_name, config, return_col,
         train_filter_fn=train_filter,
         test_filter_fn=test_filter,
-        fixed_params=fixed_params,
         baseline_tuned_params=baseline_tuned_params,
-        label=f"XGB_Q{quintile}",
+        rerank_after_filter=rerank_after_filter,
+        label=f"{model_name}_Q{quintile}",
     )
-
-
-def rolling_elasticnet_predict(
-    panel: pd.DataFrame,
-    features: list[str],
-    config: dict | None = None,
-    return_col: str = "excess_ret",
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Train ElasticNetCV with rolling windows.
-
-    Protocol:
-      - 120 months train, 1 month test (no validation gap)
-      - Per-window rank normalization to [0,1], fillna(0.5)
-      - ElasticNetCV auto-tunes alpha + l1_ratio every month via TimeSeriesSplit CV
-        (l1_ratio searched over [0.5, 0.7, 0.9, 0.95, 1.0])
-
-    Returns
-    -------
-    predictions : DataFrame [permno, yyyymm, y_true, y_pred]
-    importances : DataFrame rows=yyyymm (test month), cols=features (|coef|)
-    """
-    import time as _time
-    from sklearn.linear_model import ElasticNetCV
-
-    if config is None:
-        from src.config import load_config
-        config = load_config()
-
-    train_cfg = config["training"]
-    train_window = train_cfg["train_window"]           # 120
-    oos_start = train_cfg.get("oos_start", 200001)
-    seed = config["project"]["seed"]
-
-    all_months = sorted(panel["yyyymm"].unique())
-    oos_months = [m for m in all_months if m >= oos_start]
-
-    logger.info(
-        "Rolling ElasticNetCV: %d OOS months, auto-tune every month",
-        len(oos_months),
-    )
-
-    predictions_list = []
-    importance_list = []
-    t_start = _time.time()
-
-    for i, test_month in enumerate(oos_months):
-        test_idx = all_months.index(test_month)
-
-        if test_idx < train_window:
-            continue
-
-        train_start = test_idx - train_window
-        train_months_list = all_months[train_start:test_idx]
-
-        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
-        test_df = panel[panel["yyyymm"] == test_month].copy()
-
-        if len(train_df) < 100 or len(test_df) < 50:
-            continue
-
-        # Per-window rank normalization to [0,1]
-        for col in features:
-            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
-            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
-
-        # Fill NaN with 0.5 (ElasticNet cannot handle NaN)
-        train_df[features] = train_df[features].fillna(0.5)
-        test_df[features] = test_df[features].fillna(0.5)
-
-        X_train = train_df[features].values
-        y_train = train_df[return_col].values
-        X_test = test_df[features].values
-        y_test = test_df[return_col].values
-
-        # Drop NaN targets
-        valid_train = ~np.isnan(y_train)
-        valid_test = ~np.isnan(y_test)
-        if valid_train.sum() < 100 or valid_test.sum() < 30:
-            continue
-
-        X_train, y_train = X_train[valid_train], y_train[valid_train]
-        X_test, y_test = X_test[valid_test], y_test[valid_test]
-
-        # ElasticNetCV: auto-tunes alpha + l1_ratio via TimeSeriesSplit CV
-        from sklearn.model_selection import TimeSeriesSplit
-        model = ElasticNetCV(
-            l1_ratio=[0.5, 0.7, 0.9, 0.95, 1.0],
-            cv=TimeSeriesSplit(n_splits=5),
-            max_iter=5000,
-            random_state=seed,
-        )
-        model.fit(X_train, y_train)
-
-        # Predict
-        y_pred = model.predict(X_test)
-
-        # Store predictions
-        test_valid = test_df.iloc[valid_test]
-        pred_df = pd.DataFrame({
-            "permno": test_valid["permno"].values,
-            "yyyymm": test_valid["yyyymm"].values,
-            "y_true": y_test,
-            "y_pred": y_pred,
-        })
-        predictions_list.append(pred_df)
-
-        # Feature importance = |coefficients|
-        imp = pd.Series(np.abs(model.coef_), index=features)
-        imp_row = {"yyyymm": test_month}
-        imp_row.update(imp.to_dict())
-        importance_list.append(imp_row)
-
-        n_done = i + 1
-        elapsed = _time.time() - t_start
-        avg_per_month = elapsed / n_done
-        remaining_min = avg_per_month * (len(oos_months) - n_done) / 60
-
-        if (n_done) % 12 == 0 or i == 0:
-            logger.info(
-                "Progress: %d/%d months (%.0f%%) | month %d | "
-                "%.1f s/month | ETA: %.0f min",
-                n_done, len(oos_months), 100 * n_done / len(oos_months),
-                test_month,
-                avg_per_month, remaining_min,
-            )
-
-    if not predictions_list:
-        logger.warning("No valid OOS months produced")
-        return pd.DataFrame(), pd.DataFrame()
-
-    predictions = pd.concat(predictions_list, ignore_index=True)
-    importances = pd.DataFrame(importance_list).set_index("yyyymm")
-
-    logger.info(
-        "Rolling ElasticNetCV complete: %d OOS months, %d predictions",
-        len(importances), len(predictions),
-    )
-    return predictions, importances
-
-
-def expanding_xgboost_predict(
-    panel: pd.DataFrame,
-    features: list[str],
-    config: dict | None = None,
-    return_col: str = "excess_ret",
-    train_start: int = 199001,
-    oos_start: int = 200001,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Train baseline XGBoost with expanding windows (GKX-style).
-
-    Protocol:
-      - Expanding training: starts at train_start, grows by 12 months each year
-      - No validation gap; retune via TimeSeriesSplit(5) CV on train each year
-      - Test = 12 months (yearly), starting from oos_start
-      - Per-window rank normalization to [0,1], fillna(0.5)
-
-    Returns
-    -------
-    predictions : DataFrame [permno, yyyymm, y_true, y_pred]
-    importances : DataFrame rows=yyyymm (test month), cols=features (gain)
-    """
-    import itertools
-    import time as _time
-    from src.models import create_model
-
-    if config is None:
-        config = load_config()
-
-    seed = config["project"]["seed"]
-    all_months = sorted(panel["yyyymm"].unique())
-
-    # Build yearly test blocks: [200001..200012], [200101..200112], ...
-    oos_months = [m for m in all_months if m >= oos_start]
-    test_years = sorted(set(m // 100 for m in oos_months))
-
-    predictions_list = []
-    importance_list = []
-    t_start = _time.time()
-
-    logger.info(
-        "Expanding XGBoost: %d test years (%d-%d), train starts %d, grid size %d",
-        len(test_years), test_years[0], test_years[-1], train_start,
-        np.prod([len(v) for v in config["models"]["xgboost"].get("search_space", {}).values()]),
-    )
-
-    for yi, test_year in enumerate(test_years):
-        test_months_list = [m for m in all_months if m // 100 == test_year]
-        if not test_months_list:
-            continue
-
-        # Expanding train: train_start up to (but not including) first test month
-        first_test = test_months_list[0]
-        train_months_list = [m for m in all_months if train_start <= m < first_test]
-
-        if len(train_months_list) < 60:
-            continue
-
-        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
-        test_df = panel[panel["yyyymm"].isin(test_months_list)].copy()
-
-        if len(train_df) < 100 or len(test_df) < 50:
-            continue
-
-        # Per-window rank normalization to [0,1]
-        for col in features:
-            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
-            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
-
-        train_df[features] = train_df[features].fillna(0.5)
-        test_df[features] = test_df[features].fillna(0.5)
-
-        X_train = train_df[features].values
-        y_train = train_df[return_col].values
-        X_test = test_df[features].values
-        y_test = test_df[return_col].values
-
-        valid_train = ~np.isnan(y_train)
-        valid_test = ~np.isnan(y_test)
-        if valid_train.sum() < 100 or valid_test.sum() < 30:
-            continue
-
-        X_train, y_train = X_train[valid_train], y_train[valid_train]
-        X_test, y_test = X_test[valid_test], y_test[valid_test]
-
-        # Retune hyperparameters each year via TimeSeriesSplit CV
-        from sklearn.model_selection import TimeSeriesSplit
-        xgb_cfg = config["models"]["xgboost"]
-        search_space = xgb_cfg.get("search_space", {})
-        keys = list(search_space.keys())
-        values = list(search_space.values())
-        n_trials = xgb_cfg.get("n_random_search", 150)
-
-        full_grid_size = 1
-        for v in values:
-            full_grid_size *= len(v)
-
-        rng = np.random.RandomState(seed)
-        if full_grid_size <= n_trials:
-            param_grid = [dict(zip(keys, v)) for v in itertools.product(*values)]
-        else:
-            param_grid = []
-            for _ in range(n_trials):
-                combo = {k: v[rng.randint(len(v))] for k, v in zip(keys, values)}
-                param_grid.append(combo)
-
-        tscv = TimeSeriesSplit(n_splits=5)
-        best_mse = np.inf
-        best_params = None
-        for params in param_grid:
-            trial_cfg = {**xgb_cfg, **params}
-            cv_mses = []
-            for tr_idx, va_idx in tscv.split(X_train):
-                m = create_model("xgboost", config=trial_cfg, seed=seed)
-                m.fit(X_train[tr_idx], y_train[tr_idx])
-                preds = m.predict(X_train[va_idx])
-                cv_mses.append(np.mean((y_train[va_idx] - preds) ** 2))
-            avg_mse = np.mean(cv_mses)
-            if avg_mse < best_mse:
-                best_mse = avg_mse
-                best_params = trial_cfg
-
-        # Train on full expanding train set
-        model = create_model("xgboost", config=best_params, seed=seed)
-        model.fit(X_train, y_train)
-
-        y_pred = model.predict(X_test)
-
-        test_valid = test_df[valid_test]
-        pred_df = pd.DataFrame({
-            "permno": test_valid["permno"].values,
-            "yyyymm": test_valid["yyyymm"].values,
-            "y_true": y_test,
-            "y_pred": y_pred,
-        })
-        predictions_list.append(pred_df)
-
-        # Feature importance (gain-based)
-        imp = model.get_feature_importance(features)
-        for tm in test_months_list:
-            imp_row = {"yyyymm": tm}
-            imp_row.update(imp.to_dict())
-            importance_list.append(imp_row)
-
-        elapsed = _time.time() - t_start
-        avg_per_year = elapsed / (yi + 1)
-        remaining_min = avg_per_year * (len(test_years) - yi - 1) / 60
-
-        logger.info(
-            "Year %d/%d | test %d | train %d-%d (%d months) | "
-            "%.1f s/year | ETA: %.0f min",
-            yi + 1, len(test_years), test_year,
-            train_months_list[0], train_months_list[-1], len(train_months_list),
-            avg_per_year, remaining_min,
-        )
-
-    if not predictions_list:
-        logger.warning("No valid OOS years produced")
-        return pd.DataFrame(), pd.DataFrame()
-
-    predictions = pd.concat(predictions_list, ignore_index=True)
-    importances = pd.DataFrame(importance_list).set_index("yyyymm")
-
-    logger.info(
-        "Expanding XGBoost complete: %d OOS months, %d predictions",
-        len(importances), len(predictions),
-    )
-    return predictions, importances
-
-
-def expanding_elasticnet_predict(
-    panel: pd.DataFrame,
-    features: list[str],
-    config: dict | None = None,
-    return_col: str = "excess_ret",
-    train_start: int = 199001,
-    oos_start: int = 200001,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Train ElasticNet with expanding windows (GKX-style).
-
-    Protocol:
-      - Expanding training: starts at train_start, grows by 12 months each year
-      - No validation gap; retune via TimeSeriesSplit(5) CV on train each year
-      - Test = 12 months (yearly), starting from oos_start
-      - Per-window rank normalization to [0,1], fillna(0.5)
-      - ElasticNetCV auto-tunes alpha + l1_ratio each year
-
-    Returns
-    -------
-    predictions : DataFrame [permno, yyyymm, y_true, y_pred]
-    importances : DataFrame rows=yyyymm (test month), cols=features (|coef|)
-    """
-    import time as _time
-    from sklearn.linear_model import ElasticNetCV
-
-    if config is None:
-        from src.config import load_config
-        config = load_config()
-
-    seed = config["project"]["seed"]
-    all_months = sorted(panel["yyyymm"].unique())
-
-    oos_months = [m for m in all_months if m >= oos_start]
-    test_years = sorted(set(m // 100 for m in oos_months))
-
-    predictions_list = []
-    importance_list = []
-    t_start = _time.time()
-
-    logger.info(
-        "Expanding ElasticNetCV: %d test years (%d-%d), train starts %d",
-        len(test_years), test_years[0], test_years[-1], train_start,
-    )
-
-    for yi, test_year in enumerate(test_years):
-        test_months_list = [m for m in all_months if m // 100 == test_year]
-        if not test_months_list:
-            continue
-
-        first_test = test_months_list[0]
-        train_months_list = [m for m in all_months if train_start <= m < first_test]
-
-        if len(train_months_list) < 60:
-            continue
-
-        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
-        test_df = panel[panel["yyyymm"].isin(test_months_list)].copy()
-
-        if len(train_df) < 100 or len(test_df) < 50:
-            continue
-
-        # Per-window rank normalization to [0,1]
-        for col in features:
-            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
-            test_df[col] = test_df.groupby("yyyymm")[col].rank(pct=True)
-
-        train_df[features] = train_df[features].fillna(0.5)
-        test_df[features] = test_df[features].fillna(0.5)
-
-        X_train = train_df[features].values
-        y_train = train_df[return_col].values
-        X_test = test_df[features].values
-        y_test = test_df[return_col].values
-
-        valid_train = ~np.isnan(y_train)
-        valid_test = ~np.isnan(y_test)
-        if valid_train.sum() < 100 or valid_test.sum() < 30:
-            continue
-
-        X_train, y_train = X_train[valid_train], y_train[valid_train]
-        X_test, y_test = X_test[valid_test], y_test[valid_test]
-
-        # ElasticNetCV: auto-tunes alpha + l1_ratio via TimeSeriesSplit CV
-        from sklearn.model_selection import TimeSeriesSplit
-        model = ElasticNetCV(
-            l1_ratio=[0.5, 0.7, 0.9, 0.95, 1.0],
-            cv=TimeSeriesSplit(n_splits=5),
-            max_iter=5000,
-            random_state=seed,
-        )
-        model.fit(X_train, y_train)
-
-        y_pred = model.predict(X_test)
-
-        test_valid = test_df.iloc[valid_test]
-        pred_df = pd.DataFrame({
-            "permno": test_valid["permno"].values,
-            "yyyymm": test_valid["yyyymm"].values,
-            "y_true": y_test,
-            "y_pred": y_pred,
-        })
-        predictions_list.append(pred_df)
-
-        # Feature importance = |coefficients|
-        imp = pd.Series(np.abs(model.coef_), index=features)
-        for tm in test_months_list:
-            imp_row = {"yyyymm": tm}
-            imp_row.update(imp.to_dict())
-            importance_list.append(imp_row)
-
-        elapsed = _time.time() - t_start
-        avg_per_year = elapsed / (yi + 1)
-        remaining_min = avg_per_year * (len(test_years) - yi - 1) / 60
-
-        logger.info(
-            "Year %d/%d | test %d | train %d-%d (%d months) | "
-            "%.1f s/year | ETA: %.0f min",
-            yi + 1, len(test_years), test_year,
-            train_months_list[0], train_months_list[-1], len(train_months_list),
-            avg_per_year, remaining_min,
-        )
-
-    if not predictions_list:
-        logger.warning("No valid OOS years produced")
-        return pd.DataFrame(), pd.DataFrame()
-
-    predictions = pd.concat(predictions_list, ignore_index=True)
-    importances = pd.DataFrame(importance_list).set_index("yyyymm")
-
-    logger.info(
-        "Expanding ElasticNetCV complete: %d OOS months, %d predictions",
-        len(importances), len(predictions),
-    )
-    return predictions, importances
-
-
-def compute_topk_frequency(
-    importances: pd.DataFrame,
-    K: int = 10,
-) -> pd.Series:
-    """Fraction of rolling windows in which feature j is among the top K by gain.
-
-    More robust than mean gain because it captures persistent capacity
-    allocation rather than being diluted by noisy small splits.
-
-    Parameters
-    ----------
-    importances : DataFrame with rows=yyyymm, cols=features, values=gain
-    K : number of top features to count per window
-
-    Returns
-    -------
-    Series indexed by feature name, values in [0, 1].
-    """
-    def _topk_row(row):
-        return (row.rank(ascending=False) <= K).astype(float)
-
-    topk_flags = importances.apply(_topk_row, axis=1)
-    return topk_flags.mean()
-
-
-def compute_illiquidity_relatedness_aligned(
-    panel: pd.DataFrame,
-    features: list[str],
-    importances: pd.DataFrame,
-    liq_col: str = "liq_dvol_21d",
-    train_window: int = 120,
-    val_window: int = 12,
-) -> pd.Series:
-    """Illiquidity-relatedness computed on the same transformed inputs the model saw.
-
-    For each OOS month in importances.index, reconstructs the train window,
-    applies the same rank normalization and fillna(0.5), then computes
-    Spearman correlation between each transformed feature and liquidity.
-
-    Returns Series: average relatedness per feature across windows.
-    """
-    from scipy.stats import spearmanr
-
-    all_months = sorted(panel["yyyymm"].unique())
-    oos_months = sorted(importances.index.unique())
-
-    corr_list = []
-    for test_month in oos_months:
-        test_idx = all_months.index(test_month)
-        if test_idx < train_window + val_window:
-            continue
-
-        train_start = test_idx - train_window - val_window
-        val_start = test_idx - val_window
-        train_months_list = all_months[train_start:val_start]
-
-        train_df = panel[panel["yyyymm"].isin(train_months_list)].copy()
-
-        # Apply same transformation as the model
-        for col in features:
-            train_df[col] = train_df.groupby("yyyymm")[col].rank(pct=True)
-        train_df[features] = train_df[features].fillna(0.5)
-
-        # Compute relatedness on transformed features
-        liq_vals = train_df[liq_col].values
-        valid_liq = ~np.isnan(liq_vals)
-
-        row = {}
-        for feat in features:
-            vals = train_df[feat].values
-            valid = valid_liq & ~np.isnan(vals)
-            if valid.sum() < 50:
-                row[feat] = np.nan
-                continue
-            rho, _ = spearmanr(vals[valid], liq_vals[valid])
-            row[feat] = rho
-        corr_list.append(row)
-
-    corr_df = pd.DataFrame(corr_list)
-    return corr_df.mean()
 
 
 def compute_illiquidity_relatedness(
@@ -2459,10 +1845,15 @@ def compute_illiquidity_relatedness(
     features: list[str],
     liq_col: str = "liq_dvol_21d",
 ) -> pd.Series:
-    """Monthly Spearman correlation of each feature with dollar volume.
+    """Monthly Spearman correlation with the selected liquidity sort variable.
 
     Returns Series: ρ̄_j per feature (averaged across months).
-    A large negative ρ̄_j means the feature is associated with illiquid stocks.
+    Step 3 passes rank-normalized model features and raw liquidity levels. This
+    is intentional: Spearman correlation re-ranks both variables within the
+    valid monthly cross-section, so units do not affect the statistic.
+    A large negative ρ̄_j means the feature is associated with less liquid or
+    less implementable stocks when the liquidity variable is oriented so higher
+    values are more liquid/implementable.
     """
     from scipy.stats import spearmanr
 
@@ -2489,29 +1880,91 @@ def compute_illiquidity_relatedness(
     return corr_df.mean()
 
 
+def attach_quintile_benchmarks(
+    predictions: pd.DataFrame,
+    panel: pd.DataFrame,
+    quintile_col: str = "liq_quintile",
+    return_col: str = "excess_ret",
+    hist_window: int | None = None,
+    min_hist_periods: int = 12,
+    extra_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """Attach quintiles, true returns, and OOS benchmarks to predictions.
+
+    Accepts either formal prediction schema (``prediction``) or Step 3 schema
+    (``y_pred``/``y_true``). The cross-sectional benchmark is the full predicted
+    sample mean in each month, not the within-quintile mean.
+    """
+    pred = predictions.copy()
+    if "y_pred" not in pred.columns:
+        if "prediction" not in pred.columns:
+            raise ValueError("predictions must contain either 'y_pred' or 'prediction'")
+        pred = pred.rename(columns={"prediction": "y_pred"})
+
+    merge_cols = ["permno", "yyyymm", quintile_col]
+    if "y_true" not in pred.columns:
+        merge_cols.append(return_col)
+    if extra_cols:
+        merge_cols.extend(c for c in extra_cols if c not in merge_cols)
+
+    meta = panel[merge_cols].drop_duplicates(["permno", "yyyymm"])
+    pred = pred.merge(meta, on=["permno", "yyyymm"], how="left")
+    if "y_true" not in pred.columns:
+        pred = pred.rename(columns={return_col: "y_true"})
+
+    r_cs = pred.groupby("yyyymm")["y_true"].mean().rename("r_cs")
+    pred = pred.merge(r_cs, on="yyyymm", how="left")
+    pred["r_bar_t"] = pred["r_cs"]
+
+    if hist_window is not None:
+        effective_min_periods = min(min_hist_periods, hist_window)
+        full_ret = panel[["permno", "yyyymm", return_col]].sort_values(
+            ["permno", "yyyymm"]
+        )
+        full_ret["r_hist"] = (
+            full_ret.groupby("permno")[return_col]
+            .rolling(hist_window, min_periods=effective_min_periods)
+            .mean()
+            .reset_index(level=0, drop=True)
+        )
+        full_ret["r_hist"] = full_ret.groupby("permno")["r_hist"].shift(1)
+        pred = pred.merge(
+            full_ret[["permno", "yyyymm", "r_hist"]],
+            on=["permno", "yyyymm"],
+            how="left",
+        )
+
+    return pred
+
+
 def compute_quintile_oos_r2(
     predictions: pd.DataFrame,
     panel: pd.DataFrame,
     quintile_col: str = "liq_quintile",
+    return_col: str = "excess_ret",
+    hist_window: int | None = None,
+    min_hist_periods: int = 12,
 ) -> pd.DataFrame:
-    """Pooled OOS R² per liquidity quintile (Eq. 8 in document).
+    """Pooled unweighted OOS R² per liquidity quintile.
 
-    r̄_t = full-sample cross-sectional mean (not within-quintile).
+    Computes zero-return and full-sample cross-sectional-mean benchmarks. If
+    ``hist_window`` is provided, also computes stock-level rolling historical
+    mean benchmark using information through t-1. The squared-error sums are
+    unweighted; this is appropriate for comparing standard and weighted models
+    under the same evaluation loss. Utility-weighted R² is computed separately.
 
     Returns DataFrame with columns:
-        quintile, pooled_r2_cs, pooled_r2_zero, avg_monthly_r2, avg_n_month
+        quintile, pooled_r2_zero, pooled_r2_cs, optional pooled_r2_hist,
+        average monthly versions, and avg_n_month.
     """
-    pred = predictions.merge(
-        panel[["permno", "yyyymm", quintile_col]],
-        on=["permno", "yyyymm"],
-        how="left",
+    pred = attach_quintile_benchmarks(
+        predictions,
+        panel,
+        quintile_col=quintile_col,
+        return_col=return_col,
+        hist_window=hist_window,
+        min_hist_periods=min_hist_periods,
     )
-
-    # Benchmark: cross-sectional mean r̄_t (Eq. 8 in document, GKX 2020)
-    # Computed over the FULL sample each month (not within quintile).
-    # R² = 1 - Σ(r - r̂)² / Σ(r - r̄_t)²
-    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
-    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
 
     results = []
     quintiles = sorted(pred[quintile_col].dropna().unique())
@@ -2532,6 +1985,7 @@ def compute_quintile_oos_r2(
         # Average monthly R²
         monthly_r2_cs = []
         monthly_r2_zero = []
+        monthly_r2_hist = []
         for _, mdf in qdf.groupby("yyyymm"):
             ss_r = ((mdf["y_true"] - mdf["y_pred"]) ** 2).sum()
             ss_t_cs = ((mdf["y_true"] - mdf["r_bar_t"]) ** 2).sum()
@@ -2540,86 +1994,63 @@ def compute_quintile_oos_r2(
                 monthly_r2_cs.append(1 - ss_r / ss_t_cs)
             if ss_t_zero > 0:
                 monthly_r2_zero.append(1 - ss_r / ss_t_zero)
+            if "r_hist" in mdf.columns:
+                mdf_hist = mdf.dropna(subset=["r_hist"])
+                ss_r_hist = ((mdf_hist["y_true"] - mdf_hist["y_pred"]) ** 2).sum()
+                ss_t_hist = ((mdf_hist["y_true"] - mdf_hist["r_hist"]) ** 2).sum()
+                if ss_t_hist > 0:
+                    monthly_r2_hist.append(1 - ss_r_hist / ss_t_hist)
         avg_monthly_r2_cs = np.mean(monthly_r2_cs) if monthly_r2_cs else np.nan
         avg_monthly_r2_zero = np.mean(monthly_r2_zero) if monthly_r2_zero else np.nan
+        avg_monthly_r2_hist = np.mean(monthly_r2_hist) if monthly_r2_hist else np.nan
 
         avg_n = qdf.groupby("yyyymm").size().mean()
 
-        results.append({
+        row = {
             "quintile": int(q),
-            "pooled_r2_cs": r2_cs,
             "pooled_r2_zero": r2_zero,
-            "avg_monthly_r2_cs": avg_monthly_r2_cs,
+            "pooled_r2_cs": r2_cs,
             "avg_monthly_r2_zero": avg_monthly_r2_zero,
+            "avg_monthly_r2_cs": avg_monthly_r2_cs,
             "avg_n_month": avg_n,
-        })
+            "n_obs": len(qdf),
+        }
+        if "r_hist" in qdf.columns:
+            qdf_hist = qdf.dropna(subset=["r_hist"])
+            ss_res_hist = ((qdf_hist["y_true"] - qdf_hist["y_pred"]) ** 2).sum()
+            ss_tot_hist = ((qdf_hist["y_true"] - qdf_hist["r_hist"]) ** 2).sum()
+            row["pooled_r2_hist"] = (
+                1 - ss_res_hist / ss_tot_hist if ss_tot_hist > 0 else np.nan
+            )
+            row["avg_monthly_r2_hist"] = avg_monthly_r2_hist
+        results.append(row)
 
     # Full sample
-    ss_res_all = ((pred["y_true"] - pred["y_pred"]) ** 2).sum()
-    ss_tot_cs_all = ((pred["y_true"] - pred["r_bar_t"]) ** 2).sum()
-    ss_tot_zero_all = (pred["y_true"] ** 2).sum()
+    pred_valid = pred.dropna(subset=["y_true", "y_pred"])
+    ss_res_all = ((pred_valid["y_true"] - pred_valid["y_pred"]) ** 2).sum()
+    ss_tot_cs_all = ((pred_valid["y_true"] - pred_valid["r_bar_t"]) ** 2).sum()
+    ss_tot_zero_all = (pred_valid["y_true"] ** 2).sum()
 
-    results.append({
+    full_row = {
         "quintile": "Full",
-        "pooled_r2_cs": 1 - ss_res_all / ss_tot_cs_all if ss_tot_cs_all > 0 else np.nan,
         "pooled_r2_zero": 1 - ss_res_all / ss_tot_zero_all if ss_tot_zero_all > 0 else np.nan,
-        "avg_monthly_r2_cs": np.nan,
+        "pooled_r2_cs": 1 - ss_res_all / ss_tot_cs_all if ss_tot_cs_all > 0 else np.nan,
         "avg_monthly_r2_zero": np.nan,
-        "avg_n_month": pred.groupby("yyyymm").size().mean(),
-    })
+        "avg_monthly_r2_cs": np.nan,
+        "avg_n_month": pred_valid.groupby("yyyymm").size().mean(),
+        "n_obs": len(pred_valid),
+    }
+    if "r_hist" in pred_valid.columns:
+        pred_hist = pred_valid.dropna(subset=["r_hist"])
+        ss_res_hist_all = ((pred_hist["y_true"] - pred_hist["y_pred"]) ** 2).sum()
+        ss_tot_hist_all = ((pred_hist["y_true"] - pred_hist["r_hist"]) ** 2).sum()
+        full_row["pooled_r2_hist"] = (
+            1 - ss_res_hist_all / ss_tot_hist_all if ss_tot_hist_all > 0 else np.nan
+        )
+        full_row["avg_monthly_r2_hist"] = np.nan
+    results.append(full_row)
 
     return pd.DataFrame(results)
-
-
-def compute_monthly_quintile_r2(
-    predictions: pd.DataFrame,
-    panel: pd.DataFrame,
-    quintile_col: str = "liq_quintile",
-) -> pd.DataFrame:
-    """Monthly OOS R² per liquidity quintile + full sample.
-
-    Returns DataFrame with columns:
-        yyyymm, Q1_cs, Q2_cs, ..., Q5_cs, Full_cs,
-                Q1_zero, Q2_zero, ..., Q5_zero, Full_zero
-    """
-    pred = predictions.merge(
-        panel[["permno", "yyyymm", quintile_col]],
-        on=["permno", "yyyymm"],
-        how="left",
-    )
-    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
-    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
-
-    quintiles = sorted(pred[quintile_col].dropna().unique())
-    months = sorted(pred["yyyymm"].unique())
-
-    rows = []
-    for m in months:
-        mdf = pred[pred["yyyymm"] == m].dropna(subset=["y_true", "y_pred"])
-        row = {"yyyymm": m}
-
-        for q in quintiles:
-            qdf = mdf[mdf[quintile_col] == q]
-            if len(qdf) < 10:
-                row[f"Q{int(q)}_cs"] = np.nan
-                row[f"Q{int(q)}_zero"] = np.nan
-                continue
-            ss_res = ((qdf["y_true"] - qdf["y_pred"]) ** 2).sum()
-            ss_tot_cs = ((qdf["y_true"] - qdf["r_bar_t"]) ** 2).sum()
-            ss_tot_zero = (qdf["y_true"] ** 2).sum()
-            row[f"Q{int(q)}_cs"] = 1 - ss_res / ss_tot_cs if ss_tot_cs > 0 else np.nan
-            row[f"Q{int(q)}_zero"] = 1 - ss_res / ss_tot_zero if ss_tot_zero > 0 else np.nan
-
-        # Full sample
-        ss_res_all = ((mdf["y_true"] - mdf["y_pred"]) ** 2).sum()
-        ss_tot_cs_all = ((mdf["y_true"] - mdf["r_bar_t"]) ** 2).sum()
-        ss_tot_zero_all = (mdf["y_true"] ** 2).sum()
-        row["Full_cs"] = 1 - ss_res_all / ss_tot_cs_all if ss_tot_cs_all > 0 else np.nan
-        row["Full_zero"] = 1 - ss_res_all / ss_tot_zero_all if ss_tot_zero_all > 0 else np.nan
-
-        rows.append(row)
-
-    return pd.DataFrame(rows)
 
 
 def compute_utility_weighted_r2(
@@ -2627,10 +2058,15 @@ def compute_utility_weighted_r2(
     panel: pd.DataFrame,
     w_col: str = "w_tilde",
 ) -> dict:
-    """Utility-weighted R² (Eq. 9 in document).
+    """Zero-benchmark utility-weighted evaluation R² for one prediction set.
 
-    R²_w = 1 − Σ w̃(r−r̂)² / Σ w̃(r−r̄_t)²
-    Cross-sectional mean benchmark.
+    This function does not compare standard-trained versus weighted-trained
+    models. It takes one set of predictions and evaluates it twice: once with
+    unweighted squared-error sums and once with utility/implementability weights.
+
+    The benchmark is zero, matching the motivation document:
+
+        R²_w = 1 − Σ w̃(r−r̂)² / Σ w̃r²
     """
     pred = predictions.merge(
         panel[["permno", "yyyymm", w_col]],
@@ -2639,84 +2075,23 @@ def compute_utility_weighted_r2(
     )
     pred = pred.dropna(subset=["y_true", "y_pred", w_col])
 
-    # Cross-sectional mean per month
-    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
-    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
-
     w = pred[w_col].values
     r = pred["y_true"].values
     r_hat = pred["y_pred"].values
-    r_bar = pred["r_bar_t"].values
 
     ss_res_w = np.sum(w * (r - r_hat) ** 2)
     ss_res = np.sum((r - r_hat) ** 2)
 
-    # Cross-sectional mean benchmark
-    ss_tot_w_cs = np.sum(w * (r - r_bar) ** 2)
-    ss_tot_cs = np.sum((r - r_bar) ** 2)
-    r2_w_cs = 1 - ss_res_w / ss_tot_w_cs if ss_tot_w_cs > 0 else np.nan
-    r2_std_cs = 1 - ss_res / ss_tot_cs if ss_tot_cs > 0 else np.nan
-
-    # Zero benchmark
     ss_tot_w_zero = np.sum(w * r ** 2)
     ss_tot_zero = np.sum(r ** 2)
     r2_w_zero = 1 - ss_res_w / ss_tot_w_zero if ss_tot_w_zero > 0 else np.nan
     r2_std_zero = 1 - ss_res / ss_tot_zero if ss_tot_zero > 0 else np.nan
 
     return {
-        "r2_standard_cs": r2_std_cs,
-        "r2_weighted_cs": r2_w_cs,
-        "gap_cs": r2_std_cs - r2_w_cs,
         "r2_standard_zero": r2_std_zero,
         "r2_weighted_zero": r2_w_zero,
         "gap_zero": r2_std_zero - r2_w_zero,
     }
-
-
-def compute_monthly_utility_weighted_r2(
-    predictions: pd.DataFrame,
-    panel: pd.DataFrame,
-    w_col: str = "w_tilde",
-) -> pd.DataFrame:
-    """Monthly utility-weighted R² time series.
-
-    Returns DataFrame with columns:
-        yyyymm, r2_std_cs, r2_wtd_cs, r2_std_zero, r2_wtd_zero
-    """
-    pred = predictions.merge(
-        panel[["permno", "yyyymm", w_col]],
-        on=["permno", "yyyymm"],
-        how="left",
-    )
-    pred = pred.dropna(subset=["y_true", "y_pred", w_col])
-
-    monthly_mean = pred.groupby("yyyymm")["y_true"].mean().rename("r_bar_t")
-    pred = pred.merge(monthly_mean, on="yyyymm", how="left")
-
-    rows = []
-    for m, mdf in pred.groupby("yyyymm"):
-        w = mdf[w_col].values
-        r = mdf["y_true"].values
-        r_hat = mdf["y_pred"].values
-        r_bar = mdf["r_bar_t"].values
-
-        ss_res = np.sum((r - r_hat) ** 2)
-        ss_res_w = np.sum(w * (r - r_hat) ** 2)
-
-        ss_tot_cs = np.sum((r - r_bar) ** 2)
-        ss_tot_w_cs = np.sum(w * (r - r_bar) ** 2)
-        ss_tot_zero = np.sum(r ** 2)
-        ss_tot_w_zero = np.sum(w * r ** 2)
-
-        rows.append({
-            "yyyymm": m,
-            "r2_std_cs": 1 - ss_res / ss_tot_cs if ss_tot_cs > 0 else np.nan,
-            "r2_wtd_cs": 1 - ss_res_w / ss_tot_w_cs if ss_tot_w_cs > 0 else np.nan,
-            "r2_std_zero": 1 - ss_res / ss_tot_zero if ss_tot_zero > 0 else np.nan,
-            "r2_wtd_zero": 1 - ss_res_w / ss_tot_w_zero if ss_tot_w_zero > 0 else np.nan,
-        })
-
-    return pd.DataFrame(rows)
 
 
 def compute_univariate_liquid_r2(
@@ -2725,9 +2100,13 @@ def compute_univariate_liquid_r2(
     quintile_col: str = "liq_quintile",
     return_col: str = "excess_ret",
 ) -> pd.Series:
-    """Per-feature univariate predictive R² among liquid stocks (Q4-Q5).
+    """Per-feature univariate predictive strength among liquid stocks (Q4-Q5).
 
-    Uses FM slope within Q4-Q5, then R² ≈ t²/(t²+T-1).
+    The caller controls feature scaling. In Step 3, the supplied panel has the
+    final feature set rank-normalized to [0, 1], matching the formal rolling
+    model inputs.
+    For each feature, estimate monthly univariate FM slopes within Q4-Q5, then
+    summarize the Newey-West t-statistic as R² ≈ t²/(t²+T-1).
     """
     liquid = panel[panel[quintile_col].isin([4, 5])].copy()
     months = sorted(liquid["yyyymm"].unique())
@@ -2772,8 +2151,9 @@ def plot_importance_vs_illiquidity(
     illiq_relatedness: pd.Series,
     focal_features: list[str],
     output_path: str | Path,
+    importance_label: str = "average model importance",
 ) -> float:
-    """Scatter: Ī_j (y) vs -ρ̄_j (x). 143 points, label 15 focal."""
+    """Scatter: Ī_j (y) vs -ρ̄_j (x). Label focal characteristics."""
     import matplotlib.pyplot as plt
     _set_academic_style()
     from scipy.stats import spearmanr
@@ -2801,7 +2181,7 @@ def plot_importance_vs_illiquidity(
             )
 
     ax.set_xlabel(r"$-\bar{\rho}_j$ (illiquidity-relatedness; higher = more illiquid-stock related)")
-    ax.set_ylabel("Ī_j (average XGBoost gain importance)")
+    ax.set_ylabel(f"Ī_j ({importance_label})")
     ax.set_title(
         "Feature Importance vs Illiquidity-Relatedness\n"
         f"(Spearman ρ = {spearman_rho:.3f}; N = {len(imp)} features)",
@@ -2834,8 +2214,9 @@ def plot_importance_vs_liquid_r2(
     liquid_r2: pd.Series,
     focal_features: list[str],
     output_path: str | Path,
+    importance_label: str = "average model importance",
 ) -> None:
-    """Scatter: Ī_j (y) vs R²_j(liquid) (x). Label 15 focal."""
+    """Scatter: Ī_j (y) vs R²_j(liquid) (x). Label focal characteristics."""
     import matplotlib.pyplot as plt
     _set_academic_style()
 
@@ -2863,7 +2244,7 @@ def plot_importance_vs_liquid_r2(
     spearman_rho, _ = _spearmanr(imp.values, r2.values)
 
     ax.set_xlabel(r"$R^2_j$(liquid) — univariate predictive $R^2$ among Q4--Q5 stocks")
-    ax.set_ylabel("Ī_j (average XGBoost gain importance)")
+    ax.set_ylabel(f"Ī_j ({importance_label})")
     ax.set_title(
         r"Feature Importance vs Liquid-Stock Predictive $R^2$"
         f"\n(Spearman ρ = {spearman_rho:.3f}; N = {len(imp)} features)"

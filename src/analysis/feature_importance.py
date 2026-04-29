@@ -12,12 +12,12 @@ Provides:
   5. Comparison visualization (standard vs weighted)
   6. Per-model and cross-model analysis
 
-Usage (after running 02_run_experiment.py):
+Usage (after running scripts/20_formal_run_experiment.py):
     from src.analysis.feature_importance import (
         load_importance, test_h2_group_shift, cross_model_h2_summary,
     )
 
-    data = load_importance("xgboost", importance_type="shap")
+    data = load_importance("xgboost", weight_spec="dolvol", importance_type="shap")
     h2 = test_h2_group_shift(data["standard"], data["weighted"])
     summary = cross_model_h2_summary()
 """
@@ -64,7 +64,7 @@ def compute_shap_values(
     Parameters
     ----------
     model : Fitted model instance (BaseReturnPredictor subclass).
-    model_name : ``"xgboost"``, ``"random_forest"``, or ``"neural_network"``.
+    model_name : ``"elastic_net"``, ``"xgboost"``, or ``"neural_network"``.
     X_test : (N, P) observations to explain.
     X_background : (M, P) background data (required for NN).
     feature_names : Feature names for columns.
@@ -85,7 +85,7 @@ def compute_shap_values(
     cfg = config or {}
     cols = feature_names or [f"f{i}" for i in range(X_test.shape[1])]
 
-    if model_name in ("xgboost", "random_forest"):
+    if model_name == "xgboost":
         inner = getattr(model, "model", model)
         explainer = shap.TreeExplainer(inner)
         sv = explainer.shap_values(X_test)
@@ -102,7 +102,7 @@ def compute_shap_values(
         else:
             X_bg = X_background
         explainer = shap.DeepExplainer(inner, X_bg)
-        sv = explainer.shap_values(X_bg)
+        sv = explainer.shap_values(X_test)
         if isinstance(sv, list):
             sv = sv[0]
     else:
@@ -132,6 +132,7 @@ def compute_mean_abs_shap(shap_df: pd.DataFrame) -> pd.Series:
 
 def load_importance(
     model_name: str,
+    weight_spec: str = "dolvol",
     importance_type: str = "shap",
     output_dir: str | Path | None = None,
 ) -> dict[str, pd.DataFrame]:
@@ -139,9 +140,12 @@ def load_importance(
 
     Parameters
     ----------
-    model_name : ``"xgboost"``, ``"random_forest"``, or ``"neural_network"``.
-    importance_type : ``"shap"`` or ``"gain"`` (gain = model-native importance).
-    output_dir : Override base output directory.
+    model_name : ``"elastic_net"``, ``"xgboost"``, or ``"neural_network"``.
+    weight_spec : Weighted formal-output folder, e.g. ``"dolvol"``,
+        ``"softmax_rank_lam2"``, or ``"tc_500m"``.
+    importance_type : ``"shap"`` or ``"native"``/``"gain"``.
+    output_dir : Override experiment root. Defaults to
+        ``outputs/formalanalysis/experiment``.
 
     Returns
     -------
@@ -149,21 +153,32 @@ def load_importance(
     with rows = months (yyyymm index), columns = features.
     """
     if output_dir is None:
-        base = get_output_dir() / "experiment" / model_name
+        base = get_output_dir() / "formalanalysis" / "experiment" / model_name
     else:
         base = Path(output_dir) / model_name
 
     if importance_type == "shap":
-        std_file = base / "shap_importance_std.csv"
-        wt_file = base / "shap_importance_wt.csv"
+        filename = "importance_shap.csv"
+    elif importance_type in {"native", "gain"}:
+        filename = "importance_native.csv"
     else:
-        std_file = base / "feature_importance_std.csv"
-        wt_file = base / "feature_importance_wt.csv"
+        raise ValueError("importance_type must be 'shap', 'native', or 'gain'")
 
-    std_df = pd.read_csv(std_file, index_col=0)
-    wt_df = pd.read_csv(wt_file, index_col=0)
+    std_file = base / "standard" / filename
+    wt_file = base / weight_spec / filename
+
+    std_df = _read_importance_file(std_file)
+    wt_df = _read_importance_file(wt_file)
 
     return {"standard": std_df, "weighted": wt_df}
+
+
+def _read_importance_file(path: Path) -> pd.DataFrame:
+    """Read current formal importance CSVs and index by yyyymm when present."""
+    df = pd.read_csv(path)
+    if "yyyymm" in df.columns:
+        df = df.set_index("yyyymm")
+    return df
 
 
 # ══════════════════════════════════════════════════════════════
@@ -362,6 +377,7 @@ def _categorize_feature(feature: str) -> str:
 
 def cross_model_h2_summary(
     model_names: list[str] | None = None,
+    weight_spec: str = "dolvol",
     importance_type: str = "shap",
     output_dir: str | Path | None = None,
     extended: bool = False,
@@ -370,7 +386,8 @@ def cross_model_h2_summary(
 
     Parameters
     ----------
-    model_names : Models to include. Default: all 3.
+    model_names : Models to include. Default: all active models.
+    weight_spec : Weighted formal-output folder to compare against standard.
     importance_type : ``"shap"`` or ``"gain"``.
     output_dir : Override output directory.
     extended : Use extended feature groups.
@@ -381,12 +398,17 @@ def cross_model_h2_summary(
     ratio_diff, t_stat, p_value, n_windows.
     """
     if model_names is None:
-        model_names = ["xgboost", "random_forest", "neural_network"]
+        model_names = ["elastic_net", "xgboost", "neural_network"]
 
     rows = []
     for name in model_names:
         try:
-            data = load_importance(name, importance_type, output_dir)
+            data = load_importance(
+                name,
+                weight_spec=weight_spec,
+                importance_type=importance_type,
+                output_dir=output_dir,
+            )
             h2 = test_h2_group_shift(
                 data["standard"], data["weighted"], extended=extended
             )

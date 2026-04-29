@@ -9,7 +9,9 @@ data/temp/
 # =========================
 # Experiment outputs
 # =========================
-# outputs/ — now tracked
+outputs/
+jobs/
+logs/
 
 # =========================
 # Python
@@ -53,23 +55,6 @@ Thumbs.db
 .env
 *.pem
 *.key
-
-# =========================
-# Large files (stay local only)
-# =========================
-outputs/motivation/step1/dvol/density_panel_data.csv
-outputs/motivation/step3/dvol/predictions.csv
-outputs/motivation/step3/dvol/predictions_with_quintile.csv
-outputs/motivation/step3/dvol/quintile_lookup.csv
-outputs/motivation/step3_quintile/dvol/*/predictions_*.parquet
-outputs/motivation/step3_quintile_rerank/dvol/*/predictions_*.csv
-outputs/motivation/step3_restriction/dvol/*/predictions_*.parquet
-outputs/motivation/step3_restriction_rerank/dvol/*/predictions_*.csv
-outputs/motivation/step3/dvol/fillna_issue.md
-
-# Formal-analysis prediction parquets (regenerable from HPC training)
-outputs/formalanalysis/experiment/*/*/predictions.parquet
-outputs/formalanalysis/experiment/*/*/predictions_std.parquet
 
 # =========================
 # Claude Code (local session state)

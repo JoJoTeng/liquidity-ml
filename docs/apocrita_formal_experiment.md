@@ -1,618 +1,514 @@
-# Apocrita Run: Formal Experiment (liquidity-ml, formalanalysis branch)
+# Apocrita Run: Full LiquidityML Pipeline
 
-> **Project:** LiquidityML v3 — 2x2 formal experiment (Sections 7–9 of the paper).
+> **Project:** LiquidityML v3
 > **Branch:** `formalanalysis`
-> **Goal:** Train all 21 model × weight specifications on HPC and generate the full set of tables and figures for the paper.
+> **HPC:** Apocrita / SLURM
+> **Project path:** `/data/home/tew775/liquidity-ml`
+> **Virtualenv:** `~/liquidml_env`
+> **Rule:** do not run data/training Python directly on the login node. Generate and submit SLURM jobs.
+
+This guide matches the current codebase and the current
+`scripts/generate_hpc_jobs.sh` pipeline. The recommended flow is to run
+`00_fetch_data.py` and `01_process_data.py` locally, upload the processed data
+files, and let Apocrita start from Motivation Step 1 / script `02`.
 
 ---
 
-## What This Run Produces
+## What Runs
 
-| Dimension | Values |
-|---|---|
-| Models | Elastic-Net, XGBoost, Neural Network |
-| Weight families | `dolvol` (DolVol/mean(DolVol), AUM-independent), `softmax_rank` at lambda 2 and lambda 3 (AUM-independent), `tc` (Eq. 23, AUM-dependent, alpha scale 3.0) |
-| AUM scenarios | $10M, $100M, $500M, $1B (TC only) |
-| Total specs | **21 jobs** = 3 models × (1 DolVol + 2 softmax-rank lambdas + 4 TC AUM levels) |
-
-Current `dolvol` definition:
-- `w_it = DolVol_it / mean_i(DolVol_it)` within each month.
-- This is intentionally mean-normalized, so the cross-sectional average sample weight equals 1.
-- If an older draft says the denominator is the median, treat that as superseded by the current code/config.
-
-Current `tc` definition:
-- `TC_it = Spread_it / 2 + lambda * sigma_it * sqrt(Q_it / ADV_it)`.
-- `w_it = exp(-alpha_t * TC_it)`, with `alpha_t = 3.0 / median_i(TC_it)`.
-- Weights are mean-normalized within each month before being passed as sample weights.
-
-Current `softmax_rank` definition:
-- `rank_it` is the within-month percentile rank of `DolVol_it`.
-- `w_it = exp(lambda * rank_it) / mean_i(exp(lambda * rank_it))`.
-- Current formal lambda grid: `lambda = 2` and `lambda = 3`.
-
-Each job trains:
-- **M_std** — standard (unweighted) model, shared across weight families within a model
-- **M_w** — weighted model for that specific weight spec
-
-**M_std sharing:** The first job to run for a given model creates `outputs/formalanalysis/experiment/{model}/standard/predictions.parquet`. Subsequent jobs for the same model check for this file and skip M_std training. So effectively you train 3 M_std's + 21 M_w's = 24 model fits across rolling windows.
-
----
-
-## Differences vs. Motivation Run (Apocrita_optuna.md)
-
-| Aspect | Motivation run | Formal experiment |
-|---|---|---|
-| Script | `07_step3_ml_diagnostics.py` + `10_quintile...` + `12_progressive...` | `02_run_experiment.py` (unified) |
-| Models | XGBoost only (M_std) | Elastic-Net + XGBoost + NN (M_std + M_w) |
-| Weighting | None (standard) | dolvol + softmax_rank + tc weights |
-| Hyperparameter tuning | Grid search (81 combos) | Grid search (81 combos XGB, 5 EN, 4 NN) |
-| Dependencies | xgboost, sklearn, pandas | + tensorflow, shap |
-| Output dir | `outputs/motivation/step3/dvol/` | `outputs/formalanalysis/experiment/{model}/{weight}/` |
-
----
-
-## Part A: First-Time Setup on Apocrita
-
-### A1. Login
+The generator supports two modes:
 
 ```bash
-ssh tew775@login.hpc.qmul.ac.uk
+bash scripts/generate_hpc_jobs.sh --from-processed --submit
 ```
 
-### A2. Clone project from GitHub (branch `formalanalysis`)
-
-On **Apocrita**:
-
-```bash
-cd /data/home/tew775
-git clone -b formalanalysis https://github.com/JoJoTeng/liquidity-ml.git liquidity-ml-formal
-cd liquidity-ml-formal
-git log --oneline -3
-```
-
-> **Note:** We use a separate directory `liquidity-ml-formal` so the formal experiment does not interfere with any existing `liquidity-ml` directory on Apocrita.
-
-### A3. Upload data files from Mac (not in git)
-
-The `data/` directory is not tracked in git (too large). Upload only the files the pipeline needs. From your **local Mac**:
+Recommended. Skips `00` and `01`; assumes `processed_panel.parquet` and
+`feature_list.json` were created locally and uploaded.
 
 ```bash
-# Panel data + feature list
-scp /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/data/signed_predictors_all_wide.parquet \
-  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/data/
-
-scp /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/data/feature_list.json \
-  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/data/
-
-# Fama-French factors CSV (for factor alpha regressions)
-scp /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/data/FFResearch_Data_Factors.csv \
-  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/data/
-
-# SignalDoc (used by motivation.py helpers; safe to upload even if unused here)
-scp /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/data/SignalDoc.csv \
-  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/data/ 2>/dev/null || true
-```
-
-You also need the Step 2 + Step 3 motivation outputs if you want `03_analyze_results.py` to produce Prediction 2 (ΔĪ_j regression + group shares) and Prediction 3 (restriction curve overlay). Upload them:
-
-```bash
-scp -r /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/outputs/motivation/step2 \
-  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/outputs/motivation/
-
-scp -r /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/outputs/motivation/step3_restriction_rerank \
-  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/outputs/motivation/
-```
-
-If you only want to run training (and do analysis locally), skip this step — training does not need those files.
-
-### A4. Create virtualenv & install dependencies
-
-Back on **Apocrita**:
-
-```bash
-cd /data/home/tew775/liquidity-ml-formal
-module load python
-python -m venv ~/formal_env
-source ~/formal_env/bin/activate
-pip install --upgrade pip
-pip install numpy pandas scikit-learn xgboost statsmodels matplotlib seaborn \
-  pyyaml pyarrow arch shap tensorflow
-```
-
-> **Note on TensorFlow:** If you only need Elastic-Net + XGBoost (skipping NN for now), you can omit `tensorflow` and save ~500MB. Add it later if you want NN results.
-
-### A5. Verify
-
-```bash
-python -c "import xgboost; print('XGBoost', xgboost.__version__)"
-python -c "import sklearn; print('sklearn', sklearn.__version__)"
-python -c "import tensorflow as tf; print('TensorFlow', tf.__version__)"
-python -c "import shap; print('SHAP', shap.__version__)"
-python -c "from src.weighting import compute_weights; print('weighting OK')"
-python -c "from src.models import create_model; m = create_model('elastic_net'); print('elastic_net OK')"
-python -c "from src.models import create_model; m = create_model('xgboost'); print('xgboost OK')"
-python -c "from src.models import create_model; m = create_model('neural_network'); print('neural_network OK')"
-```
-
-### A6. Verify data
-
-```bash
-cd /data/home/tew775/liquidity-ml-formal
-ls -lh data/signed_predictors_all_wide.parquet data/feature_list.json
-```
-
-Both must exist before submitting jobs.
-
-### A7. Verify branch
-
-```bash
-cd /data/home/tew775/liquidity-ml-formal
-git status
-git log --oneline -3
-```
-
-Should show you are on `formalanalysis` branch with the latest commits (`Fix formal analysis audit findings` + `LiquidityML v3 formal experiment pipeline`).
-
----
-
-## Part B: Returning to Existing Setup
-
-```bash
-ssh tew775@login.hpc.qmul.ac.uk
-cd /data/home/tew775/liquidity-ml-formal
-source ~/formal_env/bin/activate
-```
-
-### Update code from GitHub
-
-The standard workflow: commit + push from Mac, then pull on Apocrita.
-
-```bash
-# On Mac
-cd /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml
-git add -A
-git commit -m "your change"
-git push origin formalanalysis
-
-# On Apocrita
-cd /data/home/tew775/liquidity-ml-formal
-git fetch origin
-git pull origin formalanalysis
-git log --oneline -3  # confirm latest commit matches Mac
-```
-
-If you have uncommitted work on Apocrita that you need to keep, stash first:
-
-```bash
-git stash
-git pull origin formalanalysis
-git stash pop
-```
-
-Clean up old jobs:
-
-```bash
-rm -f jobs/*.sh logs/*
-```
-
----
-
-## Part C: Create & Submit Jobs (21 total)
-
-### Overview
-
-| Job type | Count | Runtime (est.) | Notes |
-|---|---|---|---|
-| Elastic-Net × 7 weight specs | 7 | ~4h each | Fast (linear model) |
-| XGBoost × 7 weight specs | 7 | ~24h each | Medium (81-combo grid × many windows) |
-| Neural Network × 7 weight specs | 7 | ~48h each | Slow (TF + ensemble optional) |
-
-**Total wall-clock if run sequentially:** ~532h (~22 days). **In parallel:** ~48h (limited by slowest NN job).
-
-### M_std sharing
-
-The first job to run per model trains M_std and saves it. Subsequent jobs for the same model reuse it. To avoid duplicate M_std training, submit **one job per model first** (to train M_std), then submit the other 6 jobs per model with a dependency. Or submit all 21 at once and accept that M_std gets trained once per model by whichever job wins the race.
-
-**Recommended: use the dependency chain.** M_std check-and-skip logic is based on file existence; if two jobs start M_std at the same time they may both train it. To maximize wall-clock speed and avoid wasted compute, use C2.
-
-### C1. Option 1 — Use the provided generator script
-
-The repo already includes `scripts/generate_hpc_jobs.sh`. First, update the paths inside it to match Apocrita:
-
-```bash
-cd /data/home/tew775/liquidity-ml-formal
-
-# Edit the two paths in generate_hpc_jobs.sh
-sed -i 's|PROJECT_DIR=.*|PROJECT_DIR="/data/home/tew775/liquidity-ml-formal"|' \
-  scripts/generate_hpc_jobs.sh
-sed -i 's|VENV=.*|VENV="source ~/formal_env/bin/activate"|' \
-  scripts/generate_hpc_jobs.sh
-
-# Generate jobs
-bash scripts/generate_hpc_jobs.sh
-```
-
-This creates `jobs/{elastic_net,xgboost,neural_network}_{dolvol,softmax_rank_lam2,softmax_rank_lam3,tc_10m,tc_100m,tc_500m,tc_1000m}.sh` — 21 job scripts total.
-
-### C2. Option 2 — Dependency chain (M_std shared cleanly)
-
-If you want to avoid duplicate M_std training, submit the DolVol job first per model (which trains M_std), then submit the TC jobs with `--dependency=afterok` on the DolVol job:
-
-```bash
-cd /data/home/tew775/liquidity-ml-formal
-mkdir -p jobs logs
-
-# Generate job scripts first
-bash scripts/generate_hpc_jobs.sh
-
-# Submit with dependency chain
-for MODEL in elastic_net xgboost neural_network; do
-    DOLVOL_ID=$(sbatch --parsable jobs/${MODEL}_dolvol.sh)
-    echo "${MODEL} dolvol (M_std trained here): $DOLVOL_ID"
-    sbatch --dependency=afterok:$DOLVOL_ID jobs/${MODEL}_softmax_rank_lam2.sh
-    sbatch --dependency=afterok:$DOLVOL_ID jobs/${MODEL}_softmax_rank_lam3.sh
-    for AUM in 10 100 500 1000; do
-        sbatch --dependency=afterok:$DOLVOL_ID jobs/${MODEL}_tc_${AUM}m.sh
-    done
-done
-echo "Submitted 21 jobs total (3 DolVol + 6 softmax_rank + 12 TC with dependency)"
-```
-
-### C3. Option 3 — Submit all 21 independently (fastest wall clock, may duplicate M_std)
-
-```bash
-cd /data/home/tew775/liquidity-ml-formal
 bash scripts/generate_hpc_jobs.sh --submit
 ```
 
-This submits all 21 jobs at once. Each model's M_std may be trained by the first weighted job to start.
+Full HPC mode. Runs `00` and `01` on Apocrita too. This is less convenient
+because `00` needs non-interactive WRDS authentication in a batch job.
 
-### C4. Monitor
+The recommended `--from-processed` mode submits this dependency chain:
 
-```bash
-squeue --me                            # all jobs
-squeue --me -t RUNNING                 # only running
-sacct --format=JobID,JobName,State,Elapsed,MaxRSS -j <jobid>  # after completion
-
-# Training logs go to .err (Python's logging writes to stderr by default)
-cat logs/xgboost_dolvol_*.err          # check XGBoost dolvol progress
-tail -f logs/xgboost_dolvol_*.err      # live stream
-```
-
-> **Why `.err` not `.out`:** Python's `logging` module writes all INFO/WARNING/ERROR to stderr. The `.out` file only contains `module load python` stdout (nothing useful for progress tracking).
-
-Expected `squeue` output after dependency submission:
-- `elastic_net_dolvol` — `R` (running, trains EN M_std)
-- `xgboost_dolvol` — `R` (running, trains XGB M_std)
-- `neural_network_dolvol` — `R` (running, trains NN M_std)
-- `*_tc_*` — `PD (Dependency)` until corresponding dolvol finishes
-
----
-
-## Part D: After All Jobs Complete
-
-### D1. Verify outputs on Apocrita
-
-```bash
-ssh tew775@login.hpc.qmul.ac.uk
-cd /data/home/tew775/liquidity-ml-formal
-
-for MODEL in elastic_net xgboost neural_network; do
-    echo "=== $MODEL ==="
-    ls -lh outputs/formalanalysis/experiment/$MODEL/standard/predictions.parquet 2>/dev/null
-    for WT in dolvol softmax_rank_lam2 softmax_rank_lam3 tc_10m tc_100m tc_500m tc_1000m; do
-        echo "  $WT:"
-        ls -lh outputs/formalanalysis/experiment/$MODEL/$WT/predictions.parquet 2>/dev/null
-    done
-done
-```
-
-Each row should show a non-zero-size `predictions.parquet`.
-
-### D2. Run analysis on Apocrita (optional — can do locally instead)
-
-```bash
-cd /data/home/tew775/liquidity-ml-formal
-source ~/formal_env/bin/activate
-
-# Full analysis: Predictions 1-4, Tables 11/12, hypothesis tests
-python scripts/03_analyze_results.py
-
-# Or per-model for debugging
-python scripts/03_analyze_results.py --model xgboost
-python scripts/03_analyze_results.py --model elastic_net
-python scripts/03_analyze_results.py --model neural_network
-```
-
-### D3. Download results to Mac
-
-From your **local Mac**:
-
-```bash
-cd /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml
-
-# Experiment outputs (predictions + importance files)
-scp -r "tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/outputs/formalanalysis/experiment" \
-  outputs/formalanalysis/
-
-# Analysis outputs (tables + figures) — only if you ran D2 on Apocrita
-scp -r "tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/outputs/formalanalysis/analysis" \
-  outputs/formalanalysis/
-```
-
-### D4. Run analysis locally
-
-```bash
-cd /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml
-python scripts/03_analyze_results.py
-```
-
-This generates everything in `outputs/formalanalysis/analysis/`.
-
----
-
-## Output Locations
-
-```
-outputs/formalanalysis/
-├── experiment/                             # From 02_run_experiment.py
-│   ├── elastic_net/
-│   │   ├── standard/                       # M_std (shared across weight families)
-│   │   │   ├── predictions.parquet
-│   │   │   ├── importance_shap.csv
-│   │   │   ├── importance_native.csv
-│   │   │   └── tuned_params.csv
-│   │   ├── dolvol/                         # M_w (weighted by dolvol)
-│   │   │   ├── predictions.parquet
-│   │   │   ├── importance_shap.csv
-│   │   │   ├── importance_native.csv
-│   │   │   ├── tuned_params.csv
-│   │   │   └── meta.json
-│   │   ├── softmax_rank_lam2/              # M_w (weighted by softmax DolVol rank, lambda=2)
-│   │   ├── softmax_rank_lam3/              # M_w (weighted by softmax DolVol rank, lambda=3)
-│   │   ├── tc_10m/                         # M_w (weighted by TC at $10M AUM)
-│   │   ├── tc_100m/
-│   │   ├── tc_500m/
-│   │   └── tc_1000m/
-│   ├── xgboost/                            # (same subfolder structure)
-│   └── neural_network/                     # (same subfolder structure)
-│
-└── analysis/                               # From 03_analyze_results.py
-    ├── tables/
-    │   ├── prediction_1_r2_{spec}.csv              # R² by quintile
-    │   ├── prediction_1_utility_r2_{spec}.csv      # Utility-weighted R²
-    │   ├── prediction_2_{spec}.csv                 # SHAP shift per feature
-    │   ├── prediction_2_regression_{spec}.json     # ΔĪ_j ~ γ̄_j regression
-    │   ├── prediction_2_group_shares_{spec}.csv    # Q1/Q5/both importance shares
-    │   ├── prediction_3_{spec}.csv                 # Weighted vs restriction curve
-    │   ├── prediction_4_{spec}.csv                 # Cumulative SE differential
-    │   ├── table_11_{spec}.csv                     # Within-quintile SR
-    │   ├── table_12_{spec}_10M.csv                 # 2x2 decomposition at $10M
-    │   ├── table_12_{spec}_100M.csv                # $100M
-    │   ├── table_12_{spec}_500M.csv                # $500M (primary)
-    │   ├── table_12_{spec}_1B.csv                  # $1B
-    │   └── hypothesis_tests.json                   # Consolidated H1–H4 tests
-    └── figures/
-        ├── importance_shift_{spec}.png             # Prediction 2 bar chart
-        ├── restriction_curve_{spec}.png            # Prediction 3 overlay
-        └── se_diff_{spec}.png                      # Prediction 4 time series
-```
-
-where `{spec}` = e.g. `xgboost_dolvol`, `xgboost_softmax_rank_lam3`, `xgboost_tc_500m`, etc. (21 specs total).
-
----
-
-## Resource Requests
-
-| Resource | Value | Rationale |
+| Stage | Script | Purpose |
 |---|---|---|
-| `-t` | 240:0:0 (10 days max) | Conservative upper bound; most jobs finish in ≤48h |
-| `--mem-per-cpu` | 8G (32G total with 4 cores) | Panel is ~8GB; XGBoost/NN add overhead |
-| `-n` | 4 cores | XGBoost parallel tree building; TF ops parallelisation |
+| 02 | `scripts/02_motivation_step1_divergence.py --liquidity dvol --vw` | Motivation Step 1 |
+| 03 | `scripts/03_motivation_step2_heterogeneity.py --liquidity dvol --full` | Motivation Step 2, including full-feature outputs |
+| 04 | `scripts/04_motivation_step3_ml_diagnostics.py --model {model} --liquidity dvol` | Standard model diagnostics and shared M_std cache |
+| 05 | `scripts/05_motivation_step3d_progressive_restriction.py` | Progressive restriction, split by minimum quintile |
+| 06 | `scripts/06_motivation_step3e_quintile_specific_models.py` | Quintile-specific models, split by quintile |
+| 07 | `scripts/07_motivation_regime_analysis.py` | Regime data download + regime diagnostics |
+| 20 | `scripts/20_formal_run_experiment.py` | Formal weighted model training |
+| 21 | `scripts/21_formal_analyze_results.py` | Final formal tables and figures |
 
-NN jobs may need more memory if TF allocates a lot. If you hit OOM:
+In `--from-processed` mode, the generator creates **62 SLURM job scripts**:
 
-```bash
-# Increase mem per CPU to 16G
-sed -i 's|mem-per-cpu=8G|mem-per-cpu=16G|' jobs/neural_network_*.sh
+- 4 shared prerequisite jobs: `02`, `03`, `07_download`, `07_regime`
+- 57 model-specific jobs: 19 jobs for each of `elastic_net`, `xgboost`, `neural_network`
+- 1 final analysis job: `21_formal_analyze_results`
+
+Full HPC mode creates **64 SLURM job scripts** because it also adds `00` and
+`01`.
+
+The formal experiment still has **21 model x weight specifications**:
+
+| Dimension | Values |
+|---|---|
+| Models | `elastic_net`, `xgboost`, `neural_network` |
+| Weight families | `dolvol`, `softmax_rank`, `tc` |
+| Softmax lambdas | `2`, `3` |
+| TC AUM scenarios | `$10M`, `$100M`, `$500M`, `$1B` |
+| Formal specs | `3 models x (1 dolvol + 2 softmax + 4 TC) = 21` |
+
+Formal outputs are saved under:
+
+```text
+outputs/formalanalysis/experiment/{model}/standard/
+outputs/formalanalysis/experiment/{model}/dolvol/
+outputs/formalanalysis/experiment/{model}/softmax_rank_lam2/
+outputs/formalanalysis/experiment/{model}/softmax_rank_lam3/
+outputs/formalanalysis/experiment/{model}/tc_10m/
+outputs/formalanalysis/experiment/{model}/tc_100m/
+outputs/formalanalysis/experiment/{model}/tc_500m/
+outputs/formalanalysis/experiment/{model}/tc_1000m/
 ```
+
+Motivation Step 3 outputs are saved under:
+
+```text
+outputs/motivation/step3/{model}/dvol/
+outputs/motivation/step3_restriction/{model}/dvol/global/baseline/
+outputs/motivation/step3_quintile/{model}/dvol/global/baseline/
+outputs/motivation/step1_regime/xgboost/dvol/
+```
+
+`07` uses the `xgboost` namespace only because the regime diagnostics are
+model-independent in the current code.
 
 ---
 
-## Troubleshooting
+## Current Weight Definitions
 
-### Check if a job failed
+`dolvol`:
 
-```bash
-sacct -j <jobid> --format=JobID,State,ExitCode,Elapsed,MaxRSS
-cat logs/<jobname>_<jobid>.err
-cat logs/<jobname>_<jobid>.out
+```text
+w_it = DolVol_it / mean_i(DolVol_it)
 ```
 
-### Common issues
+This is mean-normalized within each month, so average sample weight is 1.
 
-**`ModuleNotFoundError: No module named 'tensorflow'`**
-```bash
-source ~/formal_env/bin/activate
-pip install tensorflow
+`softmax_rank`:
+
+```text
+rank_it = within-month percentile rank of DolVol_it
+w_it = exp(lambda * rank_it) / mean_i(exp(lambda * rank_it))
 ```
 
-**`ModuleNotFoundError: No module named 'shap'`**
-```bash
-source ~/formal_env/bin/activate
-pip install shap
+The formal grid is `lambda = 2` and `lambda = 3`. The current
+`20_formal_run_experiment.py` requires `--softmax-lambda`; there is no ambiguous
+default softmax output folder anymore.
+
+`tc`:
+
+```text
+TC_it = Spread_it / 2 + lambda_market_impact * sigma_it * sqrt(Q_it / ADV_it)
+w_it = exp(-alpha_t * TC_it)
 ```
 
-**`feature_list.json not found`** — Not in git; upload from Mac:
-```bash
-# From Mac
-scp /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/data/feature_list.json \
-  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/data/
-```
-
-**`signed_predictors_all_wide.parquet not found`** — Same — upload from Mac:
-```bash
-scp /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/data/signed_predictors_all_wide.parquet \
-  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml-formal/data/
-```
-
-**`git pull` shows conflicts** — Someone (or you) committed on a different branch. Reset hard to `origin/formalanalysis`:
-```bash
-cd /data/home/tew775/liquidity-ml-formal
-git fetch origin
-git reset --hard origin/formalanalysis
-```
-
-**M_std skipped but weighted job crashed mid-run** — Delete the incomplete weighted directory and resubmit:
-```bash
-rm -rf outputs/formalanalysis/experiment/xgboost/dolvol
-sbatch jobs/xgboost_dolvol.sh
-```
-
-**M_std needs to be re-trained (e.g. after code change)** — Delete the standard directory:
-```bash
-rm -rf outputs/formalanalysis/experiment/xgboost/standard
-sbatch jobs/xgboost_dolvol.sh  # will re-train M_std + M_w (dolvol)
-```
-
-### Cancelling jobs
-
-```bash
-scancel <jobid>                # single job
-scancel -u tew775              # all your jobs
-scancel --name=xgboost_dolvol  # by name
-```
-
-### Manual re-run of a single job
-
-```bash
-cd /data/home/tew775/liquidity-ml-formal
-source ~/formal_env/bin/activate
-
-# Quick test (2020-2024, ~60 OOS months)
-python scripts/02_run_experiment.py --model xgboost --weights dolvol --quick
-
-# Full run (2000-2024)
-python scripts/02_run_experiment.py --model xgboost --weights dolvol
-```
+Then `w_it` is mean-normalized within month. The sigma input is
+`excess_sigma_12m_daily`, produced by `01_process_data.py` through
+`load_panel()`.
 
 ---
 
-## Quick Sanity Check Before Full Submission
+## M_std Sharing
 
-> **Important:** Apocrita's login node does NOT allow long-running processes (>10 min wall time). You cannot just `python scripts/02_run_experiment.py` on the login node — the cluster will kill it. Always go through the scheduler (`sbatch`) even for quick tests.
+`04_motivation_step3_ml_diagnostics.py` trains the standard model for each
+model family and writes the shared formal cache:
 
-Submit a short test job that uses `--quick` (OOS 2020-2024, ~30 min runtime on 4 cores):
+```text
+outputs/formalanalysis/experiment/{model}/standard/
+```
+
+The formal weighted jobs in `20_formal_run_experiment.py` depend on the
+corresponding Step 04 job. That means:
+
+- M_std is trained once per model.
+- Each formal `20` job trains only its weighted model if the standard cache is complete.
+- The only intended difference between standard and weighted formal training is `sample_weight`.
+
+This is why the generator does **not** submit all formal jobs independently.
+
+---
+
+## Before Resetting HPC
+
+The current local code has many renamed and newly created files. Before deleting
+and recloning on Apocrita, make sure the current branch has been committed and
+pushed, or the HPC clone will get stale code.
+
+Locally:
+
+```bash
+cd /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml
+git status
+git branch --show-current
+git remote -v
+```
+
+Expected branch:
+
+```text
+formalanalysis
+```
+
+After committing/pushing the current code, continue on HPC.
+
+---
+
+## Local Data Preparation
+
+Run `00` and `01` locally first:
+
+```bash
+cd /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml
+python scripts/00_fetch_data.py
+python scripts/01_process_data.py
+```
+
+After this, local `data/` should contain:
+
+```text
+data/signed_predictors_all_wide.csv
+data/signed_predictors_all_wide.parquet
+data/processed_panel.parquet
+data/feature_list.json
+```
+
+The key files needed by the HPC jobs are `processed_panel.parquet` and
+`feature_list.json`; `signed_predictors_all_wide.*` are useful to keep as
+reproducibility backups, but Step `02` onward does not read them.
+
+---
+
+## Fresh HPC Setup
+
+Login:
 
 ```bash
 ssh tew775@login.hpc.qmul.ac.uk
-cd /data/home/tew775/liquidity-ml-formal
-mkdir -p jobs logs
+cd /data/home/tew775
+```
 
-cat > jobs/quick_test.sh << 'JOBEOF'
-#!/bin/bash
-#SBATCH -J quick_test
-#SBATCH -n 4
-#SBATCH --mem-per-cpu=8G
-#SBATCH -t 4:0:0
-#SBATCH -o logs/quick_test_%j.out
-#SBATCH -e logs/quick_test_%j.err
-module load python
-source ~/formal_env/bin/activate
-export OMP_NUM_THREADS=${SLURM_NTASKS}
-export PYTHONHASHSEED=0
-cd /data/home/tew775/liquidity-ml-formal
-python scripts/02_run_experiment.py --model xgboost --weights dolvol --quick
-JOBEOF
+Safer reset:
 
-sbatch jobs/quick_test.sh
+```bash
+mv liquidity-ml liquidity-ml_backup_$(date +%Y%m%d_%H%M%S)
+git clone -b formalanalysis https://github.com/JoJoTeng/liquidity-ml.git liquidity-ml
+cd liquidity-ml
+```
+
+If you really want to delete instead of backup:
+
+```bash
+rm -rf /data/home/tew775/liquidity-ml
+git clone -b formalanalysis https://github.com/JoJoTeng/liquidity-ml.git liquidity-ml
+cd liquidity-ml
+```
+
+Do **not** delete `~/liquidml_env` unless you plan to rebuild the Python
+environment.
+
+---
+
+## Required Non-Git Data Files
+
+The repo clone is not enough. For the recommended `--from-processed` HPC flow,
+upload these files:
+
+```text
+data/processed_panel.parquet
+data/feature_list.json
+data/SignalDoc.csv
+data/FFResearch_Data_Factors.csv
+data/ff5_factors.csv
+data/momentum_factor.csv
+```
+
+From your Mac:
+
+```bash
+cd /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml
+ssh tew775@login.hpc.qmul.ac.uk "mkdir -p /data/home/tew775/liquidity-ml/data"
+
+scp data/processed_panel.parquet \
+    data/feature_list.json \
+    data/SignalDoc.csv \
+    data/FFResearch_Data_Factors.csv \
+    data/ff5_factors.csv \
+    data/momentum_factor.csv \
+  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml/data/
+```
+
+Optional backups to upload:
+
+```bash
+scp data/signed_predictors_all_wide.csv \
+    data/signed_predictors_all_wide.parquet \
+  tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml/data/
+```
+
+Only if you choose full HPC mode, also upload:
+
+```text
+data/temp/signed_predictors_dl_wide.zip
+```
+
+Full HPC mode WRDS note: `00_fetch_data.py` calls `wrds.Connection(...)`. If
+Apocrita cannot authenticate to WRDS non-interactively inside a batch job,
+configure WRDS credentials before submitting. Otherwise job `00_fetch_data` may
+fail or hang. This is why the local `00`/`01` flow is cleaner.
+
+---
+
+## Login Node Rule
+
+Do not run these directly on the login node:
+
+```bash
+python scripts/00_fetch_data.py
+python scripts/01_process_data.py
+python scripts/04_motivation_step3_ml_diagnostics.py
+python scripts/20_formal_run_experiment.py
+python scripts/21_formal_analyze_results.py
+```
+
+Allowed on the login node:
+
+```bash
+bash -n scripts/generate_hpc_jobs.sh
+bash scripts/generate_hpc_jobs.sh
+squeue --me
+sacct ...
+tail -f logs/<job>_<jobid>.err
+```
+
+Python import checks are usually fine, but anything that reads the 2.4 GB panel
+or trains a model should go through `sbatch`.
+
+---
+
+## Generate and Submit the Pipeline
+
+On HPC:
+
+```bash
+cd /data/home/tew775/liquidity-ml
+source ~/liquidml_env/bin/activate
+
+bash -n scripts/generate_hpc_jobs.sh
+bash scripts/generate_hpc_jobs.sh --from-processed
+ls jobs | wc -l
+```
+
+Expected:
+
+```text
+62
+```
+
+Submit the full dependency chain:
+
+```bash
+bash scripts/generate_hpc_jobs.sh --from-processed --submit
+```
+
+The generator submits dependencies in this order:
+
+```text
+02 -> 03
+07_download -> 07_regime
+04_{model}
+04_{model} -> 05 shards -> 05 collect
+04_{model} -> 06 shards -> 06 collect
+04_{model} -> 20 formal weighted jobs
+03 + 07 + 05 collects + 06 collects + 20 jobs -> 21
 ```
 
 Monitor:
 
 ```bash
-squeue --me                         # should show quick_test in PD or R state
-tail -f logs/quick_test_*.err       # see note below about .err vs .out
+squeue --me
+tail -f logs/02_motivation_step1_dvol_*.err
 ```
 
-> **Where the training logs go:** Python's `logging` module writes to **stderr** by default, so all the `[INFO]` training messages end up in `logs/quick_test_*.err`, NOT in `logs/quick_test_*.out`. The `.out` file only contains module-load output (`Loading python/3.11.7...`). This is normal — watch the `.err` file for training progress.
+Training logs usually appear in `.err` because Python logging writes to stderr.
+The `.out` files mostly contain module-load output.
 
-Expected lines in `.err` during a successful run:
+---
 
-```
-[INFO] 02_experiment: QUICK MODE: OOS 2020-01 to 2024-12
-[INFO] src.data.loader: Panel ready: ...
-[INFO] 02_experiment: === Training M_std (standard) ===
-[INFO] 02_experiment: Rolling training [std]: model=xgboost, months=59, ...
-[INFO]   [std] Tuning at month 202001 (1/59)
-[INFO] src.models.xgboost_model: XGBoost standard training: 1000 trees, ...
-...
-[INFO] 02_experiment: M_std complete: XXXX predictions in X.X min
-[INFO] 02_experiment: === Training M_w (weighted: dolvol, aum=N/A) ===
-...
-[INFO] 02_experiment: M_w complete: XXXX predictions in X.X min
-[INFO] 02_experiment: All done. Outputs in: ...
-```
+## Output Checks
 
-Check the output files after it finishes:
+After all jobs complete:
 
 ```bash
-ls -lh outputs/formalanalysis/experiment/xgboost/standard/
-ls -lh outputs/formalanalysis/experiment/xgboost/dolvol/
+cd /data/home/tew775/liquidity-ml
+squeue --me
 ```
 
-If everything looks good, delete the quick-test outputs (they use OOS=2020 instead of 2000) and submit the full jobs:
+Check formal predictions:
+
+```bash
+for MODEL in elastic_net xgboost neural_network; do
+    echo "=== ${MODEL} ==="
+    ls -lh outputs/formalanalysis/experiment/${MODEL}/standard/predictions.parquet
+    for WT in dolvol softmax_rank_lam2 softmax_rank_lam3 tc_10m tc_100m tc_500m tc_1000m; do
+        ls -lh outputs/formalanalysis/experiment/${MODEL}/${WT}/predictions.parquet
+    done
+done
+```
+
+Expected: 24 prediction files.
+
+Check motivation outputs:
+
+```bash
+for MODEL in elastic_net xgboost neural_network; do
+    ls outputs/motivation/step3/${MODEL}/dvol/predictions.parquet
+    ls outputs/motivation/step3_restriction/${MODEL}/dvol/global/baseline/restriction_comparison.csv
+    ls outputs/motivation/step3_quintile/${MODEL}/dvol/global/baseline/r2_comparison.csv
+done
+```
+
+Check final analysis:
+
+```bash
+ls outputs/formalanalysis/analysis/tables
+ls outputs/formalanalysis/analysis/figures
+```
+
+Look for real failures:
+
+```bash
+grep -iE "traceback|error|failed|killed|oom" logs/*.err | \
+  grep -vE "cuda|Could not find cuda|date_parser|FutureWarning|DeprecationWarning" | \
+  head -50
+```
+
+---
+
+## Download Results
+
+From your Mac:
+
+```bash
+cd /Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml
+mkdir -p outputs/formalanalysis outputs/motivation
+
+scp -r tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml/outputs/formalanalysis \
+  outputs/
+
+scp -r tew775@login.hpc.qmul.ac.uk:/data/home/tew775/liquidity-ml/outputs/motivation \
+  outputs/
+```
+
+If you already let job `21` run on HPC, you do not need to rerun `21` locally
+unless you changed analysis-only code.
+
+---
+
+## Rerunning Parts Safely
+
+Rerun all HPC jobs from uploaded processed data:
+
+```bash
+rm -rf jobs logs outputs data/regime_indicators.csv
+mkdir -p jobs logs outputs
+bash scripts/generate_hpc_jobs.sh --from-processed --submit
+```
+
+Rerun formal training for one model after changing model/training code:
 
 ```bash
 rm -rf outputs/formalanalysis/experiment/xgboost
-bash scripts/generate_hpc_jobs.sh --submit
+bash scripts/generate_hpc_jobs.sh --from-processed
+sbatch jobs/04_step3_xgboost_dvol.sh
 ```
+
+Then submit the dependent jobs manually or rerun the full generator with
+dependencies after cleaning the affected outputs.
+
+Rerun analysis only:
+
+```bash
+sbatch jobs/21_formal_analyze_results.sh
+```
+
+This reads existing outputs and does not retrain models.
+
+---
+
+## Troubleshooting
+
+Check a job:
+
+```bash
+sacct -j <jobid> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS
+cat logs/<jobname>_<jobid>.err
+```
+
+Cancel jobs:
+
+```bash
+scancel <jobid>
+scancel -u tew775
+```
+
+Common issues:
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `signed_predictors_dl_wide.zip not found` | CZ ZIP not uploaded | Upload to `data/temp/` |
+| `SignalDoc.csv not found` | ignored data file missing | Upload to `data/` |
+| `processed_panel.parquet not found` | processed file was not uploaded | Run local `00/01`, upload `processed_panel.parquet` |
+| FF5+Mom analysis falls back | factor CSVs missing | Upload `ff5_factors.csv` and `momentum_factor.csv` |
+| Step 05/06 says `tuned_params.csv not found` | Step 04 failed or did not finish | Inspect `04_step3_*` logs |
+| `21` misses Prediction 3 | Step 05 collect output missing | Inspect `05_restrict_*_collect` logs |
+| `git pull` blocked by outputs | stale untracked outputs | move/delete `outputs/` before pull |
 
 ---
 
 ## Checklist
 
-### Before submitting jobs
-- [ ] `liquidity-ml-formal` cloned from GitHub on `formalanalysis` branch
-- [ ] Latest commit on Apocrita matches latest commit on Mac (`git log --oneline -3`)
-- [ ] `~/formal_env` created with all dependencies installed (`xgboost`, `tensorflow`, `shap`, `scikit-learn`, `statsmodels`, `pandas`, `pyarrow`, etc.)
-- [ ] `data/signed_predictors_all_wide.parquet` uploaded via scp
-- [ ] `data/feature_list.json` uploaded via scp
-- [ ] `data/FFResearch_Data_Factors.csv` uploaded via scp
-- [ ] (Optional) `outputs/motivation/step2/` and `outputs/motivation/step3_restriction_rerank/` uploaded if running Predictions 2 & 3 on Apocrita
-- [ ] Import smoke tests pass (A5)
-- [ ] Quick test with `--quick` flag succeeds (~30 min, optional but recommended)
-- [ ] 21 job scripts generated in `jobs/`
-- [ ] Paths in `jobs/*.sh` point to `/data/home/tew775/liquidity-ml-formal` and `~/formal_env`
+Before submit:
 
-### After jobs complete
-- [ ] All 21 jobs finished (`squeue --me` shows empty)
-- [ ] `predictions.parquet` exists for all 3 models × 7 weight specs (21 files) plus 3 standard/ (total 24 files)
-- [ ] Optional: run `03_analyze_results.py` on Apocrita for a fast sanity check
-- [ ] Download `outputs/formalanalysis/experiment/` to Mac
-- [ ] Run `03_analyze_results.py` locally to generate tables + figures
-- [ ] Inspect `outputs/formalanalysis/analysis/tables/hypothesis_tests.json` for H1/H3 p-values
+- [ ] Current local code committed and pushed to `formalanalysis`
+- [ ] Local `00_fetch_data.py` and `01_process_data.py` completed successfully
+- [ ] HPC repo freshly cloned or pulled
+- [ ] `~/liquidml_env` exists
+- [ ] Processed panel, feature list, SignalDoc, and factor CSVs uploaded
+- [ ] `bash -n scripts/generate_hpc_jobs.sh` passes
+- [ ] `bash scripts/generate_hpc_jobs.sh --from-processed` creates 62 jobs
+- [ ] `bash scripts/generate_hpc_jobs.sh --from-processed --submit` submitted the dependency chain
+
+After completion:
+
+- [ ] `squeue --me` is empty
+- [ ] 24 formal prediction files exist
+- [ ] Motivation Step 3, 3d, 3e outputs exist for all three models
+- [ ] `outputs/formalanalysis/analysis/tables/` and `figures/` exist
+- [ ] Logs do not contain real tracebacks/OOM/failed jobs
 
 ---
 
-## Estimated Timeline
+## Related Files
 
-Assuming good parallelism and no queue delays:
-
-| Phase | Duration |
-|---|---|
-| Setup (A1–A6) | ~1h |
-| Quick test (optional) | ~30 min |
-| Full job wall-clock (parallel) | ~48h (limited by slowest NN job) |
-| Download + analysis | ~30 min |
-| **Total** | **~2.5 days** |
-
-If queue is busy, add 6–24h waiting time per job launch.
-
----
-
-## Related Documents
-
-- `scripts/generate_hpc_jobs.sh` — the job generator script (baseline for job templates)
-- `CLAUDE.md` — project architecture and build order
-- `LiquidityML_v3.pdf` — Sections 7–9 for the theory behind the 2x2 framework
+- `scripts/generate_hpc_jobs.sh`
+- `scripts/20_formal_run_experiment.py`
+- `scripts/21_formal_analyze_results.py`
+- `docs/run_order_cheat_sheet.md`
+- `docs/weighting_schemes.md`

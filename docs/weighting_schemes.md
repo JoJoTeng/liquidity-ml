@@ -6,8 +6,8 @@ This note documents the weighting schemes currently implemented in the formal ex
 
 - Config: [`config/config.yaml`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/config/config.yaml)
 - Weight construction: [`src/weighting/schemes.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/src/weighting/schemes.py)
-- Formal training script: [`scripts/02_run_experiment.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/02_run_experiment.py)
-- Formal analysis script: [`scripts/03_analyze_results.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/03_analyze_results.py)
+- Formal training script: [`scripts/20_formal_run_experiment.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/20_formal_run_experiment.py)
+- Formal analysis script: [`scripts/21_formal_analyze_results.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/21_formal_analyze_results.py)
 - HPC job generator: [`scripts/generate_hpc_jobs.sh`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/generate_hpc_jobs.sh)
 
 ## Implemented Schemes
@@ -44,7 +44,7 @@ rank_it = percentile_rank_i(DolVol_it) within month t
 w_it = exp(lambda * rank_it) / mean_i(exp(lambda * rank_it))
 ```
 
-Default setting:
+Config setting:
 
 ```yaml
 weighting:
@@ -52,16 +52,17 @@ weighting:
   softmax_rank_lambdas: [2.0, 3.0]
 ```
 
-The scalar `softmax_rank_lambda` is the default used when no command-line
-override is supplied. The list `softmax_rank_lambdas` records the formal
-robustness grid we currently want to run.
+The scalar `softmax_rank_lambda` is the low-level default used by
+`compute_weights()` when no override is supplied. The formal training script
+requires an explicit `--softmax-lambda` and checks that value against
+`softmax_rank_lambdas`, which is the formal robustness grid.
 
 Implementation:
 
 ```text
 scheme = "softmax_rank"
-python scripts/02_run_experiment.py --weights softmax_rank --softmax-lambda 2
-python scripts/02_run_experiment.py --weights softmax_rank --softmax-lambda 3
+python scripts/20_formal_run_experiment.py --weights softmax_rank --softmax-lambda 2
+python scripts/20_formal_run_experiment.py --weights softmax_rank --softmax-lambda 3
 ```
 
 Interpretation:
@@ -220,7 +221,7 @@ If a result holds under all three, it is stronger because it survives raw capaci
 
 ## Softmax Lambda Reference Table
 
-The table below shows how the softmax-rank parameter `lambda` changes the average training weight by NYSE dollar-volume breakpoint quintile. We currently keep `lambda = 2.0` as the default and add `lambda = 3.0` as the stronger-liquidity-tilt robustness case.
+The table below shows how the softmax-rank parameter `lambda` changes the average training weight by NYSE dollar-volume breakpoint quintile. We currently keep `lambda = 2.0` as the main reference case and add `lambda = 3.0` as the stronger-liquidity-tilt robustness case.
 
 Formula:
 
@@ -245,6 +246,6 @@ Reading the table:
 
 - `lambda = 0` gives equal weights.
 - Higher `lambda` shifts weight monotonically from Q1/Q2 toward Q4/Q5.
-- `lambda = 2` is the default setting and keeps Q1/Q2 below 1 while keeping Q3 above 1.
+- `lambda = 2` is the main reference setting and keeps Q1/Q2 below 1 while keeping Q3 above 1.
 - `lambda = 3` is the stronger robustness case: Q1/Q2 are downweighted more heavily and Q5 receives about `2.689` times average weight.
 - `lambda >= 4` is substantially more aggressive; by `lambda = 6`, Q3 falls below 1.
