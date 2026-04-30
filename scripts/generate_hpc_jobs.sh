@@ -124,7 +124,8 @@ write_job "03_motivation_step2_dvol_full" 4 "24G" "120:0:0" \
 # model-independent and the model argument only namespaces outputs.
 write_job "07_regime_download" 1 "4G" "12:0:0" \
     "python scripts/07_motivation_regime_analysis.py --download-regime-data"
-write_job "07_regime_xgboost_dvol" 1 "8G" "24:0:0" \
+# Regime plots read the full processed panel and can exceed an 8G allocation.
+write_job "07_regime_xgboost_dvol" 2 "32G" "24:0:0" \
     "python scripts/07_motivation_regime_analysis.py --model xgboost --liquidity dvol"
 
 for MODEL in "${MODELS[@]}"; do
@@ -137,7 +138,8 @@ for MODEL in "${MODELS[@]}"; do
         write_job "05_restrict_${MODEL}_mq${MQ}" 4 "12G" "240:0:0" \
             "python scripts/05_motivation_step3d_progressive_restriction.py --model ${MODEL} --liquidity dvol --normalization global --use-baseline-params --min-quintile ${MQ}"
     done
-    write_job "05_restrict_${MODEL}_collect" 1 "8G" "24:0:0" \
+    # Collect jobs read all shard predictions and aggregate tables/plots.
+    write_job "05_restrict_${MODEL}_collect" 2 "32G" "24:0:0" \
         "python scripts/05_motivation_step3d_progressive_restriction.py --model ${MODEL} --liquidity dvol --normalization global --use-baseline-params --use-cache"
 
     # Step 3e quintile-specific models split by quintile, then one collect job.
@@ -145,7 +147,7 @@ for MODEL in "${MODELS[@]}"; do
         write_job "06_quintile_${MODEL}_q${Q}" 4 "12G" "240:0:0" \
             "python scripts/06_motivation_step3e_quintile_specific_models.py --model ${MODEL} --liquidity dvol --normalization global --use-baseline-params --quintile ${Q}"
     done
-    write_job "06_quintile_${MODEL}_collect" 1 "8G" "24:0:0" \
+    write_job "06_quintile_${MODEL}_collect" 2 "32G" "24:0:0" \
         "python scripts/06_motivation_step3e_quintile_specific_models.py --model ${MODEL} --liquidity dvol --normalization global --use-baseline-params --use-cache"
 
     # Formal weighted-training specs. M_std is pre-populated by Step 04.

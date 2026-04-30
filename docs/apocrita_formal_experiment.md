@@ -477,6 +477,8 @@ Common issues:
 | `processed_panel.parquet not found` | processed file was not uploaded | Run local `00/01`, upload `processed_panel.parquet` |
 | FF5+Mom analysis falls back | factor CSVs missing | Upload `ff5_factors.csv` and `momentum_factor.csv` |
 | Step 03 exits with OOM | full 113-feature heterogeneity run needs more memory | Use the current generator; Step 03 requests `4 x 24G` |
+| Step 05/06 collect exits with OOM | collect jobs read all shard predictions | Use the current generator; collect jobs request `2 x 32G` |
+| Regime analysis exits with OOM | regime plots read the full processed panel | Use the current generator; regime analysis requests `2 x 32G` |
 | Step 05/06 says `tuned_params.csv not found` | Step 04 failed or did not finish | Inspect `04_step3_*` logs |
 | `21` misses Prediction 3 | Step 05 collect output missing | Inspect `05_restrict_*_collect` logs |
 | `git pull` blocked by outputs | stale untracked outputs | move/delete `outputs/` before pull |
