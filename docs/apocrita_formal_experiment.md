@@ -476,6 +476,7 @@ Common issues:
 | `SignalDoc.csv not found` | ignored data file missing | Upload to `data/` |
 | `processed_panel.parquet not found` | processed file was not uploaded | Run local `00/01`, upload `processed_panel.parquet` |
 | FF5+Mom analysis falls back | factor CSVs missing | Upload `ff5_factors.csv` and `momentum_factor.csv` |
+| Step 03 exits with OOM | full 113-feature heterogeneity run needs more memory | Use the current generator; Step 03 requests `4 x 24G` |
 | Step 05/06 says `tuned_params.csv not found` | Step 04 failed or did not finish | Inspect `04_step3_*` logs |
 | `21` misses Prediction 3 | Step 05 collect output missing | Inspect `05_restrict_*_collect` logs |
 | `git pull` blocked by outputs | stale untracked outputs | move/delete `outputs/` before pull |

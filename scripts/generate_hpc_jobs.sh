@@ -114,7 +114,10 @@ if [ "${FROM_PROCESSED}" = false ]; then
 fi
 write_job "02_motivation_step1_dvol" 2 "12G" "120:0:0" \
     "python scripts/02_motivation_step1_divergence.py --liquidity dvol --vw"
-write_job "03_motivation_step2_dvol_full" 2 "12G" "120:0:0" \
+# Step 2 --full runs both the focal 15-feature and full 113-feature
+# interaction regressions. The full run is memory-heavy, so give it a wider
+# allocation than Step 1.
+write_job "03_motivation_step2_dvol_full" 4 "24G" "120:0:0" \
     "python scripts/03_motivation_step2_heterogeneity.py --liquidity dvol --full"
 
 # Optional regime extension: xgboost namespace only because the plots are
