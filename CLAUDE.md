@@ -30,7 +30,11 @@ python scripts/06_motivation_step3e_quintile_specific_models.py --model xgboost 
 python scripts/07_motivation_regime_analysis.py --model xgboost --liquidity dvol
 
 python scripts/20_formal_run_experiment.py --model xgboost --weights dolvol
-python scripts/21_formal_analyze_results.py
+python scripts/21a_formal_liquid_r2.py
+python scripts/21b_formal_importance_reallocation.py
+python scripts/21c_formal_restriction_curve.py
+python scripts/21d_formal_error_differential.py
+python scripts/21e_formal_portfolio_decomposition.py
 ```
 
 For Apocrita, generate SLURM jobs instead of running Python directly on the
@@ -140,7 +144,7 @@ The restricted-universe motivation scripts `05` and `06` support two modes:
 - Regime diagnostics are model-independent; the `--model` argument only
   namespaces their outputs.
 - The primary formal R-squared tables use the zero benchmark. Extra benchmarks
-  are available in `scripts/21_formal_analyze_results.py --extra-benchmarks`.
+  are available in `scripts/21a_formal_liquid_r2.py --extra-benchmarks`.
 
 ## Testing
 

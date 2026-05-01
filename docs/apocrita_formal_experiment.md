@@ -43,15 +43,14 @@ The recommended `--from-processed` mode submits this dependency chain:
 | 06 | `scripts/06_motivation_step3e_quintile_specific_models.py` | Quintile-specific models, split by quintile |
 | 07 | `scripts/07_motivation_regime_analysis.py` | Regime data download + regime diagnostics |
 | 20 | `scripts/20_formal_run_experiment.py` | Formal weighted model training |
-| 21 | `scripts/21_formal_analyze_results.py` | Final formal tables and figures |
+| 21a-21e | `scripts/21*_formal_*.py` | Local formal tables and figures after downloading outputs |
 
-In `--from-processed` mode, the generator creates **62 SLURM job scripts**:
+In `--from-processed` mode, the generator creates **61 SLURM job scripts**:
 
 - 4 shared prerequisite jobs: `02`, `03`, `07_download`, `07_regime`
 - 57 model-specific jobs: 19 jobs for each of `elastic_net`, `xgboost`, `neural_network`
-- 1 final analysis job: `21_formal_analyze_results`
 
-Full HPC mode creates **64 SLURM job scripts** because it also adds `00` and
+Full HPC mode creates **63 SLURM job scripts** because it also adds `00` and
 `01`.
 
 The formal experiment still has **21 model x weight specifications**:
@@ -284,7 +283,6 @@ python scripts/00_fetch_data.py
 python scripts/01_process_data.py
 python scripts/04_motivation_step3_ml_diagnostics.py
 python scripts/20_formal_run_experiment.py
-python scripts/21_formal_analyze_results.py
 ```
 
 Allowed on the login node:
@@ -384,11 +382,23 @@ for MODEL in elastic_net xgboost neural_network; do
 done
 ```
 
-Check final analysis:
+After downloading outputs locally, run/check formal analysis:
 
 ```bash
-ls outputs/formalanalysis/analysis/tables
-ls outputs/formalanalysis/analysis/figures
+python scripts/21a_formal_liquid_r2.py
+python scripts/21b_formal_importance_reallocation.py
+python scripts/21c_formal_restriction_curve.py
+python scripts/21d_formal_error_differential.py
+python scripts/21e_formal_portfolio_decomposition.py
+```
+
+These scripts write each formal specification to one model/weight folder, for
+example:
+
+```text
+outputs/formalanalysis/analysis/xgboost/tc_500m/r2_by_quintile.csv
+outputs/formalanalysis/analysis/xgboost/tc_500m/importance_shift.csv
+outputs/formalanalysis/analysis/xgboost/tc_500m/two_by_two_500M.csv
 ```
 
 Look for real failures:
@@ -442,13 +452,13 @@ sbatch jobs/04_step3_xgboost_dvol.sh
 Then submit the dependent jobs manually or rerun the full generator with
 dependencies after cleaning the affected outputs.
 
-Rerun analysis only:
+Rerun one formal analysis block locally:
 
 ```bash
-sbatch jobs/21_formal_analyze_results.sh
+python scripts/21a_formal_liquid_r2.py --model xgboost
 ```
 
-This reads existing outputs and does not retrain models.
+These scripts read existing outputs and do not retrain models.
 
 ---
 
@@ -480,7 +490,7 @@ Common issues:
 | Step 05/06 collect exits with OOM | collect jobs read all shard predictions | Use the current generator; collect jobs request `2 x 32G` |
 | Regime analysis exits with OOM | regime plots read the full processed panel | Use the current generator; regime analysis requests `2 x 32G` |
 | Step 05/06 says `tuned_params.csv not found` | Step 04 failed or did not finish | Inspect `04_step3_*` logs |
-| `21` misses Prediction 3 | Step 05 collect output missing | Inspect `05_restrict_*_collect` logs |
+| Restriction-curve comparison is skipped | Step 05 collect output missing | Inspect `05_restrict_*_collect` logs |
 | `git pull` blocked by outputs | stale untracked outputs | move/delete `outputs/` before pull |
 
 ---
@@ -495,7 +505,7 @@ Before submit:
 - [ ] `~/liquidml_env` exists
 - [ ] Processed panel, feature list, SignalDoc, and factor CSVs uploaded
 - [ ] `bash -n scripts/generate_hpc_jobs.sh` passes
-- [ ] `bash scripts/generate_hpc_jobs.sh --from-processed` creates 62 jobs
+- [ ] `bash scripts/generate_hpc_jobs.sh --from-processed` creates 61 jobs
 - [ ] `bash scripts/generate_hpc_jobs.sh --from-processed --submit` submitted the dependency chain
 
 After completion:
@@ -503,7 +513,7 @@ After completion:
 - [ ] `squeue --me` is empty
 - [ ] 24 formal prediction files exist
 - [ ] Motivation Step 3, 3d, 3e outputs exist for all three models
-- [ ] `outputs/formalanalysis/analysis/tables/` and `figures/` exist
+- [ ] After downloading HPC outputs locally, model/weight-spec folders exist under `outputs/formalanalysis/analysis/`
 - [ ] Logs do not contain real tracebacks/OOM/failed jobs
 
 ---
@@ -512,6 +522,6 @@ After completion:
 
 - `scripts/generate_hpc_jobs.sh`
 - `scripts/20_formal_run_experiment.py`
-- `scripts/21_formal_analyze_results.py`
+- `scripts/21a_formal_liquid_r2.py` through `scripts/21e_formal_portfolio_decomposition.py`
 - `docs/run_order_cheat_sheet.md`
 - `docs/weighting_schemes.md`

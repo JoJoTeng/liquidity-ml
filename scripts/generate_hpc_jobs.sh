@@ -164,9 +164,6 @@ for MODEL in "${MODELS[@]}"; do
     done
 done
 
-write_job "21_formal_analyze_results" 2 "16G" "120:0:0" \
-    "python scripts/21_formal_analyze_results.py"
-
 echo ""
 echo "=== Job generation complete ==="
 
@@ -199,8 +196,6 @@ if [ "${SUBMIT}" = true ]; then
     id07=$(submit_job "07_regime_xgboost_dvol" "${id07_dep}")
     echo "07_regime_xgboost_dvol -> ${id07}"
 
-    final_deps=("${id03}" "${id07}")
-
     for MODEL in "${MODELS[@]}"; do
         id04=$(submit_job "04_step3_${MODEL}_dvol" "${data_ready_dep}")
         echo "04_step3_${MODEL}_dvol -> ${id04}"
@@ -213,7 +208,6 @@ if [ "${SUBMIT}" = true ]; then
         done
         id05=$(submit_job "05_restrict_${MODEL}_collect" "$(join_by_colon "${restrict_ids[@]}")")
         echo "05_restrict_${MODEL}_collect -> ${id05}"
-        final_deps+=("${id05}")
 
         quintile_ids=()
         for Q in 1 2 3 4 5; do
@@ -223,31 +217,28 @@ if [ "${SUBMIT}" = true ]; then
         done
         id06=$(submit_job "06_quintile_${MODEL}_collect" "$(join_by_colon "${quintile_ids[@]}")")
         echo "06_quintile_${MODEL}_collect -> ${id06}"
-        final_deps+=("${id06}")
 
-        formal_ids=()
         jid=$(submit_job "20_${MODEL}_dolvol" "${id04}")
-        formal_ids+=("${jid}")
         echo "20_${MODEL}_dolvol -> ${jid}"
         for LAM in "${SOFTMAX_LAMBDAS[@]}"; do
             LAM_LABEL=${LAM//./p}
             jid=$(submit_job "20_${MODEL}_softmax_rank_lam${LAM_LABEL}" "${id04}")
-            formal_ids+=("${jid}")
             echo "20_${MODEL}_softmax_rank_lam${LAM_LABEL} -> ${jid}"
         done
         for AUM in "${TC_AUMS[@]}"; do
             jid=$(submit_job "20_${MODEL}_tc_${AUM}m" "${id04}")
-            formal_ids+=("${jid}")
             echo "20_${MODEL}_tc_${AUM}m -> ${jid}"
         done
-        final_deps+=("${formal_ids[@]}")
     done
 
-    id21=$(submit_job "21_formal_analyze_results" "$(join_by_colon "${final_deps[@]}")")
-    echo "21_formal_analyze_results -> ${id21}"
-
     echo ""
-    echo "=== Submitted full pipeline ==="
+    echo "=== Submitted training/dependency pipeline ==="
+    echo "Run formal analysis locally after downloading outputs:"
+    echo "  python scripts/21a_formal_liquid_r2.py"
+    echo "  python scripts/21b_formal_importance_reallocation.py"
+    echo "  python scripts/21c_formal_restriction_curve.py"
+    echo "  python scripts/21d_formal_error_differential.py"
+    echo "  python scripts/21e_formal_portfolio_decomposition.py"
     echo "Monitor with: squeue --me"
 else
     echo ""

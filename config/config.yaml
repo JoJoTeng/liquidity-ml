@@ -62,9 +62,9 @@ data:
     - hire
     - Tax
 
-  # Extended groups are empirical Prediction 2 groups from Step 2.
+  # Extended groups are empirical Step 2 groups for importance reallocation.
   # They are not a broad economic taxonomy.
-  # They are used for Prediction 2 feature-importance reallocation.
+  # They are used for formal feature-importance reallocation.
   # These are empirical Step 2 groups from quintile_fm_coefficients_full_raw.csv.
   # illiquidity_features_extended = significant only in Q1, expected to lose
   # importance under weighted training. tradable_features_extended = significant

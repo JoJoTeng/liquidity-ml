@@ -51,7 +51,8 @@ python scripts/02_motivation_step1_divergence.py --liquidity dvol --vw
 
 ### Step 2 outputs. Heterogeneous predictability
 
-Use `--full` because the current formal analysis script reuses the full-output files for Prediction 2.
+Use `--full` because the formal importance-reallocation analysis reads the
+full-output interaction and quintile files.
 
 ```bash
 python scripts/03_motivation_step2_heterogeneity.py --liquidity dvol --full
@@ -67,7 +68,11 @@ done
 
 ### Step 3d. Progressive restriction curve
 
-Use `--use-baseline-params` because the current formal Prediction 3 overlay reads the baseline-mode restriction output. The default normalization is `global`, which keeps the processed full-cross-section ranks so the main difference is the training universe. Add `--normalization rerank` for the robustness version.
+Use `--use-baseline-params` because the formal restriction-curve comparison
+reads the baseline-mode restriction output. The default normalization is
+`global`, which keeps the processed full-cross-section ranks so the main
+difference is the training universe. Add `--normalization rerank` for the
+robustness version.
 
 ```bash
 for MODEL in elastic_net xgboost neural_network; do
@@ -174,8 +179,15 @@ python scripts/20_formal_run_experiment.py --model neural_network --weights tc -
 After the experiment artifacts exist:
 
 ```bash
-python scripts/21_formal_analyze_results.py
+python scripts/21a_formal_liquid_r2.py
+python scripts/21b_formal_importance_reallocation.py
+python scripts/21c_formal_restriction_curve.py
+python scripts/21d_formal_error_differential.py
+python scripts/21e_formal_portfolio_decomposition.py
 ```
+
+The step-level scripts are the formal analysis workflow, so you can generate or
+rerun one formal result block at a time.
 
 ## 4. Minimal Local Smoke Run
 
@@ -198,7 +210,11 @@ python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 10
 python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 100
 python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 500
 python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 1000
-python scripts/21_formal_analyze_results.py
+python scripts/21a_formal_liquid_r2.py --model xgboost
+python scripts/21b_formal_importance_reallocation.py --model xgboost
+python scripts/21c_formal_restriction_curve.py --model xgboost
+python scripts/21d_formal_error_differential.py --model xgboost
+python scripts/21e_formal_portfolio_decomposition.py --model xgboost
 ```
 
 ## 5. Useful Single-Spec Rebuilds
@@ -225,17 +241,19 @@ python scripts/06_motivation_step3e_quintile_specific_models.py --model xgboost 
 ### Re-analyze only one formal model family
 
 ```bash
-python scripts/21_formal_analyze_results.py --model xgboost
-python scripts/21_formal_analyze_results.py --model elastic_net
-python scripts/21_formal_analyze_results.py --model neural_network
+# Use the same --model filter with any 21a-21e formal analysis script.
+python scripts/21a_formal_liquid_r2.py --model xgboost
+python scripts/21e_formal_portfolio_decomposition.py --model elastic_net
+python scripts/21d_formal_error_differential.py --model neural_network
 ```
 
 ### Re-analyze only one weight family
 
 ```bash
-python scripts/21_formal_analyze_results.py --weights dolvol
-python scripts/21_formal_analyze_results.py --weights softmax_rank
-python scripts/21_formal_analyze_results.py --weights tc
+# Use the same --weights filter with any 21a-21e formal analysis script.
+python scripts/21a_formal_liquid_r2.py --weights dolvol
+python scripts/21b_formal_importance_reallocation.py --weights softmax_rank
+python scripts/21e_formal_portfolio_decomposition.py --weights tc
 ```
 
 ## 6. Output Locations To Check
@@ -251,18 +269,30 @@ After the runs finish, the main output folders to inspect are:
 
 - Formal:
   - `outputs/formalanalysis/experiment/`
-  - `outputs/formalanalysis/analysis/tables/`
-  - `outputs/formalanalysis/analysis/figures/`
+  - `outputs/formalanalysis/analysis/{model}/{weight_spec}/`
+  - `outputs/formalanalysis/analysis/formal_hypothesis_tests.json`
+
+For example, formal analysis outputs for the XGBoost TC-500M specification are
+stored together under:
+
+```text
+outputs/formalanalysis/analysis/xgboost/tc_500m/
+```
+
+That folder contains files such as `r2_by_quintile.csv`,
+`utility_weighted_r2.csv`, `importance_shift.csv`,
+`restriction_curve_comparison.csv`, `liquid_squared_error_differential.csv`,
+and the portfolio-decomposition tables.
 
 ## 7. Current Cross-Pipeline Dependency Reminder
 
 For the current code, these dependencies matter:
 
-1. `scripts/21_formal_analyze_results.py` Prediction 2 expects:
+1. The formal importance-reallocation analysis expects:
    - `outputs/motivation/step2/dvol/interaction_regression_full.csv`
-   - `outputs/motivation/step2/dvol/quintile_fm_coefficients_full.csv`
+   - `outputs/motivation/step2/dvol/quintile_fm_coefficients_full_raw.csv`
 
-2. `scripts/21_formal_analyze_results.py` Prediction 3 expects:
+2. The formal restriction-curve comparison expects:
    - `outputs/motivation/step3_restriction/{model}/dvol/global/baseline/restriction_comparison.csv`
 
-That is why the cheat sheet runs `03_motivation_step2_heterogeneity.py --full` and `05_motivation_step3d_progressive_restriction.py --use-baseline-params` before the formal analysis script.
+That is why the cheat sheet runs `03_motivation_step2_heterogeneity.py --full` and `05_motivation_step3d_progressive_restriction.py --use-baseline-params` before the formal analysis scripts.

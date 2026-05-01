@@ -1944,6 +1944,7 @@ def compute_quintile_oos_r2(
     return_col: str = "excess_ret",
     hist_window: int | None = None,
     min_hist_periods: int = 12,
+    pooled_quintile_groups: dict[str, list[int | float]] | None = None,
 ) -> pd.DataFrame:
     """Pooled unweighted OOS R² per liquidity quintile.
 
@@ -1952,6 +1953,9 @@ def compute_quintile_oos_r2(
     mean benchmark using information through t-1. The squared-error sums are
     unweighted; this is appropriate for comparing standard and weighted models
     under the same evaluation loss. Utility-weighted R² is computed separately.
+
+    If ``pooled_quintile_groups`` is provided, each entry adds one extra pooled
+    row. For example ``{"Q4-Q5": [4, 5]}`` evaluates liquid stocks jointly.
 
     Returns DataFrame with columns:
         quintile, pooled_r2_zero, pooled_r2_cs, optional pooled_r2_hist,
@@ -1966,11 +1970,8 @@ def compute_quintile_oos_r2(
         min_hist_periods=min_hist_periods,
     )
 
-    results = []
-    quintiles = sorted(pred[quintile_col].dropna().unique())
-
-    for q in quintiles:
-        qdf = pred[pred[quintile_col] == q].dropna(subset=["y_true", "y_pred"])
+    def _compute_row(qdf: pd.DataFrame, label) -> dict:
+        qdf = qdf.dropna(subset=["y_true", "y_pred"])
 
         ss_res = ((qdf["y_true"] - qdf["y_pred"]) ** 2).sum()
 
@@ -2007,7 +2008,7 @@ def compute_quintile_oos_r2(
         avg_n = qdf.groupby("yyyymm").size().mean()
 
         row = {
-            "quintile": int(q),
+            "quintile": label,
             "pooled_r2_zero": r2_zero,
             "pooled_r2_cs": r2_cs,
             "avg_monthly_r2_zero": avg_monthly_r2_zero,
@@ -2023,7 +2024,18 @@ def compute_quintile_oos_r2(
                 1 - ss_res_hist / ss_tot_hist if ss_tot_hist > 0 else np.nan
             )
             row["avg_monthly_r2_hist"] = avg_monthly_r2_hist
-        results.append(row)
+        return row
+
+    results = []
+    quintiles = sorted(pred[quintile_col].dropna().unique())
+
+    for q in quintiles:
+        qdf = pred[pred[quintile_col] == q]
+        results.append(_compute_row(qdf, int(q)))
+
+    for label, group_values in (pooled_quintile_groups or {}).items():
+        qdf = pred[pred[quintile_col].isin(group_values)]
+        results.append(_compute_row(qdf, label))
 
     # Full sample
     pred_valid = pred.dropna(subset=["y_true", "y_pred"])

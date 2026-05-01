@@ -7,7 +7,8 @@ This note documents the weighting schemes currently implemented in the formal ex
 - Config: [`config/config.yaml`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/config/config.yaml)
 - Weight construction: [`src/weighting/schemes.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/src/weighting/schemes.py)
 - Formal training script: [`scripts/20_formal_run_experiment.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/20_formal_run_experiment.py)
-- Formal analysis script: [`scripts/21_formal_analyze_results.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/21_formal_analyze_results.py)
+- Formal analysis step CLIs: [`scripts/21a_formal_liquid_r2.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/21a_formal_liquid_r2.py) through [`scripts/21e_formal_portfolio_decomposition.py`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/21e_formal_portfolio_decomposition.py)
+- Formal analysis modules: [`src/analysis/formal/`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/src/analysis/formal)
 - HPC job generator: [`scripts/generate_hpc_jobs.sh`](/Users/tengjiao/Desktop/PhD-Y3/Liquidity/liquidity_ml/scripts/generate_hpc_jobs.sh)
 
 ## Implemented Schemes

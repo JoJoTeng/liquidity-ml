@@ -221,7 +221,7 @@ def compute_group_importance(
     ----------
     importance_df : (n_windows, n_features).
     group : ``"tradable"`` or ``"illiquidity"``.
-    extended : Use the Prediction 2 empirical groups from Step 2:
+    extended : Use the empirical Step 2 groups for importance reallocation:
         ``"illiquidity"`` means Q1-only predictors, and ``"tradable"``
         means Q5-only plus both-Q1-and-Q5 predictors.
 
@@ -362,7 +362,7 @@ def test_h2_per_feature(
 
 
 def _categorize_feature(feature: str) -> str:
-    """Categorize a feature using the Prediction 2 empirical groups."""
+    """Categorize a feature using empirical Step 2 groups."""
     if feature in set(TRADABLE_FEATURES_EXT):
         return "tradable"
     if feature in set(ILLIQUIDITY_FEATURES_EXT):
