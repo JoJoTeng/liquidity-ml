@@ -191,11 +191,11 @@ models:
     reg_alpha: 0.0
     reg_lambda: 0.1
     search_space:
-      max_depth: [ 2, 3, 4 ]
+      max_depth: [ 3, 4, 5 ]
       learning_rate: [ 0.001, 0.01, 0.05 ]
-      n_estimators: [ 300, 500, 1000 ]
-      min_child_weight: [ 10, 50, 100, 200 ]
-    n_random_search: 108 # full grid = 108 combos, all evaluated
+      n_estimators: [ 500, 1000, 2000 ]
+      min_child_weight: [ 10, 50, 100 ]
+    n_random_search: 81 # full grid = 81 combos, all evaluated
 
   neural_network:
     hidden_layers: [ 32, 16, 8 ] # GKX (2020) NN3 — best architecture
@@ -204,7 +204,7 @@ models:
     dropout: 0.0 # not used by GKX
     batch_size: 10000 # Table A.5
     epochs: 100 # Table A.5
-    patience: 5 # Table A.5
+    patience: 10 # Bumped from GKX's 5; single-seed NN val_loss is noisier than ensemble
     learning_rate: 0.001
     l1_penalty: 0.00001
     weight_decay: 0.0

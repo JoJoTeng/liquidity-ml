@@ -170,7 +170,12 @@ def run_rolling_training(
             params_all.append({"yyyymm": test_month, **best})
 
         model = create_model(model_name, config=current_params, seed=seed)
-        model.fit(X_train, y_train, sample_weight=w_train)
+        model.fit(
+            X_train, y_train,
+            X_val=X_val, y_val=y_val,
+            sample_weight=w_train,
+            sample_weight_val=w_val,
+        )
 
         preds = model.predict(X_test)
         pred_df = pd.DataFrame({
