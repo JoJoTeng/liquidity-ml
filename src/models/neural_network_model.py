@@ -255,7 +255,20 @@ class NeuralNetPredictor(BaseReturnPredictor):
         n_repeats: int = 10,
         seed: int | None = None,
     ) -> pd.Series:
-        """Compute permutation importance on test data."""
+        """Compute permutation importance for the ensemble's predictions.
+
+        Wraps NeuralNetPredictor.predict() (which averages over all
+        ensemble members) as the sklearn estimator, so the resulting
+        importance reflects the deployed prediction function rather than
+        a single ensemble member. With n_ensemble_seeds=1 the ensemble
+        is one model and behavior is identical to single-model
+        permutation importance.
+
+        Permutation importance is non-linear in the model (MSE is
+        quadratic in predictions), so per-member-then-average would
+        give the wrong semantic. The single-call-on-ensemble-mean form
+        used here is correct.
+        """
         from sklearn.inspection import permutation_importance as sklearn_perm_importance
 
         if not self.is_fitted:
@@ -264,18 +277,20 @@ class NeuralNetPredictor(BaseReturnPredictor):
             seed = self.seed
 
         # Wrap for sklearn API. sklearn >=1.3 validates that estimators
-        # implement fit() + get_params(), so we provide stubs.
+        # implement fit() + get_params(), so we provide stubs. The wrapper
+        # delegates predict() to the outer NeuralNetPredictor, which
+        # averages over self._ensemble_models.
         class _SklearnWrapper:
             _estimator_type = "regressor"
 
-            def __init__(self, model):
-                self._model = model
+            def __init__(self, predictor):
+                self._predictor = predictor
 
             def fit(self, X, y, **kwargs):
                 return self  # no-op: model is already trained
 
             def predict(self, X):
-                return self._model.predict(X.astype(np.float32), verbose=0).flatten()
+                return self._predictor.predict(X)
 
             def get_params(self, deep=True):
                 return {}
@@ -283,7 +298,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
             def set_params(self, **params):
                 return self
 
-        wrapper = _SklearnWrapper(self.model)
+        wrapper = _SklearnWrapper(self)
         result = sklearn_perm_importance(
             wrapper,
             X_test.astype(np.float32),
