@@ -72,17 +72,26 @@ class BaseReturnPredictor(ABC):
         """
         ...
 
-    @abstractmethod
     def get_feature_importance(
         self, feature_names: list[str] | None = None
     ) -> pd.Series:
         """Return feature importance scores.
 
+        Optional method (override in subclass if a meaningful native
+        importance can be computed). Models that lack a clean native
+        importance proxy (e.g. neural networks, where first-layer
+        weights are not a faithful summary of the full network's
+        feature usage) should leave this method unoverridden and rely
+        on get_permutation_importance() or get_shap_values() instead.
+
         Returns
         -------
         pd.Series indexed by feature name, values = importance scores.
         """
-        ...
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement get_feature_importance(). "
+            "Use get_permutation_importance() or get_shap_values() instead."
+        )
 
     def get_shap_values(
         self,

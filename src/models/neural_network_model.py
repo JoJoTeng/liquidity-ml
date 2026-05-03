@@ -247,43 +247,6 @@ class NeuralNetPredictor(BaseReturnPredictor):
 
         return np.mean(all_preds, axis=0)
 
-    def get_feature_importance(
-        self, feature_names: list[str] | None = None
-    ) -> pd.Series:
-        """First-layer weight magnitude as a fast importance proxy.
-
-        Averages across all ensemble members so the importance reflects
-        the same prediction function deployed by predict() (mean of
-        members). With n_ensemble_seeds=1 the average is over one model
-        and behavior is identical to using self.model directly.
-        """
-        if not self.is_fitted:
-            raise RuntimeError("Model not fitted.")
-
-        ensemble = getattr(self, "_ensemble_models", [self.model])
-
-        per_member = []
-        for m in ensemble:
-            # Find first Dense layer in this member
-            first_dense = None
-            for layer in m.layers:
-                if "dense" in layer.name.lower() and hasattr(layer, "kernel"):
-                    first_dense = layer
-                    break
-            if first_dense is None:
-                raise RuntimeError("No Dense layer found.")
-            weights = first_dense.kernel.numpy()  # shape: (input_dim, units)
-            per_member.append(np.abs(weights).sum(axis=1))
-
-        importance = np.mean(per_member, axis=0)
-
-        if feature_names is None:
-            feature_names = [f"f{i}" for i in range(len(importance))]
-
-        return pd.Series(
-            importance, index=feature_names, name="importance",
-        ).sort_values(ascending=False)
-
     def get_permutation_importance(
         self,
         X_test: np.ndarray,
