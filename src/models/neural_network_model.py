@@ -250,22 +250,32 @@ class NeuralNetPredictor(BaseReturnPredictor):
     def get_feature_importance(
         self, feature_names: list[str] | None = None
     ) -> pd.Series:
-        """First-layer weight magnitude as a fast importance proxy."""
+        """First-layer weight magnitude as a fast importance proxy.
+
+        Averages across all ensemble members so the importance reflects
+        the same prediction function deployed by predict() (mean of
+        members). With n_ensemble_seeds=1 the average is over one model
+        and behavior is identical to using self.model directly.
+        """
         if not self.is_fitted:
             raise RuntimeError("Model not fitted.")
 
-        # Find first Dense layer
-        first_dense = None
-        for layer in self.model.layers:
-            if "dense" in layer.name.lower() and hasattr(layer, "kernel"):
-                first_dense = layer
-                break
+        ensemble = getattr(self, "_ensemble_models", [self.model])
 
-        if first_dense is None:
-            raise RuntimeError("No Dense layer found.")
+        per_member = []
+        for m in ensemble:
+            # Find first Dense layer in this member
+            first_dense = None
+            for layer in m.layers:
+                if "dense" in layer.name.lower() and hasattr(layer, "kernel"):
+                    first_dense = layer
+                    break
+            if first_dense is None:
+                raise RuntimeError("No Dense layer found.")
+            weights = first_dense.kernel.numpy()  # shape: (input_dim, units)
+            per_member.append(np.abs(weights).sum(axis=1))
 
-        weights = first_dense.kernel.numpy()  # shape: (input_dim, units)
-        importance = np.abs(weights).sum(axis=1)
+        importance = np.mean(per_member, axis=0)
 
         if feature_names is None:
             feature_names = [f"f{i}" for i in range(len(importance))]
@@ -369,33 +379,47 @@ class NeuralNetPredictor(BaseReturnPredictor):
         else:
             X_explain = X_test.astype(np.float32)
 
-        # Try DeepExplainer first (TF2 support varies), fall back to Kernel
-        sv = None
-        try:
-            explainer = shap.DeepExplainer(self.model, X_bg)
-            sv = explainer.shap_values(X_explain)
-        except Exception as e:
-            if use_kernel:
-                logger.info("DeepExplainer failed (%s), using KernelExplainer", e)
+        # Compute SHAP values per ensemble member, then average to match
+        # predict()'s ensemble-mean. SHAP is linear in the model
+        # (Lundberg & Lee 2017, additivity axiom): SHAP(mean of f_k)
+        # equals mean of SHAP(f_k). With n_ensemble_seeds=1 the loop
+        # runs once and the result is identical to single-model SHAP.
+        ensemble = getattr(self, "_ensemble_models", [self.model])
 
-                def predict_fn(x):
-                    return self.model.predict(x.astype(np.float32), verbose=0).flatten()
+        per_member_sv = []
+        for m in ensemble:
+            sv = None
+            try:
+                explainer = shap.DeepExplainer(m, X_bg)
+                sv = explainer.shap_values(X_explain)
+            except Exception as e:
+                if use_kernel:
+                    logger.info("DeepExplainer failed (%s), using KernelExplainer", e)
 
-                explainer = shap.KernelExplainer(predict_fn, X_bg)
-                sv = explainer.shap_values(X_explain, nsamples=100)
-            else:
-                raise RuntimeError(
-                    f"DeepExplainer failed and KernelExplainer fallback is disabled: {e}"
-                )
+                    def predict_fn(x, model=m):  # default-arg binds current m
+                        return model.predict(
+                            x.astype(np.float32), verbose=0,
+                        ).flatten()
 
-        if isinstance(sv, list):
-            sv = sv[0]
+                    explainer = shap.KernelExplainer(predict_fn, X_bg)
+                    sv = explainer.shap_values(X_explain, nsamples=100)
+                else:
+                    raise RuntimeError(
+                        f"DeepExplainer failed and KernelExplainer fallback is disabled: {e}"
+                    )
 
-        # TF DeepExplainer in shap >=0.44 returns shape (N, P, 1) for
-        # single-output regression; squeeze the trailing dim.
-        sv = np.asarray(sv)
-        if sv.ndim == 3 and sv.shape[-1] == 1:
-            sv = sv.squeeze(-1)
+            # Normalise SHAP shape per member
+            if isinstance(sv, list):
+                sv = sv[0]
+            sv = np.asarray(sv)
+            # TF DeepExplainer in shap >=0.44 returns shape (N, P, 1) for
+            # single-output regression; squeeze the trailing dim.
+            if sv.ndim == 3 and sv.shape[-1] == 1:
+                sv = sv.squeeze(-1)
+
+            per_member_sv.append(sv)
+
+        sv = np.mean(per_member_sv, axis=0)
 
         if feature_names is None:
             feature_names = [f"f{i}" for i in range(X_test.shape[1])]
