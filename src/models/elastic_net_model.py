@@ -61,7 +61,15 @@ class ElasticNetPredictor(BaseReturnPredictor):
 
         sample_weight is passed directly to sklearn's .fit() method,
         which supports it natively for weighted least squares.
+
+        X_val, y_val, and sample_weight_val are accepted for compatibility
+        with the BaseReturnPredictor.fit() contract but are unused here:
+        EN has no validation-based stopping. sample_weight_val matters
+        only inside tune_hyperparameters, where it weights the validation
+        MSE used to score candidates.
         """
+        del X_val, y_val, sample_weight_val  # accepted for contract; unused
+
         self.model = ElasticNet(
             alpha=self.config["alpha"],
             l1_ratio=self.config["l1_ratio"],

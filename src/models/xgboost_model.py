@@ -64,9 +64,15 @@ class XGBoostPredictor(BaseReturnPredictor):
 
         The sample_weight parameter directly enters the gradient computation,
         making the model focus on accurately predicting liquid stocks.
-        sample_weight_val weights the early-stopping validation metric
-        so that tuning and training optimize the same objective.
+
+        X_val, y_val, and sample_weight_val are accepted for compatibility
+        with the BaseReturnPredictor.fit() contract but are unused here:
+        XGBoost has no early stopping in this implementation (see comment
+        below). sample_weight_val matters only inside tune_hyperparameters,
+        where it weights the validation MSE used to score candidates.
         """
+        del X_val, y_val, sample_weight_val  # accepted for contract; unused
+
         params = {
             "n_estimators": self.config["n_estimators"],
             "max_depth": self.config["max_depth"],
