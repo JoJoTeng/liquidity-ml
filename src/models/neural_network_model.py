@@ -44,11 +44,16 @@ def _build_model(
     batch_norm: bool = True,
     l1_penalty: float = 0.0,
     learning_rate: float = 0.001,
+    weight_decay: float = 0.0,
 ):
     """Build a Keras Sequential feedforward network.
 
     Architecture per hidden layer (GKX 2020):
         Dense -> BatchNormalization -> ReLU [-> Dropout if dropout > 0]
+
+    weight_decay is passed to Adam as decoupled L2 weight decay (AdamW
+    style). Requires TF >= 2.11; if 0.0 (the project default) the
+    optimizer behaves as plain Adam.
     """
     import tensorflow as tf
 
@@ -72,8 +77,11 @@ def _build_model(
     # Output: single scalar prediction (no activation)
     model.add(tf.keras.layers.Dense(1, kernel_regularizer=regularizer))
 
+    optimizer_kwargs = {"learning_rate": learning_rate}
+    if weight_decay > 0:
+        optimizer_kwargs["weight_decay"] = weight_decay
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        optimizer=tf.keras.optimizers.Adam(**optimizer_kwargs),
         loss="mse",
     )
     return model
@@ -188,6 +196,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
             batch_norm=cfg.get("batch_norm", True),
             l1_penalty=cfg.get("l1_penalty", 0.0),
             learning_rate=cfg.get("learning_rate", 0.001),
+            weight_decay=cfg.get("weight_decay", 0.0),
         )
 
         # Callbacks
@@ -429,8 +438,16 @@ class NeuralNetPredictor(BaseReturnPredictor):
         best_mse = np.inf
         best_params = {}
 
+        # tune_n_ensemble_seeds controls how many ensemble seeds are used
+        # for each candidate during the search (defaults to 1 for speed).
+        # Set this to match n_ensemble_seeds if you want tuning to score
+        # candidates the same way they will be deployed.
+        tune_seeds = self.config.get("tune_n_ensemble_seeds", 1)
+
         for i, params in enumerate(param_grid):
-            trial_config = {**self.config, **params, "n_ensemble_seeds": 1}
+            trial_config = {
+                **self.config, **params, "n_ensemble_seeds": tune_seeds,
+            }
             model = NeuralNetPredictor(config=trial_config, seed=self.seed)
             model.fit(X_train, y_train, X_val, y_val, sample_weight, sample_weight_val)
             preds = model.predict(X_val)

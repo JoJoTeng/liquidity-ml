@@ -209,6 +209,7 @@ models:
     l1_penalty: 0.00001
     weight_decay: 0.0
     n_ensemble_seeds: 1 # no ensemble
+    tune_n_ensemble_seeds: 1 # ensemble size used for each tuning candidate; <= n_ensemble_seeds for speed
     search_space:
       learning_rate: [ 0.001, 0.003, 0.01 ]
       l1_penalty: [ 0.00001, 0.0001, 0.001 ]
