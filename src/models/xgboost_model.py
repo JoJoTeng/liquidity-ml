@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from sklearn.model_selection import ParameterSampler
 
 from src.models.base import BaseReturnPredictor
 
@@ -24,7 +25,24 @@ logger = logging.getLogger(__name__)
 
 
 class XGBoostPredictor(BaseReturnPredictor):
-    """XGBoost regression model with weighted training support."""
+    """XGBoost regression: gradient-boosted decision trees.
+
+    Additive ensemble of regression trees fit by gradient boosting:
+        F_K(x) = sum_{k=1..K} eta * f_k(x)
+    where each tree f_k minimises the weighted residual at iteration k.
+    Sample weights enter the gradients g_i = -2 w_i (r_i - r-hat_i), so
+    weighted training changes the learned splits, not just resamples
+    the data. Tree complexity is bounded by max_depth and
+    min_child_weight; leaf weights are L1+L2 regularised by reg_alpha
+    and reg_lambda.
+
+    Parameters
+    ----------
+    config : dict with keys 'n_estimators', 'max_depth', 'learning_rate',
+        'subsample', 'colsample_bytree', 'min_child_weight',
+        'reg_alpha', 'reg_lambda', 'search_space'.
+    seed : random seed for reproducibility.
+    """
 
     def __init__(self, config: dict[str, Any] | None = None, seed: int = 42):
         from src.config import load_config
@@ -86,6 +104,7 @@ class XGBoostPredictor(BaseReturnPredictor):
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
+        """Generate return predictions."""
         if not self.is_fitted:
             raise RuntimeError("Model not fitted. Call .fit() first.")
         return self.model.predict(X)
@@ -93,12 +112,15 @@ class XGBoostPredictor(BaseReturnPredictor):
     def get_feature_importance(
         self, feature_names: list[str] | None = None
     ) -> pd.Series:
+        """Return gain-based importance from XGBoost's native feature_importances_."""
         if not self.is_fitted:
             raise RuntimeError("Model not fitted.")
         importance = self.model.feature_importances_
         if feature_names is None:
             feature_names = [f"f{i}" for i in range(len(importance))]
-        return pd.Series(importance, index=feature_names).sort_values(ascending=False)
+        return pd.Series(
+            importance, index=feature_names, name="importance",
+        ).sort_values(ascending=False)
 
     def get_shap_values(
         self,
@@ -147,7 +169,7 @@ class XGBoostPredictor(BaseReturnPredictor):
             logger.info("No search space configured; using defaults.")
             return self.config
 
-        n_trials = self.config.get("n_random_search", 30)
+        n_trials = self.config.get("n_random_search", 50)
         keys = list(search_space.keys())
         values = list(search_space.values())
 
@@ -156,19 +178,21 @@ class XGBoostPredictor(BaseReturnPredictor):
         for v in values:
             full_grid_size *= len(v)
 
-        # Sample random combinations (or use full grid if small enough)
-        rng = np.random.RandomState(self.seed)
+        # Build parameter grid
         if full_grid_size <= n_trials:
             param_grid = [dict(zip(keys, v)) for v in itertools.product(*values)]
             logger.info(
-                "Tuning XGBoost: full grid %d combinations (≤ %d)",
+                "Tuning XGBoost: full grid %d combinations (<= %d)",
                 full_grid_size, n_trials,
             )
         else:
-            param_grid = []
-            for _ in range(n_trials):
-                combo = {k: v[rng.randint(len(v))] for k, v in zip(keys, values)}
-                param_grid.append(combo)
+            # ParameterSampler samples without replacement when all params
+            # are given as lists, so we get n_trials distinct combinations.
+            param_grid = list(
+                ParameterSampler(
+                    search_space, n_iter=n_trials, random_state=self.seed,
+                )
+            )
             logger.info(
                 "Tuning XGBoost: random search %d / %d combinations",
                 n_trials, full_grid_size,

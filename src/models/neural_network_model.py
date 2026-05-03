@@ -80,7 +80,24 @@ def _build_model(
 
 
 class NeuralNetPredictor(BaseReturnPredictor):
-    """Feedforward neural network with weighted MSE training (TensorFlow/Keras)."""
+    """Feedforward neural network (TensorFlow/Keras) with weighted MSE.
+
+    Architecture (Gu, Kelly, Xiu 2020 NN3):
+        Input -> [Dense -> BatchNorm -> ReLU] x len(hidden_layers) -> Dense(1)
+    Loss:
+        L = (1/N) sum w_i (r_i - r-hat_i)^2 + lambda_L1 * ||W||_1
+    Trained with Adam; early stopping monitors weighted val MSE with
+    patience 'patience' and restores best weights. An ensemble of
+    n_ensemble_seeds independent initialisations is averaged at predict
+    time when n_ensemble_seeds > 1.
+
+    Parameters
+    ----------
+    config : dict with keys 'hidden_layers', 'activation', 'batch_norm',
+        'dropout', 'batch_size', 'epochs', 'patience', 'learning_rate',
+        'l1_penalty', 'weight_decay', 'n_ensemble_seeds', 'search_space'.
+    seed : random seed for reproducibility.
+    """
 
     def __init__(self, config: dict[str, Any] | None = None, seed: int = 42):
         from src.config import load_config
@@ -253,7 +270,9 @@ class NeuralNetPredictor(BaseReturnPredictor):
         if feature_names is None:
             feature_names = [f"f{i}" for i in range(len(importance))]
 
-        return pd.Series(importance, index=feature_names).sort_values(ascending=False)
+        return pd.Series(
+            importance, index=feature_names, name="importance",
+        ).sort_values(ascending=False)
 
     def get_permutation_importance(
         self,

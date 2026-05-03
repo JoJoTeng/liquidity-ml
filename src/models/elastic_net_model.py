@@ -17,8 +17,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import ElasticNet
-from sklearn.inspection import permutation_importance as sklearn_perm_importance
 from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import ParameterSampler
 
 from src.models.base import BaseReturnPredictor
 
@@ -43,18 +43,9 @@ class ElasticNetPredictor(BaseReturnPredictor):
 
     def __init__(self, config: dict[str, Any] | None = None, seed: int = 42):
         from src.config import load_config
-
-        full_cfg = load_config()
-        model_cfg = full_cfg.get("models", {}).get("elastic_net", {})
-        if config:
-            model_cfg.update(config)
-
-        super().__init__(name="elastic_net", config=model_cfg, seed=seed)
-
-        self.alpha = model_cfg.get("alpha", 0.001)
-        self.l1_ratio = model_cfg.get("l1_ratio", 0.5)
-        self.max_iter = model_cfg.get("max_iter", 10000)
-
+        default_cfg = load_config()["models"]["elastic_net"]
+        cfg = {**default_cfg, **(config or {})}
+        super().__init__(name="elastic_net", config=cfg, seed=seed)
         self.model: ElasticNet | None = None
 
     def fit(
@@ -72,24 +63,28 @@ class ElasticNetPredictor(BaseReturnPredictor):
         which supports it natively for weighted least squares.
         """
         self.model = ElasticNet(
-            alpha=self.alpha,
-            l1_ratio=self.l1_ratio,
-            max_iter=self.max_iter,
+            alpha=self.config["alpha"],
+            l1_ratio=self.config["l1_ratio"],
+            max_iter=self.config["max_iter"],
             random_state=self.seed,
             warm_start=False,
         )
         self.model.fit(X_train, y_train, sample_weight=sample_weight)
         self.is_fitted = True
 
-        # Log fit quality
+        # Log fit quality. train_mse is weighted to match the training
+        # objective when sample_weight is set (sklearn falls back to
+        # unweighted when sample_weight is None).
         train_pred = self.model.predict(X_train)
-        train_mse = mean_squared_error(y_train, train_pred)
+        train_mse = mean_squared_error(
+            y_train, train_pred, sample_weight=sample_weight,
+        )
         n_nonzero = np.sum(np.abs(self.model.coef_) > 1e-10)
         logger.info(
-            "ElasticNet fit: alpha=%.4f, l1_ratio=%.2f, "
+            "ElasticNet fit: alpha=%.6f, l1_ratio=%.2f, "
             "train_MSE=%.6f, nonzero_coefs=%d/%d",
-            self.alpha,
-            self.l1_ratio,
+            self.config["alpha"],
+            self.config["l1_ratio"],
             train_mse,
             n_nonzero,
             len(self.model.coef_),
@@ -111,34 +106,9 @@ class ElasticNetPredictor(BaseReturnPredictor):
         coefs = np.abs(self.model.coef_)
         if feature_names is None:
             feature_names = [f"f{i}" for i in range(len(coefs))]
-        return pd.Series(coefs, index=feature_names, name="importance")
-
-    def get_permutation_importance(
-        self,
-        X_test: np.ndarray,
-        y_test: np.ndarray,
-        feature_names: list[str] | None = None,
-        n_repeats: int = 10,
-        seed: int | None = None,
-    ) -> pd.Series:
-        """Compute permutation importance on test data."""
-        if not self.is_fitted or self.model is None:
-            raise RuntimeError("Model not fitted.")
-        if seed is None:
-            seed = self.seed
-
-        result = sklearn_perm_importance(
-            self.model,
-            X_test,
-            y_test,
-            n_repeats=n_repeats,
-            random_state=seed,
-            scoring="neg_mean_squared_error",
-        )
-        importances = result.importances_mean
-        if feature_names is None:
-            feature_names = [f"f{i}" for i in range(len(importances))]
-        return pd.Series(importances, index=feature_names, name="perm_importance")
+        return pd.Series(
+            coefs, index=feature_names, name="importance",
+        ).sort_values(ascending=False)
 
     def get_shap_values(
         self,
@@ -207,26 +177,24 @@ class ElasticNetPredictor(BaseReturnPredictor):
                 full_grid_size, n_trials,
             )
         else:
-            rng = np.random.RandomState(self.seed)
-            param_grid = []
-            for _ in range(n_trials):
-                combo = {k: rng.choice(v) for k, v in zip(keys, values)}
-                param_grid.append(combo)
+            # ParameterSampler samples without replacement when all params
+            # are given as lists, so we get n_trials distinct combinations.
+            param_grid = list(
+                ParameterSampler(
+                    search_space, n_iter=n_trials, random_state=self.seed,
+                )
+            )
             logger.info(
                 "Tuning ElasticNet: random %d of %d combinations",
                 n_trials, full_grid_size,
             )
 
-        best_mse = float("inf")
+        best_mse = np.inf
         best_params = {}
 
         for params in param_grid:
-            model = ElasticNet(
-                alpha=params.get("alpha", self.alpha),
-                l1_ratio=params.get("l1_ratio", self.l1_ratio),
-                max_iter=self.max_iter,
-                random_state=self.seed,
-            )
+            trial_config = {**self.config, **params}
+            model = ElasticNetPredictor(config=trial_config, seed=self.seed)
             model.fit(X_train, y_train, sample_weight=sample_weight)
             pred_val = model.predict(X_val)
 
@@ -237,19 +205,12 @@ class ElasticNetPredictor(BaseReturnPredictor):
 
             if mse < best_mse:
                 best_mse = mse
-                best_params = params.copy()
-
-        # Apply best params
-        if "alpha" in best_params:
-            self.alpha = best_params["alpha"]
-        if "l1_ratio" in best_params:
-            self.l1_ratio = best_params["l1_ratio"]
-        self.best_params = best_params
+                best_params = trial_config
 
         logger.info(
-            "ElasticNet tuned: alpha=%.6f, l1_ratio=%.3f (val_MSE=%.6f)",
-            self.alpha,
-            self.l1_ratio,
-            best_mse,
+            "Best MSE: %.6f | Best params: %s",
+            best_mse, {k: best_params.get(k) for k in keys},
         )
+        self.config = best_params
+        self.best_params = best_params
         return best_params
