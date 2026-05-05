@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import ParameterSampler
 
 from src.models.base import BaseReturnPredictor
@@ -212,8 +213,9 @@ class XGBoostPredictor(BaseReturnPredictor):
             model = XGBoostPredictor(config=trial_config, seed=self.seed)
             model.fit(X_train, y_train, X_val, y_val, sample_weight, sample_weight_val)
             preds = model.predict(X_val)
-            residuals = (y_val - preds) ** 2
-            mse = np.average(residuals, weights=sample_weight_val) if sample_weight_val is not None else np.mean(residuals)
+            mse = mean_squared_error(
+                y_val, preds, sample_weight=sample_weight_val,
+            )
 
             if mse < best_mse:
                 best_mse = mse

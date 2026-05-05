@@ -3,8 +3,8 @@
 =========================================
 
 Compare each weighted formal model with the Step 3d hard-restriction curve:
-    outputs/formalanalysis/analysis/{model}/{weighting}/restriction_curve_comparison.csv
-    outputs/formalanalysis/analysis/{model}/{weighting}/restriction_curve_comparison.png
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/restriction_curve_comparison.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/restriction_curve_comparison.png
 """
 
 from __future__ import annotations

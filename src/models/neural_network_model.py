@@ -28,6 +28,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import mean_squared_error
 
 from src.models.base import BaseReturnPredictor
 
@@ -40,6 +41,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 def _build_model(
     input_dim: int,
     hidden_layers: list[int],
+    activation: str = "relu",
     dropout: float = 0.0,
     batch_norm: bool = True,
     l1_penalty: float = 0.0,
@@ -48,8 +50,8 @@ def _build_model(
 ):
     """Build a Keras Sequential feedforward network.
 
-    Architecture per hidden layer (GKX 2020):
-        Dense -> BatchNormalization -> ReLU [-> Dropout if dropout > 0]
+    Architecture per hidden layer (GKX 2020 default):
+        Dense -> BatchNormalization -> activation [-> Dropout if dropout > 0]
 
     weight_decay is passed to Adam as decoupled L2 weight decay (AdamW
     style). Requires TF >= 2.11; if 0.0 (the project default) the
@@ -70,7 +72,7 @@ def _build_model(
         ))
         if batch_norm:
             model.add(tf.keras.layers.BatchNormalization())
-        model.add(tf.keras.layers.Activation("relu"))
+        model.add(tf.keras.layers.Activation(activation))
         if dropout > 0:
             model.add(tf.keras.layers.Dropout(dropout))
 
@@ -192,6 +194,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
         model = _build_model(
             input_dim=input_dim,
             hidden_layers=cfg["hidden_layers"],
+            activation=cfg.get("activation", "relu"),
             dropout=cfg.get("dropout", 0.0),
             batch_norm=cfg.get("batch_norm", True),
             l1_penalty=cfg.get("l1_penalty", 0.0),
@@ -451,11 +454,8 @@ class NeuralNetPredictor(BaseReturnPredictor):
             model = NeuralNetPredictor(config=trial_config, seed=self.seed)
             model.fit(X_train, y_train, X_val, y_val, sample_weight, sample_weight_val)
             preds = model.predict(X_val)
-            residuals = (y_val - preds) ** 2
-            mse = (
-                np.average(residuals, weights=sample_weight_val)
-                if sample_weight_val is not None
-                else np.mean(residuals)
+            mse = mean_squared_error(
+                y_val, preds, sample_weight=sample_weight_val,
             )
 
             logger.info(

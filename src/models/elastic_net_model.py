@@ -206,10 +206,9 @@ class ElasticNetPredictor(BaseReturnPredictor):
             model.fit(X_train, y_train, sample_weight=sample_weight)
             pred_val = model.predict(X_val)
 
-            if sample_weight_val is not None:
-                mse = np.average((y_val - pred_val) ** 2, weights=sample_weight_val)
-            else:
-                mse = mean_squared_error(y_val, pred_val)
+            mse = mean_squared_error(
+                y_val, pred_val, sample_weight=sample_weight_val,
+            )
 
             if mse < best_mse:
                 best_mse = mse

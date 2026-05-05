@@ -1,10 +1,10 @@
 """
-21d - Formal Liquid-Stock Squared-Error Differential
-====================================================
+21d - Formal Liquid-Stock Mean-Squared-Error Differential
+=========================================================
 
-Generate the Q4-Q5 squared-error differential table and figure:
-    outputs/formalanalysis/analysis/{model}/{weighting}/liquid_squared_error_differential.csv
-    outputs/formalanalysis/analysis/{model}/{weighting}/liquid_squared_error_differential.png
+Generate the Q4-Q5 mean-squared-error differential table and figure:
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/liquid_squared_error_differential.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/liquid_squared_error_differential.png
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ logger = logging.getLogger("21d_formal_error_differential")
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate formal liquid-stock squared-error differentials"
+        description="Generate formal liquid-stock mean-squared-error differentials"
     )
     add_experiment_filters(parser)
     parser.add_argument(

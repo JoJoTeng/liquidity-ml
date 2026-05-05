@@ -1,10 +1,10 @@
 """
-21a - Formal Liquid-Stock R2
-============================
+21a - Formal Liquidity-Sorted R2
+================================
 
 Generate the formal liquid-stock prediction tables:
-    outputs/formalanalysis/analysis/{model}/{weighting}/r2_by_quintile.csv
-    outputs/formalanalysis/analysis/{model}/{weighting}/utility_weighted_r2.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/r2_by_quintile.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/utility_weighted_r2.csv
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ os.environ.setdefault("XDG_CACHE_HOME", str(_runtime_cache / "xdg"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.analysis.formal.common import load_predictions  # noqa: E402
-from src.analysis.formal.liquid_r2 import evaluate_liquid_stock_r2  # noqa: E402
+from src.analysis.formal.liquidity_sorted_r2 import evaluate_liquid_stock_r2  # noqa: E402
 from src.analysis.formal.script_utils import (  # noqa: E402
     add_experiment_filters,
     formal_output_dirs,

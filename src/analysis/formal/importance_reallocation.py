@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from src.evaluation.statistics import newey_west_tstat
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,11 +42,9 @@ def analyze_importance_reallocation(
 
         mean_std = np.nanmean(std_values[valid])
         mean_wt = np.nanmean(wt_values[valid])
-        delta = mean_wt - mean_std
         diffs = wt_values[valid] - std_values[valid]
-        se = np.std(diffs, ddof=1) / np.sqrt(len(diffs))
-        t_stat = np.mean(diffs) / se if se > 0 else 0.0
-        p_value = 2.0 * (1.0 - stats.t.cdf(abs(t_stat), df=len(diffs) - 1))
+        nw = newey_west_tstat(diffs, lags=6)
+        delta = nw["mean"]
 
         rows.append(
             {
@@ -52,8 +52,8 @@ def analyze_importance_reallocation(
                 "mean_shap_std": mean_std,
                 "mean_shap_wt": mean_wt,
                 "delta": delta,
-                "t_stat": t_stat,
-                "p_value": p_value,
+                "t_stat": nw["t_stat"],
+                "p_value": nw["p_value"],
                 "n_windows": int(valid.sum()),
             }
         )
@@ -200,17 +200,24 @@ def plot_importance_reallocation(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from src.analysis.motivation import _set_academic_style
 
-    df = shift_df.head(top_n).copy()
+    _set_academic_style()
+    df = (
+        shift_df
+        .reindex(shift_df["delta"].abs().sort_values(ascending=False).index)
+        .head(top_n)
+        .copy()
+    )
     df = df.reindex(df["delta"].abs().sort_values(ascending=True).index)
 
     fig, ax = plt.subplots(figsize=(8, max(6, top_n * 0.25)))
     colors = ["steelblue" if delta > 0 else "coral" for delta in df["delta"]]
     ax.barh(df["feature"], df["delta"], color=colors)
-    ax.axvline(0, color="gray", lw=0.5)
-    ax.set_xlabel("Delta SHAP (weighted - standard)")
+    ax.axvline(0, color="black", lw=0.5)
+    ax.set_xlabel(r"$\Delta$ SHAP (weighted $-$ standard)")
     ax.set_title(f"Importance reallocation ({model})")
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", out_path)

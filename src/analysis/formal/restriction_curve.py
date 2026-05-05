@@ -78,20 +78,21 @@ def plot_restriction_curve_comparison(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from src.analysis.motivation import _set_academic_style
 
     df = result["restriction_df"]
     if df is None:
         return
 
+    _set_academic_style()
     fig, ax = plt.subplots(figsize=(8, 5))
     colors = ["steelblue"] * (len(df) - 1) + ["coral"]
     ax.bar(df["model"], df["r2_q45_pct"], color=colors)
-    ax.axhline(0, color="gray", ls="--", lw=0.5)
-    ax.set_ylabel("OOS R2 on Q4-Q5 (%)")
+    ax.axhline(0, color="black", ls="--", lw=0.5)
+    ax.set_ylabel(r"OOS $R^2$ on Q4-Q5 (%)")
     ax.set_title(f"Weighted model vs restriction curve ({model} / {weight_family})")
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=9)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", out_path)
-

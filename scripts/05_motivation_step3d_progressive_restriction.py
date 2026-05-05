@@ -232,26 +232,38 @@ def main():
         avg_n_train[f"MQ{mq}+"] = q_counts[cols].sum(axis=1).mean()
 
     # Output 3.8: R² by training universe evaluated on Q4-Q5
-    rows_38 = []
+    q45_restriction_rows = []
     for model_name, pred_path in models.items():
         if not pred_path.exists():
-            rows_38.append({"model": model_name, "r2_q45_pct": np.nan, "r2_q4_pct": np.nan,
-                            "r2_q5_pct": np.nan, "r2_full_pct": np.nan,
-                            "N_train/month": avg_n_train.get(model_name, np.nan)})
+            q45_restriction_rows.append({
+                "model": model_name,
+                "r2_q45_pct": np.nan,
+                "r2_q4_pct": np.nan,
+                "r2_q5_pct": np.nan,
+                "r2_full_pct": np.nan,
+                "N_train/month": avg_n_train.get(model_name, np.nan),
+            })
             continue
         preds = pd.read_parquet(pred_path)
         r2_q45 = r2_for_quintiles(preds, panel, [4, 5])
         r2_q4 = r2_for_quintiles(preds, panel, [4])
         r2_q5 = r2_for_quintiles(preds, panel, [5])
         r2_full = pooled_r2_zero(preds)
-        rows_38.append({"model": model_name, "r2_q45_pct": r2_q45*100, "r2_q4_pct": r2_q4*100,
-                         "r2_q5_pct": r2_q5*100, "r2_full_pct": r2_full*100,
-                         "N_train/month": avg_n_train.get(model_name, np.nan)})
+        q45_restriction_rows.append({
+            "model": model_name,
+            "r2_q45_pct": r2_q45 * 100,
+            "r2_q4_pct": r2_q4 * 100,
+            "r2_q5_pct": r2_q5 * 100,
+            "r2_full_pct": r2_full * 100,
+            "N_train/month": avg_n_train.get(model_name, np.nan),
+        })
         logger.info("%s: R²(Q4-Q5)=%.3f%%, N_train/month≈%.0f", model_name,
                      r2_q45*100 if not np.isnan(r2_q45) else 0, avg_n_train.get(model_name, 0))
 
-    comp38 = pd.DataFrame(rows_38)
-    comp38.to_csv(output_dir / "restriction_comparison.csv", index=False)
+    q45_restriction_comparison = pd.DataFrame(q45_restriction_rows)
+    q45_restriction_comparison.to_csv(
+        output_dir / "restriction_comparison.csv", index=False
+    )
 
     # Output 3.9: R² by individual quintile × training universe.
     rows_39 = []
@@ -283,7 +295,7 @@ def main():
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     from src.analysis.motivation import _set_academic_style
     _set_academic_style()
-    valid = comp38.dropna(subset=["r2_q45_pct"])
+    valid = q45_restriction_comparison.dropna(subset=["r2_q45_pct"])
     if len(valid) > 1:
         fig, ax = plt.subplots(figsize=(8, 5))
         x_labels = valid["model"].tolist()

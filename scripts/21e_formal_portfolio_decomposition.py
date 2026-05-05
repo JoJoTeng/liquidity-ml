@@ -3,8 +3,8 @@
 ====================================
 
 Generate the formal Section 9 portfolio tables:
-    outputs/formalanalysis/analysis/{model}/{weighting}/two_by_two_{aum}.csv
-    outputs/formalanalysis/analysis/{model}/{weighting}/within_quintile_portfolio.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/two_by_two_{aum}.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/within_quintile_portfolio.csv
     outputs/formalanalysis/analysis/formal_hypothesis_tests.json
 """
 
