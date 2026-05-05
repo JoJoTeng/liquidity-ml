@@ -46,7 +46,11 @@ EOF
     esac
 done
 
-MODELS=(elastic_net xgboost neural_network)
+if [ -n "${MODELS_OVERRIDE:-}" ]; then
+    IFS=',' read -ra MODELS <<< "${MODELS_OVERRIDE}"
+else
+    MODELS=(elastic_net xgboost neural_network)
+fi
 SOFTMAX_LAMBDAS=(2 3)
 TC_AUMS=(10 100 500 1000)
 
