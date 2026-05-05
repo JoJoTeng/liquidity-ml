@@ -78,6 +78,25 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # ── 1.5. Sanitize liquidity columns ──────────────────────
+    #   Convert implausible zeros to NaN so the three weighting schemes
+    #   in src/weighting/schemes.py treat them uniformly via their
+    #   median/mean imputation rather than diverging:
+    #     - dolvol clips zero to 1e-8 → near-zero weight
+    #     - softmax_rank treats zero as median rank
+    #     - tc imputes zero ADV to median
+    #   With zeros forced to NaN, all three follow the same NaN path.
+    for col in ["liq_dvol_21d", "liq_me_raw"]:
+        if col not in panel.columns:
+            continue
+        n_zero = int((panel[col] == 0).sum())
+        if n_zero > 0:
+            panel.loc[panel[col] == 0, col] = np.nan
+            logger.info(
+                "Sanitized %s: %d zero rows -> NaN (will be median-imputed at weighting time)",
+                col, n_zero,
+            )
+
     # ── 2. Feature selection from SignalDoc.csv ───────────────
     logger.info("Loading SignalDoc.csv for feature selection...")
     signaldoc = load_signaldoc("data/SignalDoc.csv")
