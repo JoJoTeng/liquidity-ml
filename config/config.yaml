@@ -203,17 +203,20 @@ models:
     batch_norm: true # Algorithm 7 — after ReLU
     dropout: 0.0 # not used by GKX
     batch_size: 10000 # Table A.5
-    epochs: 100 # Table A.5
-    patience: 10 # Bumped from GKX's 5; single-seed NN val_loss is noisier than ensemble
-    learning_rate: 0.001
-    l1_penalty: 0.00001
+    epochs: 256 # Patience/LR experiment: allow longer training before epoch cap
+    patience: 50 # Early-stopping patience on validation loss
+    learning_rate: 0.01
+    reduce_lr_on_plateau: true # Let validation plateaus lower the learning rate
+    reduce_lr_factor: 0.5
+    reduce_lr_patience: 10
+    min_learning_rate: 0.000001
+    l1_penalty: 0.0
     weight_decay: 0.0
     n_ensemble_seeds: 1 # no ensemble
     tune_n_ensemble_seeds: 1 # ensemble size used for each tuning candidate; <= n_ensemble_seeds for speed
-    search_space:
-      learning_rate: [ 0.001, 0.003, 0.01 ]
-      l1_penalty: [ 0.00001, 0.0001, 0.001 ]
-    # Total grid: 3 LR x 3 L1 = 9 combos, best selected via validation
+    log_epoch_metrics: true # Print train/validation loss each epoch for local NN diagnostics
+    epoch_log_frequency: 1
+    search_space: { } # Fixed-parameter patience experiment; no annual NN grid search
 # ----------------------------------------------------------
 # Training Protocol
 # ----------------------------------------------------------

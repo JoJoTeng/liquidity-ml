@@ -23,6 +23,7 @@ rank-normalized by scripts/01_process_data.py; the shared rolling trainer only
 fills missing feature values with the neutral value 0.5.
 
 HPC usage:
+  python scripts/20_formal_run_experiment.py --model neural_network --standard-only --force-standard --skip-importance
   python scripts/20_formal_run_experiment.py --model xgboost --weights dolvol
   python scripts/20_formal_run_experiment.py --model xgboost --weights softmax_rank --softmax-lambda 2
   python scripts/20_formal_run_experiment.py --model xgboost --weights softmax_rank --softmax-lambda 3
@@ -72,7 +73,7 @@ def parse_args():
     )
     p.add_argument("--model", required=True,
                     choices=["elastic_net", "xgboost", "neural_network"])
-    p.add_argument("--weights", required=True,
+    p.add_argument("--weights", default=None,
                     choices=["dolvol", "softmax_rank", "tc"])
     p.add_argument("--aum", type=int, default=None,
                     choices=[10, 100, 500, 1000],
@@ -86,6 +87,24 @@ def parse_args():
                         "--weights softmax_rank; must be in "
                         "weighting.softmax_rank_lambdas."
                     ))
+    p.add_argument(
+        "--standard-only",
+        action="store_true",
+        help="Train/load only M_std and skip weighted training.",
+    )
+    p.add_argument(
+        "--force-standard",
+        action="store_true",
+        help="Retrain M_std even if cached standard artifacts already exist.",
+    )
+    p.add_argument(
+        "--skip-importance",
+        action="store_true",
+        help=(
+            "Skip SHAP and native/permutation importance. Use this for fast "
+            "training diagnostics when only predictions and loss logs are needed."
+        ),
+    )
     return p.parse_args()
 
 
@@ -100,6 +119,8 @@ def _lambda_label(lam: float) -> str:
 def main():
     args = parse_args()
     config = load_config()
+    if args.skip_importance:
+        config.setdefault("training", {})["skip_importance"] = True
 
     # Reproducibility
     SEED = config["project"]["seed"]
@@ -115,6 +136,9 @@ def main():
             pass
 
     # Validate args
+    if not args.standard_only and args.weights is None:
+        print("ERROR: --weights is required unless --standard-only is set", file=sys.stderr)
+        sys.exit(1)
     if args.weights == "tc" and args.aum is None:
         print("ERROR: --aum required when --weights tc", file=sys.stderr)
         sys.exit(1)
@@ -157,11 +181,14 @@ def main():
         wt_dir = model_dir / f"tc_{args.aum}m"
     elif args.weights == "softmax_rank":
         wt_dir = model_dir / f"softmax_rank_{_lambda_label(softmax_lam)}"
-    else:
+    elif args.weights is not None:
         wt_dir = model_dir / args.weights
+    else:
+        wt_dir = None
 
     std_dir.mkdir(parents=True, exist_ok=True)
-    wt_dir.mkdir(parents=True, exist_ok=True)
+    if wt_dir is not None:
+        wt_dir.mkdir(parents=True, exist_ok=True)
 
     data_dir = get_data_dir()
 
@@ -186,16 +213,9 @@ def main():
     logger.info("Panel: %d rows, %d features, %d months",
                 len(panel), len(features), panel["yyyymm"].nunique())
 
-    # -- Compute weights for weighted training --
-    weight_label = args.weights
-    if args.weights == "softmax_rank":
-        weight_label = f"softmax_rank(lambda={softmax_lam:g})"
-    logger.info("Computing %s weights (aum=%s)...", weight_label,
-                f"${args.aum}M" if args.aum else "N/A")
-    w = compute_weights(panel, scheme=args.weights, config=config, aum=aum_dollars)
-
     # -- Phase 1: Standard training (M_std) --
     std_pred_path = std_dir / "predictions.parquet"
+    std_diagnostics_path = std_dir / "training_diagnostics.csv"
     std_required = [
         std_pred_path,
         std_dir / "importance_shap.csv",
@@ -203,19 +223,21 @@ def main():
         std_dir / "tuned_params.csv",
         std_dir / "training_meta.json",
     ]
-    if all(p.exists() for p in std_required):
+    if all(p.exists() for p in std_required) and not args.force_standard:
         logger.info("Complete M_std artifacts already exist at %s - skipping", std_dir)
         preds_std = pd.read_parquet(std_pred_path)
     else:
         missing_std = [p.name for p in std_required if not p.exists()]
-        if std_pred_path.exists():
+        if args.force_standard:
+            logger.info("--force-standard requested; retraining standard model")
+        elif std_pred_path.exists():
             logger.info(
                 "M_std cache is incomplete (%s missing); retraining standard model",
                 ", ".join(missing_std),
             )
         logger.info("=== Training M_std (standard) ===")
         t0 = time.time()
-        preds_std, imp_std, native_std, params_std = run_rolling_training(
+        preds_std, imp_std, native_std, params_std, diag_std = run_rolling_training(
             panel, features, args.model,
             weights=None,  # Standard: no weights
             config=config, seed=SEED, label="std",
@@ -228,6 +250,7 @@ def main():
         imp_std.to_csv(std_dir / "importance_shap.csv", index=False)
         native_std.to_csv(std_dir / "importance_native.csv", index=False)
         params_std.to_csv(std_dir / "tuned_params.csv", index=False)
+        diag_std.to_csv(std_diagnostics_path, index=False)
         with open(std_dir / "training_meta.json", "w") as f:
             json.dump({
                 "model": args.model,
@@ -235,14 +258,31 @@ def main():
                 "features_pre_normalized": True,
                 "feature_missing_fill": 0.5,
                 "training_engine": "src.training.run_rolling_training",
+                "training_diagnostics": "training_diagnostics.csv",
+                "skip_importance": bool(args.skip_importance),
             }, f, indent=2)
         logger.info("M_std saved to %s", std_dir)
+
+    if args.standard_only:
+        logger.info("--standard-only requested; skipping weighted training")
+        logger.info("All done. Outputs in:\n  std: %s", std_dir)
+        return
+
+    # -- Compute weights for weighted training --
+    assert args.weights is not None
+    assert wt_dir is not None
+    weight_label = args.weights
+    if args.weights == "softmax_rank":
+        weight_label = f"softmax_rank(lambda={softmax_lam:g})"
+    logger.info("Computing %s weights (aum=%s)...", weight_label,
+                f"${args.aum}M" if args.aum else "N/A")
+    w = compute_weights(panel, scheme=args.weights, config=config, aum=aum_dollars)
 
     # -- Phase 2: Weighted training (M_w) --
     logger.info("=== Training M_w (weighted: %s, aum=%s) ===",
                 weight_label, f"${args.aum}M" if args.aum else "N/A")
     t0 = time.time()
-    preds_wt, imp_wt, native_wt, params_wt = run_rolling_training(
+    preds_wt, imp_wt, native_wt, params_wt, diag_wt = run_rolling_training(
         panel, features, args.model,
         weights=w,  # Weighted
         config=config, seed=SEED, label="wt",
@@ -255,6 +295,7 @@ def main():
     imp_wt.to_csv(wt_dir / "importance_shap.csv", index=False)
     native_wt.to_csv(wt_dir / "importance_native.csv", index=False)
     params_wt.to_csv(wt_dir / "tuned_params.csv", index=False)
+    diag_wt.to_csv(wt_dir / "training_diagnostics.csv", index=False)
 
     # -- Save environment metadata --
     meta = {
@@ -270,6 +311,7 @@ def main():
         "n_threads": os.environ.get("OMP_NUM_THREADS", "unknown"),
         "n_predictions_std": len(preds_std),
         "n_predictions_wt": len(preds_wt),
+        "skip_importance": bool(args.skip_importance),
         "python_version": sys.version,
         "timestamp": datetime.now().isoformat(),
     }

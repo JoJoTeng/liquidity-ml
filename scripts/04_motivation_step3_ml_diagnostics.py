@@ -26,6 +26,7 @@ Outputs are saved to outputs/motivation/step3/{model}/{liquidity_key}/:
   Plus intermediate files:
        predictions.parquet              OOS predictions (permno, yyyymm, y_true, y_pred)
        feature_importance.csv           Selected importance source per rolling window
+       training_diagnostics.csv         NN early-stopping/tuning diagnostics when available
 
 Usage:
   python scripts/04_motivation_step3_ml_diagnostics.py
@@ -97,11 +98,17 @@ def _standard_artifact_paths(std_dir: Path) -> dict[str, Path]:
         "importance_native": std_dir / "importance_native.csv",
         "tuned_params": std_dir / "tuned_params.csv",
         "training_meta": std_dir / "training_meta.json",
+        "training_diagnostics": std_dir / "training_diagnostics.csv",
     }
 
 
 def _standard_artifacts_complete(paths: dict[str, Path]) -> bool:
-    return all(path.exists() for path in paths.values())
+    required = {
+        name: path
+        for name, path in paths.items()
+        if name != "training_diagnostics"
+    }
+    return all(path.exists() for path in required.values())
 
 
 def _to_step3_predictions(
@@ -245,6 +252,7 @@ def main():
     pred_path = output_dir / "predictions.parquet"
     imp_path = output_dir / "feature_importance.csv"
     tuned_params_path = output_dir / "tuned_params.csv"
+    training_diagnostics_path = output_dir / "training_diagnostics.csv"
 
     std_dir = base_output / "formalanalysis" / "experiment" / args.model / "standard"
     std_dir.mkdir(parents=True, exist_ok=True)
@@ -256,6 +264,11 @@ def main():
         imp_std = pd.read_csv(std_paths["importance_shap"])
         native_std = pd.read_csv(std_paths["importance_native"])
         params_std = pd.read_csv(std_paths["tuned_params"])
+        diag_std = (
+            pd.read_csv(std_paths["training_diagnostics"])
+            if std_paths["training_diagnostics"].exists()
+            else pd.DataFrame()
+        )
     else:
         if args.force_train:
             logger.info("--force-train requested; retraining formal M_std")
@@ -265,7 +278,7 @@ def main():
         logger.info("=" * 60)
         logger.info("Phase 1: Rolling %s standard training (this may take a while)...", args.model)
         seed = config["project"]["seed"]
-        preds_std, imp_std, native_std, params_std = run_rolling_training(
+        preds_std, imp_std, native_std, params_std, diag_std = run_rolling_training(
             panel, features, args.model,
             weights=None,
             config=config, seed=seed, label="std",
@@ -274,6 +287,7 @@ def main():
         imp_std.to_csv(std_paths["importance_shap"], index=False)
         native_std.to_csv(std_paths["importance_native"], index=False)
         params_std.to_csv(std_paths["tuned_params"], index=False)
+        diag_std.to_csv(std_paths["training_diagnostics"], index=False)
         with open(std_paths["training_meta"], "w") as f:
             json.dump({
                 "model": args.model,
@@ -281,6 +295,7 @@ def main():
                 "features_pre_normalized": True,
                 "feature_missing_fill": 0.5,
                 "training_engine": "src.training.run_rolling_training",
+                "training_diagnostics": "training_diagnostics.csv",
             }, f, indent=2)
         logger.info("Saved canonical formal M_std artifacts to %s", std_dir)
 
@@ -297,9 +312,12 @@ def main():
     predictions.to_parquet(pred_path, index=False)
     importances.to_csv(imp_path)
     params_std.to_csv(tuned_params_path, index=False)
+    if not diag_std.empty:
+        diag_std.to_csv(training_diagnostics_path, index=False)
     logger.info(
-        "Prepared Step 3 artifacts: predictions=%d rows, importances=%d months, params=%d windows",
-        len(predictions), len(importances), len(params_std),
+        "Prepared Step 3 artifacts: predictions=%d rows, importances=%d months, "
+        "params=%d windows, diagnostics=%d rows",
+        len(predictions), len(importances), len(params_std), len(diag_std),
     )
 
     # ══════════════════════════════════════════════════════

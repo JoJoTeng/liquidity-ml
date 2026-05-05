@@ -63,7 +63,7 @@ def run_rolling_training(
     config: dict,
     seed: int,
     label: str,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Run rolling-window ML training on the processed panel.
 
     ``panel`` is expected to come from ``load_processed_panel()``. The selected
@@ -72,10 +72,13 @@ def run_rolling_training(
 
     Returns
     -------
-    predictions_df, importance_df, native_importance_df, params_df
+    predictions_df, importance_df, native_importance_df, params_df, diagnostics_df
         ``importance_df`` is SHAP mean absolute importance by feature/window.
         ``native_importance_df`` is gain/coef/permutation importance by
         feature/window.
+        ``diagnostics_df`` records model fit diagnostics when exposed by the
+        model implementation. For neural networks it includes early-stopping
+        and tuning-candidate loss summaries.
     """
     train_cfg = config["training"]
     train_win = train_cfg["train_window"]
@@ -85,7 +88,9 @@ def run_rolling_training(
     oos_end = train_cfg["oos_end"]
     target = config["data"]["target_col"]
     shap_cfg = config.get("shap", {})
-    compute_shap = bool(shap_cfg.get("compute_shap", True))
+    skip_importance = bool(train_cfg.get("skip_importance", False))
+    compute_shap = bool(shap_cfg.get("compute_shap", True)) and not skip_importance
+    compute_native_importance = not skip_importance
 
     all_months = sorted(panel["yyyymm"].unique())
     oos_months = [m for m in all_months if oos_start <= m <= oos_end]
@@ -102,6 +107,7 @@ def run_rolling_training(
     importance_all = []
     native_importance_all = []
     params_all = []
+    diagnostics_all = []
     current_params: dict | None = None
     windows_since_tune = retune_freq
 
@@ -165,6 +171,13 @@ def run_rolling_training(
                 X_train, y_train, X_val, y_val,
                 sample_weight=w_train, sample_weight_val=w_val,
             )
+            for row in getattr(tuning_model, "tuning_diagnostics", []):
+                diagnostics_all.append({
+                    "yyyymm": test_month,
+                    "label": label,
+                    "stage": "tuning_candidate",
+                    **row,
+                })
             current_params = best
             windows_since_tune = 0
             params_all.append({"yyyymm": test_month, **best})
@@ -176,6 +189,14 @@ def run_rolling_training(
             sample_weight=w_train,
             sample_weight_val=w_val,
         )
+        fit_diagnostics = getattr(model, "fit_diagnostics", {})
+        if fit_diagnostics:
+            diagnostics_all.append({
+                "yyyymm": test_month,
+                "label": label,
+                "stage": "fit",
+                **fit_diagnostics,
+            })
 
         preds = model.predict(X_test)
         pred_df = pd.DataFrame({
@@ -198,11 +219,15 @@ def run_rolling_training(
                     label, test_month, exc,
                 )
         elif i == 0:
-            logger.info("  [%s] SHAP disabled by config", label)
+            reason = "skip_importance" if skip_importance else "config"
+            logger.info("  [%s] SHAP disabled by %s", label, reason)
         importance_all.append(shap_row)
 
         native_row = {"yyyymm": test_month}
-        if model_name == "neural_network":
+        if not compute_native_importance:
+            if i == 0:
+                logger.info("  [%s] Native/permutation importance disabled", label)
+        elif model_name == "neural_network":
             try:
                 perm_imp = model.get_permutation_importance(
                     X_test, y_test, feature_names=features, seed=seed,
@@ -224,5 +249,8 @@ def run_rolling_training(
         pd.DataFrame(native_importance_all) if native_importance_all else pd.DataFrame()
     )
     params_df = pd.DataFrame(params_all) if params_all else pd.DataFrame()
+    diagnostics_df = (
+        pd.DataFrame(diagnostics_all) if diagnostics_all else pd.DataFrame()
+    )
 
-    return predictions_df, importance_df, native_importance_df, params_df
+    return predictions_df, importance_df, native_importance_df, params_df, diagnostics_df

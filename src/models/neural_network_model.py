@@ -38,6 +38,38 @@ logger = logging.getLogger(__name__)
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 
+def _make_epoch_loss_logger(tf, logger: logging.Logger, max_epochs: int, frequency: int):
+    """Create a lazy TensorFlow callback that logs train/validation loss."""
+
+    class _EpochLossLogger(tf.keras.callbacks.Callback):
+        def __init__(self, logger: logging.Logger, max_epochs: int, frequency: int):
+            super().__init__()
+            self.logger = logger
+            self.max_epochs = max_epochs
+            self.frequency = max(1, frequency)
+
+        def on_epoch_end(self, epoch, logs=None):
+            logs = logs or {}
+            epoch_num = epoch + 1
+            if epoch_num % self.frequency != 0 and epoch_num != self.max_epochs:
+                return
+
+            train_loss = logs.get("loss")
+            val_loss = logs.get("val_loss")
+            lr = float(tf.keras.backend.get_value(self.model.optimizer.learning_rate))
+
+            self.logger.info(
+                "    epoch %03d/%03d: train_loss=%.8f val_loss=%.8f lr=%.6g",
+                epoch_num,
+                self.max_epochs,
+                train_loss if train_loss is not None else np.nan,
+                val_loss if val_loss is not None else np.nan,
+                lr,
+            )
+
+    return _EpochLossLogger(logger, max_epochs, frequency)
+
+
 def _build_model(
     input_dim: int,
     hidden_layers: list[int],
@@ -116,6 +148,8 @@ class NeuralNetPredictor(BaseReturnPredictor):
         cfg = {**default_cfg, **(config or {})}
         super().__init__(name="neural_network", config=cfg, seed=seed)
         self.model = None  # tf.keras.Sequential
+        self.fit_diagnostics: dict[str, Any] = {}
+        self.tuning_diagnostics: list[dict[str, Any]] = []
 
     def fit(
         self,
@@ -128,7 +162,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
     ) -> "NeuralNetPredictor":
         """Train feedforward NN with optional implementability weights.
 
-        Uses early stopping + ReduceLROnPlateau scheduling.
+        Uses early stopping and, when configured, ReduceLROnPlateau scheduling.
         """
         import tensorflow as tf
 
@@ -136,39 +170,115 @@ class NeuralNetPredictor(BaseReturnPredictor):
         n_ensemble = cfg.get("n_ensemble_seeds", 1)
 
         self._ensemble_models = []
-        all_val_losses = []
+        member_diagnostics = []
 
         for seed_i in range(n_ensemble):
             model_seed = self.seed + seed_i
             tf.keras.utils.set_random_seed(model_seed)
 
-            model_i, val_loss_i, n_epochs_i = self._train_single(
+            model_i, diagnostics_i = self._train_single(
                 X_train, y_train, X_val, y_val,
                 sample_weight, sample_weight_val, cfg, model_seed,
             )
             self._ensemble_models.append(model_i)
-            all_val_losses.append(val_loss_i)
+            member_diagnostics.append(diagnostics_i)
 
             if n_ensemble > 1:
                 logger.info(
                     "  Ensemble member %d/%d: val_loss=%.6f, epochs=%d",
-                    seed_i + 1, n_ensemble, val_loss_i, n_epochs_i,
+                    seed_i + 1,
+                    n_ensemble,
+                    diagnostics_i["best_val_loss"],
+                    diagnostics_i["epochs_run"],
                 )
 
         self.model = self._ensemble_models[0]
         self.is_fitted = True
+        self.fit_diagnostics = self._summarize_fit_diagnostics(
+            member_diagnostics,
+            cfg,
+            weighted=sample_weight is not None,
+            n_train=len(X_train),
+            n_val=len(X_val) if X_val is not None else 0,
+        )
 
         weighted_str = "weighted" if sample_weight is not None else "standard"
         logger.info(
             "NeuralNet %s training: %d ensemble members, hidden=%s, "
-            "mean_val_loss=%.6f, shape %s",
+            "mean_val_loss=%.6f, mean_epochs=%.1f, shape %s",
             weighted_str,
             n_ensemble,
             cfg["hidden_layers"],
-            np.mean(all_val_losses),
+            self.fit_diagnostics["best_val_loss_mean"],
+            self.fit_diagnostics["epochs_run_mean"],
             X_train.shape,
         )
         return self
+
+    @staticmethod
+    def _summarize_fit_diagnostics(
+        member_diagnostics: list[dict[str, Any]],
+        cfg: dict,
+        weighted: bool,
+        n_train: int,
+        n_val: int,
+    ) -> dict[str, Any]:
+        """Aggregate per-seed Keras history summaries for saved diagnostics."""
+        if not member_diagnostics:
+            return {}
+
+        def _mean(key: str) -> float:
+            vals = [d[key] for d in member_diagnostics if pd.notna(d.get(key))]
+            return float(np.mean(vals)) if vals else np.nan
+
+        def _min(key: str) -> float:
+            vals = [d[key] for d in member_diagnostics if pd.notna(d.get(key))]
+            return float(np.min(vals)) if vals else np.nan
+
+        def _max(key: str) -> float:
+            vals = [d[key] for d in member_diagnostics if pd.notna(d.get(key))]
+            return float(np.max(vals)) if vals else np.nan
+
+        return {
+            "weighted": bool(weighted),
+            "n_train": int(n_train),
+            "n_val": int(n_val),
+            "hidden_layers": str(cfg.get("hidden_layers")),
+            "activation": cfg.get("activation", "relu"),
+            "batch_norm": bool(cfg.get("batch_norm", True)),
+            "dropout": float(cfg.get("dropout", 0.0)),
+            "batch_size": int(cfg["batch_size"]),
+            "epochs_config": int(cfg["epochs"]),
+            "patience_config": int(cfg.get("patience", 5)),
+            "learning_rate": float(cfg.get("learning_rate", 0.001)),
+            "reduce_lr_on_plateau": bool(cfg.get("reduce_lr_on_plateau", True)),
+            "reduce_lr_factor": float(cfg.get("reduce_lr_factor", 0.5)),
+            "reduce_lr_patience": int(cfg.get("reduce_lr_patience", 3)),
+            "min_learning_rate": float(cfg.get("min_learning_rate", 1e-6)),
+            "l1_penalty": float(cfg.get("l1_penalty", 0.0)),
+            "weight_decay": float(cfg.get("weight_decay", 0.0)),
+            "n_ensemble_seeds": int(cfg.get("n_ensemble_seeds", 1)),
+            "epochs_run_mean": _mean("epochs_run"),
+            "epochs_run_min": _min("epochs_run"),
+            "epochs_run_max": _max("epochs_run"),
+            "best_epoch_mean": _mean("best_epoch"),
+            "best_epoch_min": _min("best_epoch"),
+            "best_epoch_max": _max("best_epoch"),
+            "best_train_mse_mean": _mean("best_train_mse"),
+            "best_val_mse_mean": _mean("best_val_mse"),
+            "best_train_loss_mean": _mean("best_train_loss"),
+            "best_val_loss_mean": _mean("best_val_loss"),
+            "final_train_mse_mean": _mean("final_train_mse"),
+            "final_val_mse_mean": _mean("final_val_mse"),
+            "final_train_loss_mean": _mean("final_train_loss"),
+            "final_val_loss_mean": _mean("final_val_loss"),
+            "stopped_early_any": any(
+                bool(d.get("stopped_early", False)) for d in member_diagnostics
+            ),
+            "hit_epoch_cap_any": any(
+                bool(d.get("hit_epoch_cap", False)) for d in member_diagnostics
+            ),
+        }
 
     def _train_single(
         self,
@@ -181,7 +291,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
         cfg: dict,
         seed: int,
     ) -> tuple:
-        """Train a single network. Returns (model, best_val_loss, n_epochs)."""
+        """Train a single network and summarize its Keras loss history."""
         import tensorflow as tf
 
         tf.keras.utils.set_random_seed(seed)
@@ -190,6 +300,9 @@ class NeuralNetPredictor(BaseReturnPredictor):
         batch_size = cfg["batch_size"]
         epochs = cfg["epochs"]
         patience = cfg.get("patience", 5)
+        log_epoch_metrics = bool(cfg.get("log_epoch_metrics", False))
+        epoch_log_frequency = int(cfg.get("epoch_log_frequency", 1))
+        has_val = X_val is not None and y_val is not None
 
         model = _build_model(
             input_dim=input_dim,
@@ -203,13 +316,27 @@ class NeuralNetPredictor(BaseReturnPredictor):
         )
 
         # Callbacks
-        callbacks = [
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor="val_loss", factor=0.5, patience=3, min_lr=1e-6,
-            ),
-        ]
+        callbacks = []
+        if has_val and bool(cfg.get("reduce_lr_on_plateau", True)):
+            callbacks.append(
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor="val_loss",
+                    factor=float(cfg.get("reduce_lr_factor", 0.5)),
+                    patience=int(cfg.get("reduce_lr_patience", 3)),
+                    min_lr=float(cfg.get("min_learning_rate", 1e-6)),
+                )
+            )
 
-        has_val = X_val is not None and y_val is not None
+        if log_epoch_metrics:
+            callbacks.append(
+                _make_epoch_loss_logger(
+                    tf,
+                    logger=logger,
+                    max_epochs=epochs,
+                    frequency=epoch_log_frequency,
+                )
+            )
+
         if has_val:
             callbacks.append(
                 tf.keras.callbacks.EarlyStopping(
@@ -239,12 +366,54 @@ class NeuralNetPredictor(BaseReturnPredictor):
             verbose=0,
         )
 
-        n_epochs_run = len(history.history["loss"])
-        best_val_loss = (
-            min(history.history["val_loss"]) if has_val else history.history["loss"][-1]
+        train_loss = np.asarray(history.history["loss"], dtype=float)
+        train_mse = np.asarray(history.history.get("mse", train_loss), dtype=float)
+        val_loss = (
+            np.asarray(history.history["val_loss"], dtype=float)
+            if has_val and "val_loss" in history.history
+            else None
         )
+        val_mse = (
+            np.asarray(history.history["val_mse"], dtype=float)
+            if has_val and "val_mse" in history.history
+            else val_loss
+        )
+        n_epochs_run = len(train_loss)
 
-        return model, best_val_loss, n_epochs_run
+        if val_loss is not None and len(val_loss) > 0:
+            best_idx = int(np.argmin(val_loss))
+            best_val_loss = float(val_loss[best_idx])
+            final_val_loss = float(val_loss[-1])
+        else:
+            best_idx = int(np.argmin(train_loss))
+            best_val_loss = np.nan
+            final_val_loss = np.nan
+
+        diagnostics = {
+            "seed": int(seed),
+            "epochs_run": int(n_epochs_run),
+            "best_epoch": int(best_idx + 1),
+            "best_train_mse": float(train_mse[best_idx]),
+            "best_val_mse": (
+                float(val_mse[best_idx])
+                if val_mse is not None and len(val_mse) > 0
+                else np.nan
+            ),
+            "best_train_loss": float(train_loss[best_idx]),
+            "best_val_loss": best_val_loss,
+            "final_train_mse": float(train_mse[-1]),
+            "final_val_mse": (
+                float(val_mse[-1])
+                if val_mse is not None and len(val_mse) > 0
+                else np.nan
+            ),
+            "final_train_loss": float(train_loss[-1]),
+            "final_val_loss": final_val_loss,
+            "stopped_early": bool(has_val and n_epochs_run < epochs),
+            "hit_epoch_cap": bool(n_epochs_run >= epochs),
+        }
+
+        return model, diagnostics
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """Predict using ensemble average."""
@@ -443,6 +612,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
 
         best_mse = np.inf
         best_params = {}
+        self.tuning_diagnostics = []
 
         # tune_n_ensemble_seeds controls how many ensemble seeds are used
         # for each candidate during the search (defaults to 1 for speed).
@@ -460,6 +630,14 @@ class NeuralNetPredictor(BaseReturnPredictor):
             mse = mean_squared_error(
                 y_val, preds, sample_weight=sample_weight_val,
             )
+            trial_diagnostics = {
+                "candidate": i + 1,
+                "n_candidates": len(param_grid),
+                "selection_mse": float(mse),
+                **{k: params[k] for k in keys},
+                **model.fit_diagnostics,
+            }
+            self.tuning_diagnostics.append(trial_diagnostics)
 
             logger.info(
                 "  Combo %d/%d: %s -> MSE=%.6f",
