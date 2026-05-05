@@ -79,6 +79,8 @@ def _build_model(
     l1_penalty: float = 0.0,
     learning_rate: float = 0.001,
     weight_decay: float = 0.0,
+    loss: str = "mse",
+    huber_delta: float = 0.1,
 ):
     """Build a Keras Sequential feedforward network.
 
@@ -114,21 +116,32 @@ def _build_model(
     optimizer_kwargs = {"learning_rate": learning_rate}
     if weight_decay > 0:
         optimizer_kwargs["weight_decay"] = weight_decay
+
+    loss_name = str(loss).lower()
+    if loss_name in {"mse", "mean_squared_error"}:
+        loss_obj = "mse"
+    elif loss_name == "huber":
+        loss_obj = tf.keras.losses.Huber(delta=float(huber_delta))
+    else:
+        raise ValueError(f"Unsupported neural-network loss: {loss!r}")
+
     model.compile(
         optimizer=tf.keras.optimizers.Adam(**optimizer_kwargs),
-        loss="mse",
+        loss=loss_obj,
+        metrics=[tf.keras.metrics.MeanSquaredError(name="mse")],
     )
     return model
 
 
 class NeuralNetPredictor(BaseReturnPredictor):
-    """Feedforward neural network (TensorFlow/Keras) with weighted MSE.
+    """Feedforward neural network (TensorFlow/Keras) with optional robust loss.
 
     Architecture (Gu, Kelly, Xiu 2020 NN3):
         Input -> [Dense -> BatchNorm -> ReLU] x len(hidden_layers) -> Dense(1)
     Loss:
-        L = (1/N) sum w_i (r_i - r-hat_i)^2 + lambda_L1 * ||W||_1
-    Trained with Adam; early stopping monitors weighted val MSE with
+        MSE or Huber prediction loss, optionally sample-weighted, plus
+        lambda_L1 * ||W||_1 when configured.
+    Trained with Adam; early stopping monitors validation loss with
     patience 'patience' and restores best weights. An ensemble of
     n_ensemble_seeds independent initialisations is averaged at predict
     time when n_ensemble_seeds > 1.
@@ -137,7 +150,8 @@ class NeuralNetPredictor(BaseReturnPredictor):
     ----------
     config : dict with keys 'hidden_layers', 'activation', 'batch_norm',
         'dropout', 'batch_size', 'epochs', 'patience', 'learning_rate',
-        'l1_penalty', 'weight_decay', 'n_ensemble_seeds', 'search_space'.
+        'loss', 'huber_delta', 'l1_penalty', 'weight_decay',
+        'n_ensemble_seeds', 'search_space'.
     seed : random seed for reproducibility.
     """
 
@@ -251,6 +265,8 @@ class NeuralNetPredictor(BaseReturnPredictor):
             "epochs_config": int(cfg["epochs"]),
             "patience_config": int(cfg.get("patience", 5)),
             "learning_rate": float(cfg.get("learning_rate", 0.001)),
+            "loss": cfg.get("loss", "mse"),
+            "huber_delta": float(cfg.get("huber_delta", 0.1)),
             "reduce_lr_on_plateau": bool(cfg.get("reduce_lr_on_plateau", True)),
             "reduce_lr_factor": float(cfg.get("reduce_lr_factor", 0.5)),
             "reduce_lr_patience": int(cfg.get("reduce_lr_patience", 3)),
@@ -313,6 +329,8 @@ class NeuralNetPredictor(BaseReturnPredictor):
             l1_penalty=cfg.get("l1_penalty", 0.0),
             learning_rate=cfg.get("learning_rate", 0.001),
             weight_decay=cfg.get("weight_decay", 0.0),
+            loss=cfg.get("loss", "mse"),
+            huber_delta=cfg.get("huber_delta", 0.1),
         )
 
         # Callbacks

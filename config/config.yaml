@@ -203,20 +203,27 @@ models:
     batch_norm: true # Algorithm 7 — after ReLU
     dropout: 0.0 # not used by GKX
     batch_size: 10000 # Table A.5
-    epochs: 256 # Patience/LR experiment: allow longer training before epoch cap
-    patience: 50 # Early-stopping patience on validation loss
-    learning_rate: 0.01
+    epochs: 200 # Raised from GKX Table A.5 cap because validation loss often still improves near epoch 100
+    patience: 10 # Slightly above GKX Table A.5 to avoid stopping before noisy validation loss stabilizes
+    learning_rate: 0.001
+    loss: "mse" # GKX NN1-NN5 use the standard l2/MSE objective, not +H
+    huber_delta: 0.10 # only used if loss: "huber"
     reduce_lr_on_plateau: true # Let validation plateaus lower the learning rate
     reduce_lr_factor: 0.5
-    reduce_lr_patience: 10
+    reduce_lr_patience: 3
     min_learning_rate: 0.000001
-    l1_penalty: 0.0
+    l1_penalty: 0.0001
     weight_decay: 0.0
     n_ensemble_seeds: 1 # no ensemble
     tune_n_ensemble_seeds: 1 # ensemble size used for each tuning candidate; <= n_ensemble_seeds for speed
-    log_epoch_metrics: true # Print train/validation loss each epoch for local NN diagnostics
-    epoch_log_frequency: 1
-    search_space: { } # Fixed-parameter patience experiment; no annual NN grid search
+    log_epoch_metrics: false # Keep long rolling NN jobs readable; diagnostics are saved to CSV
+    epoch_log_frequency: 10
+    search_space:
+      learning_rate: [ 0.001, 0.01 ]
+      l1_penalty: [ 0.00001, 0.0001, 0.001 ]
+    # Paper-aligned lightweight grid: 2 LR x 3 L1 = 6 combos.
+    # GKX Table A.5 uses Ensemble=10; this project keeps one seed for tractable
+    # formal weighted runs. Increase n_ensemble_seeds only for a robustness run.
 # ----------------------------------------------------------
 # Training Protocol
 # ----------------------------------------------------------
