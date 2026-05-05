@@ -281,6 +281,7 @@ class NeuralNetPredictor(BaseReturnPredictor):
         give the wrong semantic. The single-call-on-ensemble-mean form
         used here is correct.
         """
+        from sklearn.base import BaseEstimator
         from sklearn.inspection import permutation_importance as sklearn_perm_importance
 
         if not self.is_fitted:
@@ -288,14 +289,16 @@ class NeuralNetPredictor(BaseReturnPredictor):
         if seed is None:
             seed = self.seed
 
-        # Wrap for sklearn API. sklearn >=1.3 validates that estimators
-        # implement fit() + get_params(), so we provide stubs. The wrapper
-        # delegates predict() to the outer NeuralNetPredictor, which
-        # averages over self._ensemble_models.
-        class _SklearnWrapper:
+        # Wrap for sklearn API. Inheriting from BaseEstimator gives us
+        # __sklearn_tags__ (required by sklearn >=1.6) plus default
+        # implementations of get_params/set_params; we override the
+        # latter two as no-ops because we don't expose tunable params.
+        # The wrapper delegates predict() to the outer NeuralNetPredictor,
+        # which averages over self._ensemble_models.
+        class _SklearnWrapper(BaseEstimator):
             _estimator_type = "regressor"
 
-            def __init__(self, predictor):
+            def __init__(self, predictor=None):
                 self._predictor = predictor
 
             def fit(self, X, y, **kwargs):
