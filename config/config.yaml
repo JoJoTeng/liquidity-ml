@@ -219,9 +219,10 @@ models:
     log_epoch_metrics: false # Keep long rolling NN jobs readable; diagnostics are saved to CSV
     epoch_log_frequency: 10
     search_space:
-      learning_rate: [ 0.001, 0.01 ]
-      l1_penalty: [ 0.00001, 0.0001, 0.001 ]
-    # Paper-aligned lightweight grid: 2 LR x 3 L1 = 6 combos.
+      learning_rate: [ 0.001, 0.003, 0.01 ]
+      l1_penalty: [ 0.0001, 0.001, 0.003, 0.01 ]
+    # Calibration-oriented grid: stronger L1 shrinkage and an intermediate
+    # learning rate to reduce over-scaled NN forecasts in the liquid-stock region.
     # GKX Table A.5 uses Ensemble=10; this project keeps one seed for tractable
     # formal weighted runs. Increase n_ensemble_seeds only for a robustness run.
 # ----------------------------------------------------------
