@@ -81,10 +81,30 @@ def load_predictions(spec: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     return preds_standard, preds_weighted
 
 
-def load_importance(spec: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load standard and weighted SHAP-importance files for one formal spec."""
-    importance_standard = pd.read_csv(spec["std_dir"] / "importance_shap.csv")
-    importance_weighted = pd.read_csv(spec["wt_dir"] / "importance_shap.csv")
+def load_importance(
+    spec: dict,
+    source: str = "shap",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load standard and weighted importance files for one formal spec.
+
+    ``source="shap"`` reads mean absolute SHAP importance files and is the
+    default. ``source="native"`` reads the model-native importance files. For
+    ElasticNet these are absolute coefficients; for XGBoost these are native
+    feature importances; for neural networks these are permutation-style
+    importances when available. ``source="naive"`` is accepted as an alias for
+    ``source="native"``.
+    """
+    aliases = {"naive": "native", "native": "native", "shap": "shap"}
+    try:
+        source_key = aliases[source]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown importance source {source!r}. Use 'native' or 'shap'."
+        ) from exc
+
+    filename = f"importance_{source_key}.csv"
+    importance_standard = pd.read_csv(spec["std_dir"] / filename)
+    importance_weighted = pd.read_csv(spec["wt_dir"] / filename)
     return importance_standard, importance_weighted
 
 

@@ -2,10 +2,11 @@
 21b - Formal Importance Reallocation
 ====================================
 
-Generate the formal feature-importance reallocation tables and figure:
+Generate the formal feature-importance reallocation tables and figure.
+Mean absolute SHAP importance is the default source; pass ``--importance native``
+or ``--importance naive`` to use model-native importance:
     outputs/formalanalysis/analysis/{model}/{weight_spec}/importance_shift.csv
     outputs/formalanalysis/analysis/{model}/{weight_spec}/gamma_regression.json
-    outputs/formalanalysis/analysis/{model}/{weight_spec}/delta_gamma.csv
     outputs/formalanalysis/analysis/{model}/{weight_spec}/group_shares.csv
     outputs/formalanalysis/analysis/{model}/{weight_spec}/importance_reallocation.png
 """
@@ -57,6 +58,16 @@ def parse_args():
         action="store_true",
         help="Write tables only and skip PNG figures.",
     )
+    parser.add_argument(
+        "--importance",
+        default="shap",
+        choices=["native", "naive", "shap"],
+        help=(
+            "Importance source for reallocation analysis. 'shap' reads "
+            "importance_shap.csv and is the default. 'native' reads "
+            "importance_native.csv; 'naive' is accepted as an alias."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -72,7 +83,10 @@ def main():
         logger.info("=== %s ===", spec_label)
         out_dir = formal_spec_dir(analysis_dir, spec)
         try:
-            importance_standard, importance_weighted = load_importance(spec)
+            importance_standard, importance_weighted = load_importance(
+                spec,
+                source=args.importance,
+            )
         except FileNotFoundError as exc:
             logger.warning("Importance files missing for %s: %s", spec_label, exc)
             continue
@@ -91,11 +105,7 @@ def main():
         if "delta_vs_gamma_regression" in result:
             with open(out_dir / "gamma_regression.json", "w") as handle:
                 json.dump(result["delta_vs_gamma_regression"], handle, indent=2)
-        if "delta_vs_gamma_data" in result:
-            result["delta_vs_gamma_data"].to_csv(
-                out_dir / "delta_gamma.csv",
-                index=False,
-            )
+        (out_dir / "delta_gamma.csv").unlink(missing_ok=True)
         if "group_shares" in result:
             result["group_shares"].to_csv(
                 out_dir / "group_shares.csv",
@@ -106,6 +116,7 @@ def main():
                 result["importance_shift"],
                 out_dir / "importance_reallocation.png",
                 spec["model"],
+                importance_source="shap" if args.importance == "shap" else "native",
             )
 
     logger.info("Done")

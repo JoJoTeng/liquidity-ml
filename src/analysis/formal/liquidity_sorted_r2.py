@@ -79,6 +79,7 @@ def evaluate_liquid_stock_r2(
     r2_table["r2_std_pct"] = r2_table["r2_zero_std_pct"]
     r2_table["r2_wt_pct"] = r2_table["r2_zero_wt_pct"]
     r2_table["delta_pct"] = r2_table["delta_zero_pct"]
+    r2_table["avg_n_month"] = r2_table["avg_n_month_std"]
     r2_table["n_obs"] = r2_table["n_obs_std"]
 
     keep_cols = [
@@ -86,8 +87,7 @@ def evaluate_liquid_stock_r2(
         "r2_std_pct",
         "r2_wt_pct",
         "delta_pct",
-        "avg_n_month_std",
-        "avg_n_month_wt",
+        "avg_n_month",
         "n_obs",
     ]
     if include_extra_benchmarks:

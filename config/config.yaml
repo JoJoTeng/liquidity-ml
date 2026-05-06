@@ -203,14 +203,14 @@ models:
     batch_norm: true # Algorithm 7 — after ReLU
     dropout: 0.0 # not used by GKX
     batch_size: 10000 # Table A.5
-    epochs: 200 # Raised from GKX Table A.5 cap because validation loss often still improves near epoch 100
-    patience: 10 # Slightly above GKX Table A.5 to avoid stopping before noisy validation loss stabilizes
-    learning_rate: 0.001
+    epochs: 300 # Higher cap: recent standard NN fits still hit 200 epochs in many rolling windows
+    patience: 15 # Give validation loss more room after learning-rate reductions
+    learning_rate: 0.003
     loss: "mse" # GKX NN1-NN5 use the standard l2/MSE objective, not +H
     huber_delta: 0.10 # only used if loss: "huber"
     reduce_lr_on_plateau: true # Let validation plateaus lower the learning rate
     reduce_lr_factor: 0.5
-    reduce_lr_patience: 3
+    reduce_lr_patience: 5
     min_learning_rate: 0.000001
     l1_penalty: 0.0001
     weight_decay: 0.0
@@ -219,11 +219,12 @@ models:
     log_epoch_metrics: false # Keep long rolling NN jobs readable; diagnostics are saved to CSV
     epoch_log_frequency: 10
     search_space:
-      learning_rate: [ 0.003, 0.01 ]
-      l1_penalty: [ 0.001, 0.003, 0.005 ]
-    # Calibration-oriented grid: stronger L1 shrinkage and an intermediate
-    # learning rate to reduce over-scaled NN forecasts without making local
-    # standard-only diagnostics too expensive.
+      learning_rate: [ 0.001, 0.003 ]
+      l1_penalty: [ 0.00001, 0.0001, 0.001 ]
+    # Diagnostic grid: keep six combinations but restore lighter L1 penalties
+    # and remove the aggressive 0.01 learning rate. The latest standard NN run
+    # had weak OOS covariance with returns, especially in Q4-Q5, so the next
+    # test should improve signal extraction rather than shrink forecasts harder.
     # GKX Table A.5 uses Ensemble=10; this project keeps one seed for tractable
     # formal weighted runs. Increase n_ensemble_seeds only for a robustness run.
 # ----------------------------------------------------------

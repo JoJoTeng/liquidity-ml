@@ -20,7 +20,7 @@ def analyze_importance_reallocation(
     interaction_csv_path: Path | None = None,
     quintile_raw_csv_path: Path | None = None,
 ) -> dict[str, pd.DataFrame | dict]:
-    """Measure how weighted training reallocates feature importance."""
+    """Measure raw and share-based feature-importance reallocation."""
     common_months = set(importance_standard["yyyymm"]) & set(
         importance_weighted["yyyymm"]
     )
@@ -49,10 +49,10 @@ def analyze_importance_reallocation(
         rows.append(
             {
                 "feature": feature,
-                "mean_shap_std": mean_std,
-                "mean_shap_wt": mean_wt,
+                "mean_importance_std": mean_std,
+                "mean_importance_wt": mean_wt,
                 "delta": delta,
-                "t_stat": nw["t_stat"],
+                "delta_t": nw["t_stat"],
                 "p_value": nw["p_value"],
                 "n_windows": int(valid.sum()),
             }
@@ -60,16 +60,16 @@ def analyze_importance_reallocation(
 
     if not rows:
         logger.warning(
-            "SHAP CSVs have no feature columns; skipping importance reallocation."
+            "Importance CSVs have no feature columns; skipping importance reallocation."
         )
         return {
             "importance_shift": pd.DataFrame(
                 columns=[
                     "feature",
-                    "mean_shap_std",
-                    "mean_shap_wt",
+                    "mean_importance_std",
+                    "mean_importance_wt",
                     "delta",
-                    "t_stat",
+                    "delta_t",
                     "p_value",
                     "n_windows",
                 ]
@@ -80,32 +80,65 @@ def analyze_importance_reallocation(
     result: dict[str, pd.DataFrame | dict] = {"importance_shift": shift_df}
 
     if interaction_csv_path is not None and Path(interaction_csv_path).exists():
-        _add_delta_gamma_regression(result, shift_df, Path(interaction_csv_path))
+        _add_delta_gamma_regression(result, Path(interaction_csv_path))
 
     if quintile_raw_csv_path is not None and Path(quintile_raw_csv_path).exists():
-        _add_grouped_importance_shares(result, shift_df, Path(quintile_raw_csv_path))
+        _add_grouped_importance_shares(result, Path(quintile_raw_csv_path))
+
+    result["importance_shift"] = result["importance_shift"].sort_values(
+        "delta",
+        ascending=False,
+    )
+    ordered_cols = [
+        "feature",
+        "group",
+        "gamma_bar",
+        "gamma_t",
+        "mean_importance_std",
+        "mean_importance_wt",
+        "delta",
+        "delta_t",
+        "p_value",
+        "n_windows",
+        "share_std_pct",
+        "share_wt_pct",
+        "delta_share_pct",
+    ]
+    existing_ordered = [
+        col for col in ordered_cols if col in result["importance_shift"].columns
+    ]
+    remaining_cols = [
+        col for col in result["importance_shift"].columns if col not in existing_ordered
+    ]
+    result["importance_shift"] = result["importance_shift"][
+        existing_ordered + remaining_cols
+    ]
 
     return result
 
 
 def _add_delta_gamma_regression(
     result: dict[str, pd.DataFrame | dict],
-    shift_df: pd.DataFrame,
     interaction_csv_path: Path,
 ) -> None:
     """Regress feature-importance changes on Step 2 liquid-minus-illiquid slopes."""
     try:
         gamma_df = pd.read_csv(interaction_csv_path)
-        merged = shift_df.merge(
-            gamma_df[["feature", "gamma_bar"]],
+        gamma_cols = [
+            col for col in ["feature", "gamma_bar", "gamma_t"] if col in gamma_df
+        ]
+        merged = result["importance_shift"].merge(
+            gamma_df[gamma_cols],
             on="feature",
-            how="inner",
+            how="left",
         )
-        if len(merged) < 3:
+        result["importance_shift"] = merged
+        regression_df = merged.dropna(subset=["gamma_bar", "delta"])
+        if len(regression_df) < 3:
             return
 
-        x = merged["gamma_bar"].values
-        y = merged["delta"].values
+        x = regression_df["gamma_bar"].values
+        y = regression_df["delta"].values
         valid = ~(np.isnan(x) | np.isnan(y))
         if valid.sum() < 3:
             return
@@ -123,16 +156,12 @@ def _add_delta_gamma_regression(
             "p_value": float(p_value),
             "std_err": float(se),
         }
-        result["delta_vs_gamma_data"] = merged[
-            ["feature", "gamma_bar", "delta", "t_stat"]
-        ]
     except Exception as exc:
         logger.warning("Delta vs gamma regression failed: %s", exc)
 
 
 def _add_grouped_importance_shares(
     result: dict[str, pd.DataFrame | dict],
-    shift_df: pd.DataFrame,
     quintile_raw_csv_path: Path,
 ) -> None:
     """Group importance shares by Q1-only, Q5-only, both, and neither signals."""
@@ -159,31 +188,47 @@ def _add_grouped_importance_shares(
             default="neither",
         )
 
-        shift_with_group = shift_df.merge(
+        shift_with_group = result["importance_shift"].merge(
             q_df[["feature", "group"]],
             on="feature",
             how="inner",
         )
-        total_std = shift_with_group["mean_shap_std"].sum()
-        total_wt = shift_with_group["mean_shap_wt"].sum()
+        total_std = shift_with_group["mean_importance_std"].sum()
+        total_wt = shift_with_group["mean_importance_wt"].sum()
+        if total_std > 0:
+            shift_with_group["share_std_pct"] = (
+                shift_with_group["mean_importance_std"] / total_std * 100
+            )
+        else:
+            shift_with_group["share_std_pct"] = np.nan
+        if total_wt > 0:
+            shift_with_group["share_wt_pct"] = (
+                shift_with_group["mean_importance_wt"] / total_wt * 100
+            )
+        else:
+            shift_with_group["share_wt_pct"] = np.nan
+        shift_with_group["delta_share_pct"] = (
+            shift_with_group["share_wt_pct"] - shift_with_group["share_std_pct"]
+        )
 
         group_rows = []
         for group in ["Q1_only", "Q5_only", "both", "neither"]:
             sub = shift_with_group[shift_with_group["group"] == group]
             if len(sub) == 0:
                 continue
-            share_std = sub["mean_shap_std"].sum() / total_std if total_std > 0 else np.nan
-            share_wt = sub["mean_shap_wt"].sum() / total_wt if total_wt > 0 else np.nan
+            share_std = sub["share_std_pct"].sum()
+            share_wt = sub["share_wt_pct"].sum()
             group_rows.append(
                 {
                     "group": group,
                     "n_features": len(sub),
-                    "share_std_pct": share_std * 100,
-                    "share_wt_pct": share_wt * 100,
-                    "delta_share_pct": (share_wt - share_std) * 100,
+                    "share_std_pct": share_std,
+                    "share_wt_pct": share_wt,
+                    "delta_share_pct": share_wt - share_std,
                 }
             )
 
+        result["importance_shift"] = shift_with_group
         result["group_shares"] = pd.DataFrame(group_rows)
     except Exception as exc:
         logger.warning("Grouped importance-share analysis failed: %s", exc)
@@ -193,30 +238,56 @@ def plot_importance_reallocation(
     shift_df: pd.DataFrame,
     out_path: Path,
     model: str,
-    top_n: int = 30,
+    importance_source: str = "native",
+    top_n: int | None = 30,
 ) -> None:
-    """Plot the largest feature-importance shifts."""
+    """Plot the largest feature-importance share shifts when available."""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
     from src.analysis.motivation import _set_academic_style
 
     _set_academic_style()
-    df = (
-        shift_df
-        .reindex(shift_df["delta"].abs().sort_values(ascending=False).index)
-        .head(top_n)
-        .copy()
+    metric_col = "delta_share_pct" if "delta_share_pct" in shift_df else "delta"
+    df = shift_df.reindex(
+        shift_df[metric_col].abs().sort_values(ascending=False).index
     )
-    df = df.reindex(df["delta"].abs().sort_values(ascending=True).index)
+    if top_n is not None:
+        df = df.head(top_n)
+    df = df.copy()
+    df = df.reindex(df[metric_col].abs().sort_values(ascending=True).index)
 
-    fig, ax = plt.subplots(figsize=(8, max(6, top_n * 0.25)))
-    colors = ["steelblue" if delta > 0 else "coral" for delta in df["delta"]]
-    ax.barh(df["feature"], df["delta"], color=colors)
+    fig, ax = plt.subplots(figsize=(8, max(6, len(df) * 0.22)))
+    group_palette = {
+        "Q1_only": "#D55E00",
+        "Q5_only": "#0072B2",
+        "both": "#009E73",
+        "neither": "#999999",
+    }
+    if "group" in df.columns:
+        colors = df["group"].map(group_palette).fillna("#999999")
+    else:
+        colors = ["steelblue" if delta > 0 else "coral" for delta in df[metric_col]]
+    ax.barh(df["feature"], df[metric_col], color=colors)
     ax.axvline(0, color="black", lw=0.5)
-    ax.set_xlabel(r"$\Delta$ SHAP (weighted $-$ standard)")
-    ax.set_title(f"Importance reallocation ({model})")
+    source_label = "SHAP" if importance_source == "shap" else "native importance"
+    if metric_col == "delta_share_pct":
+        ax.set_xlabel(
+            rf"$\Delta$ {source_label} share (weighted $-$ standard, pp)"
+        )
+        ax.set_title(f"Importance-share reallocation ({model}, {source_label})")
+    else:
+        ax.set_xlabel(rf"$\Delta$ {source_label} (weighted $-$ standard)")
+        ax.set_title(f"Importance reallocation ({model}, {source_label})")
+    if "group" in df.columns:
+        present_groups = [g for g in group_palette if g in set(df["group"])]
+        handles = [
+            Patch(facecolor=group_palette[group], label=group.replace("_", " "))
+            for group in present_groups
+        ]
+        ax.legend(handles=handles, frameon=False, loc="lower right")
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
