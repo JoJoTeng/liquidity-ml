@@ -217,18 +217,17 @@ models:
     min_learning_rate: 0.000001
     l1_penalty: 0.0001
     weight_decay: 0.0
-    n_ensemble_seeds: 3 # Diagnostic ensemble; cheaper than GKX Table A.5 size 10
+    n_ensemble_seeds: 3 # Stabilize NN predictions with a moderate final ensemble
     tune_n_ensemble_seeds: 1 # ensemble size used for each tuning candidate; <= n_ensemble_seeds for speed
     log_epoch_metrics: false # Keep long rolling NN jobs readable; diagnostics are saved to CSV
     epoch_log_frequency: 10
     search_space:
       learning_rate: [ 0.001 ]
-      l1_penalty: [ 0.0001, 0.001, 0.003 ]
-    # Stable diagnostic grid. The latest standard NN run selected lr=0.003 in
-    # the worst OOS months, producing over-scaled and sometimes wrong-signed
-    # forecasts. Hold LR at the paper-style 0.001 and test stronger L1 shrinkage.
-    # GKX Table A.5 uses Ensemble=10; this project keeps one seed for tractable
-    # formal weighted runs. Increase n_ensemble_seeds only for a robustness run.
+      l1_penalty: [ 0.0001 ]
+    # Fix LR and L1 for interpretability; use the ensemble rather than extra
+    # tuning dimensions to reduce sensitivity to random initialization.
+    # GKX Table A.5 uses Ensemble=10; this project uses 3 for tractable formal
+    # weighted runs.
 # ----------------------------------------------------------
 # Training Protocol
 # ----------------------------------------------------------
