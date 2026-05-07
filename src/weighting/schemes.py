@@ -359,14 +359,14 @@ def compute_tc_for_sorting(
 ) -> pd.Series:
     """Compute per-stock TC for the TC-penalised sort (Column 2, Section 9.2).
 
-    Uses Q_it = AUM / N_leg where N_leg = N / n_quantiles (typically N/10
-    for decile sort). This matches the actual trade size of a long-short
-    decile portfolio at the sorting stage.
+    Uses Q_it = leg_AUM / N_leg where N_leg = N / n_quantiles (typically
+    N/10 for decile sort). Callers that define AUM as total gross long-short
+    capital should pass AUM/2.
 
     Parameters
     ----------
     df : single cross-section or panel with yyyymm + liquidity columns.
-    aum : AUM in dollars.
+    aum : Capital allocated to one portfolio leg, in dollars.
     config : full config dict.
 
     Returns

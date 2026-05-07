@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from src.analysis.formal.common import (
@@ -139,3 +141,86 @@ def evaluate_liquid_stock_r2(
     )
 
     return {"quintile_r2": r2_table, "utility_weighted_r2": utility_r2}
+
+
+def format_legacy_quintile_r2_table(r2_table: pd.DataFrame) -> pd.DataFrame:
+    """Return the old softmax-rank R2 table shape for Q1-Q5 plus pooled rows."""
+    rows = []
+    for _, row in r2_table.iterrows():
+        q = row["quintile"]
+        if q in {"Q4-Q5", "Full"}:
+            label = "Pooled" if q == "Full" else None
+        else:
+            try:
+                label = f"Q{int(q)}"
+            except (TypeError, ValueError):
+                label = str(q)
+        if label is None:
+            continue
+        rows.append(
+            {
+                "Quintile": label,
+                "R2_Standard": row["r2_std_pct"],
+                "R2_Weighted": row["r2_wt_pct"],
+                "R2_Improvement": row["delta_pct"],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def plot_quintile_r2_comparison(
+    r2_table: pd.DataFrame,
+    out_path: Path,
+    model: str,
+) -> None:
+    """Plot standard-vs-weighted OOS R2 by liquidity quintile."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    plot_df = r2_table[r2_table["quintile"].isin([1, 2, 3, 4, 5])].copy()
+    if plot_df.empty:
+        return
+
+    labels = [f"Q{int(q)}" for q in plot_df["quintile"]]
+    x = range(len(plot_df))
+    width = 0.34
+
+    fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
+    ax.bar(
+        [i - width / 2 for i in x],
+        plot_df["r2_std_pct"],
+        width=width,
+        label="Standard Training",
+        color="#4C72B0",
+    )
+    ax.bar(
+        [i + width / 2 for i in x],
+        plot_df["r2_wt_pct"],
+        width=width,
+        label="Weighted Training",
+        color="#DD8452",
+    )
+    ax.axhline(0, color="black", lw=0.6)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels)
+    ax.set_xlabel("Liquidity Quintile")
+    ax.set_ylabel("OOS R2 (%)")
+    ax.set_title(
+        f"OOS R2 by Liquidity Quintile: Standard vs. Weighted Training "
+        f"({_model_display_name(model)})"
+    )
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _model_display_name(model: str) -> str:
+    """Human-readable model label for figure titles."""
+    return {
+        "elastic_net": "ElasticNet",
+        "xgboost": "XGBoost",
+        "neural_network": "Neural Network",
+    }.get(model, model)

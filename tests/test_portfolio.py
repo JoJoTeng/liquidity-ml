@@ -2,7 +2,7 @@
 
 Tests the updated portfolio construction:
   - Standard sort (Column 1): sort on r_hat
-  - TC-penalised sort (Column 2): sort on r_hat - TC
+  - TC-penalised sort (Column 2): long r_hat - TC, short r_hat + TC
   - Net returns with turnover-adjusted TC
   - No liquidity filter, no position cap
 """
@@ -144,6 +144,51 @@ class TestBuildLongShort:
         # Different sorting -> different portfolios
         assert result_std["positions_long"] != result_tc["positions_long"]
 
+    def test_tc_penalised_short_leg_adds_tc(self):
+        n = 100
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+        })
+        predictions = pd.Series(np.arange(n, dtype=float), index=df.index)
+        tc_per_stock = pd.Series(0.0, index=df.index)
+        tc_per_stock.iloc[:10] = 1_000.0
+
+        result = build_long_short_portfolio(
+            df,
+            predictions,
+            tc_penalised=True,
+            tc_per_stock=tc_per_stock,
+        )
+
+        high_cost_low_prediction = set(range(10001, 10011))
+        assert high_cost_low_prediction.isdisjoint(result["positions_short"])
+        assert set(result["positions_short"]) == set(range(10011, 10021))
+        assert set(result["positions_long"]) == set(range(10091, 10101))
+
+    def test_tc_penalised_legs_are_disjoint(self):
+        n = 100
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+        })
+        predictions = pd.Series(0.0, index=df.index)
+        tc_per_stock = pd.Series(1.0, index=df.index)
+        tc_per_stock.iloc[:20] = 0.0
+
+        result = build_long_short_portfolio(
+            df,
+            predictions,
+            tc_penalised=True,
+            tc_per_stock=tc_per_stock,
+        )
+
+        assert set(result["positions_long"]).isdisjoint(result["positions_short"])
+        assert result["n_long"] == 10
+        assert result["n_short"] == 10
+
     def test_tc_penalised_requires_tc(self, single_month, predictions):
         with pytest.raises(ValueError, match="tc_per_stock required"):
             build_long_short_portfolio(
@@ -234,7 +279,7 @@ class TestComputeNetReturns:
             config=cfg,
         )
 
-        expected = 0.02 / 2 + 0.1 * 0.10 * np.sqrt(1_000_000 / 100_000_000)
+        expected = 0.02 / 2 + 0.1 * 0.10 * np.sqrt(500_000 / 100_000_000)
         assert net_df.loc[net_df["yyyymm"] == 202302, "transaction_cost"].iloc[0] == pytest.approx(expected)
         assert net_df.loc[net_df["yyyymm"] == 202302, "raw_trade_sum"].iloc[0] == pytest.approx(1.0)
         assert net_df.loc[net_df["yyyymm"] == 202302, "turnover"].iloc[0] == pytest.approx(0.5)

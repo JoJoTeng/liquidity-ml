@@ -24,7 +24,11 @@ os.environ.setdefault("XDG_CACHE_HOME", str(_runtime_cache / "xdg"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.analysis.formal.common import load_predictions  # noqa: E402
-from src.analysis.formal.liquidity_sorted_r2 import evaluate_liquid_stock_r2  # noqa: E402
+from src.analysis.formal.liquidity_sorted_r2 import (  # noqa: E402
+    evaluate_liquid_stock_r2,
+    format_legacy_quintile_r2_table,
+    plot_quintile_r2_comparison,
+)
 from src.analysis.formal.script_utils import (  # noqa: E402
     add_experiment_filters,
     formal_output_dirs,
@@ -51,6 +55,11 @@ def parse_args():
             "Also report cross-sectional-mean and historical-mean R2 columns. "
             "Default reports zero-benchmark R2 only."
         ),
+    )
+    parser.add_argument(
+        "--no-figures",
+        action="store_true",
+        help="Write tables only and skip PNG figures.",
     )
     return parser.parse_args()
 
@@ -81,10 +90,20 @@ def main():
             out_dir / "r2_by_quintile.csv",
             index=False,
         )
+        format_legacy_quintile_r2_table(result["quintile_r2"]).to_csv(
+            out_dir / "table2_oos_r2_quintile.csv",
+            index=False,
+        )
         result["utility_weighted_r2"].to_csv(
             out_dir / "utility_weighted_r2.csv",
             index=False,
         )
+        if not args.no_figures:
+            plot_quintile_r2_comparison(
+                result["quintile_r2"],
+                out_dir / "figure_r2_by_quintile.png",
+                spec["model"],
+            )
 
     logger.info("Done")
 

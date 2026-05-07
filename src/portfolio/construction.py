@@ -4,12 +4,15 @@ Portfolio Construction (LiquidityML v3, Section 9)
 Long-short decile portfolios for the 2x2 experimental framework.
 
 The 2x2 design:
-                    Sort on r_hat       Sort on r_hat - TC
+                    Sort on r_hat       TC-aware sort
   Standard train    1A (Baseline)       1B
   Weighted train    2A                  2B (Combined)
 
 Column 1: standard sort on predicted returns.
-Column 2: TC-penalised sort - sort on r_hat - TC(AUM).
+Column 2: TC-penalised sort:
+  - Long candidates sort on r_hat - TC(AUM/2 per leg).
+  - Short candidates sort on r_hat + TC(AUM/2 per leg), because short-leg
+    expected profit is -r_hat - TC.
   No explicit liquidity filter - the TC penalty naturally pushes
   illiquid stocks down the ranking.
 
@@ -22,6 +25,8 @@ Net return computation:
   - Uses actual turnover-adjusted trade size DeltaQ_it
     (target position minus drifted position) for market impact,
     NOT the full Q_it = AUM/N_leg.
+  - Interprets AUM as total gross strategy capital for a dollar-neutral
+    long-short portfolio, so each leg uses AUM/2.
   - Tracks position drift from returns between rebalancing months.
 
 Transaction cost model: Frazzini et al. (2018) Eq. 25.
@@ -46,6 +51,11 @@ _cfg = load_config()
 # -- Helpers ----------------------------------------------------------
 
 
+def _leg_aum(aum: float) -> float:
+    """Capital allocated to one side of a dollar-neutral long-short portfolio."""
+    return float(aum) / 2.0
+
+
 def _assign_deciles(values: pd.Series, n_quantiles: int = 10) -> pd.Series:
     """Assign stocks to decile bins (1 = lowest, 10 = highest).
 
@@ -56,6 +66,34 @@ def _assign_deciles(values: pd.Series, n_quantiles: int = 10) -> pd.Series:
         q=n_quantiles,
         labels=False,
     ) + 1  # 1-indexed
+
+
+def _select_quantile(
+    work: pd.DataFrame,
+    signal_col: str,
+    quantile: int,
+    n_quantiles: int,
+    exclude_index: pd.Index | None = None,
+) -> pd.DataFrame:
+    """Select one signal quantile, optionally filling around excluded names."""
+    deciles = _assign_deciles(work[signal_col], n_quantiles)
+    selected_index = deciles[deciles == quantile].index
+    target_n = len(selected_index)
+
+    if exclude_index is not None and len(exclude_index) > 0:
+        selected_index = selected_index.difference(exclude_index, sort=False)
+        fill_n = target_n - len(selected_index)
+        if fill_n > 0:
+            used_index = selected_index.union(exclude_index, sort=False)
+            fill_pool = work.loc[work.index.difference(used_index, sort=False)]
+            ascending = quantile <= (n_quantiles + 1) / 2
+            fill_index = fill_pool.sort_values(
+                signal_col,
+                ascending=ascending,
+            ).index[:fill_n]
+            selected_index = selected_index.append(fill_index)
+
+    return work.loc[selected_index]
 
 
 # -- Core: Build Single-Month Portfolio -------------------------------
@@ -76,7 +114,9 @@ def build_long_short_portfolio(
     ----------
     df : DataFrame for one month with columns: permno, ret.
     predictions : Model return predictions aligned to df rows.
-    tc_penalised : If True, sort on (predictions - tc_per_stock) for Column 2.
+    tc_penalised : If True, use TC-aware two-sided sorting for Column 2:
+        long candidates sort on predictions - tc_per_stock, while short
+        candidates sort on predictions + tc_per_stock.
     tc_per_stock : One-way TC per stock (required if tc_penalised=True).
     n_quantiles : Number of quantiles (default 10 for deciles).
     long_quantile : Quantile to hold long. Defaults to the top quantile.
@@ -97,7 +137,9 @@ def build_long_short_portfolio(
     if tc_penalised:
         if tc_per_stock is None:
             raise ValueError("tc_per_stock required for TC-penalised sort")
-        work["_signal"] = work["_pred"] - tc_per_stock.reindex(work.index).fillna(0.0)
+        tc = tc_per_stock.reindex(work.index).fillna(0.0)
+        work["_long_signal"] = work["_pred"] - tc
+        work["_short_signal"] = work["_pred"] + tc
     else:
         work["_signal"] = work["_pred"]
 
@@ -114,10 +156,24 @@ def build_long_short_portfolio(
         return _empty_result()
 
     # -- Decile assignment ------
-    work["_decile"] = _assign_deciles(work["_signal"], n_quantiles)
-
-    long_df = work[work["_decile"] == long_quantile]
-    short_df = work[work["_decile"] == short_quantile]
+    if tc_penalised:
+        long_df = _select_quantile(
+            work,
+            signal_col="_long_signal",
+            quantile=long_quantile,
+            n_quantiles=n_quantiles,
+        )
+        short_df = _select_quantile(
+            work,
+            signal_col="_short_signal",
+            quantile=short_quantile,
+            n_quantiles=n_quantiles,
+            exclude_index=long_df.index,
+        )
+    else:
+        work["_decile"] = _assign_deciles(work["_signal"], n_quantiles)
+        long_df = work[work["_decile"] == long_quantile]
+        short_df = work[work["_decile"] == short_quantile]
 
     if len(long_df) < 2 or len(short_df) < 2:
         return _empty_result()
@@ -183,6 +239,8 @@ def build_portfolio_timeseries(
         Merged with panel via (permno, yyyymm) keys.
     tc_penalised : If True, use TC-penalised sort (Column 2).
     aum : AUM in dollars. Required if tc_penalised=True.
+        Interpreted as total gross strategy capital; transaction-cost sizing
+        uses half this amount per leg.
     config : Override config dict.
 
     Returns
@@ -220,7 +278,11 @@ def build_portfolio_timeseries(
         if aum is None:
             raise ValueError("aum required for TC-penalised sort")
         from src.weighting.schemes import compute_tc_for_sorting
-        tc_for_sort = compute_tc_for_sorting(panel_pred, aum=aum, config=config)
+        tc_for_sort = compute_tc_for_sorting(
+            panel_pred,
+            aum=_leg_aum(aum),
+            config=config,
+        )
 
     pred_months = sorted(panel_pred["yyyymm"].unique())
     records = []
@@ -278,6 +340,7 @@ def compute_net_returns(
     panel: pd.DataFrame,
     aum: float,
     config: dict | None = None,
+    tc_context: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Compute net returns using turnover-adjusted trade sizes.
 
@@ -291,7 +354,27 @@ def compute_net_returns(
     absolute weight changes. Reported ``turnover`` follows the standard
     convention, ``0.5 * raw_trade_sum``; transaction costs still use the full
     raw trade sum because one-way costs are paid on both buys and sells.
+
+    ``aum`` is interpreted as total gross strategy capital. Each leg uses
+    ``aum / 2`` for dollar trade-size calculations.
     """
+    if config is None:
+        config = _cfg
+    if tc_context is None:
+        tc_context = prepare_transaction_cost_context(panel, config)
+    return _compute_net_returns_with_context(
+        gross_returns,
+        positions_history,
+        aum=aum,
+        tc_context=tc_context,
+    )
+
+
+def prepare_transaction_cost_context(
+    panel: pd.DataFrame,
+    config: dict | None = None,
+) -> dict[str, Any]:
+    """Prepare reusable transaction-cost lookup data for net-return calls."""
     if config is None:
         config = _cfg
     tc_cfg = config["transaction_costs"]
@@ -305,8 +388,31 @@ def compute_net_returns(
     for col in [spread_col, sigma_col, adv_col]:
         if col in panel.columns:
             lookup_cols.append(col)
-    lookup = panel[list(set(lookup_cols))].copy()
+    lookup = panel[list(dict.fromkeys(lookup_cols))].copy()
     lookup = lookup.set_index(["permno", "yyyymm"])
+
+    return {
+        "lookup": lookup,
+        "spread_col": spread_col,
+        "sigma_col": sigma_col,
+        "adv_col": adv_col,
+        "lam": lam,
+    }
+
+
+def _compute_net_returns_with_context(
+    gross_returns: pd.DataFrame,
+    positions_history: dict[int, dict],
+    aum: float,
+    tc_context: dict[str, Any],
+) -> pd.DataFrame:
+    """Compute net returns from a prebuilt transaction-cost context."""
+    lookup = tc_context["lookup"]
+    spread_col = tc_context["spread_col"]
+    sigma_col = tc_context["sigma_col"]
+    adv_col = tc_context["adv_col"]
+    lam = tc_context["lam"]
+    leg_aum = _leg_aum(aum)
 
     months = sorted(positions_history.keys())
     tc_series = {}
@@ -350,7 +456,7 @@ def compute_net_returns(
                 raw_trade_sum += delta_w
 
                 # Dollar trade amount
-                delta_q = delta_w * aum
+                delta_q = delta_w * leg_aum
 
                 # Look up stock characteristics. If an eliminated holding is
                 # absent from the current cross-section, use its previous-month
@@ -465,16 +571,22 @@ def compute_net_returns_all_aum(
 
     Returns
     -------
-    DataFrame with columns: ret_ls_net_{aum_label} for each AUM.
+    DataFrame with columns: ret_ls_net_{aum_label} for each total-gross AUM.
     """
     if config is None:
         config = _cfg
     aum_scenarios = config["transaction_costs"]["aum_scenarios"]
+    tc_context = prepare_transaction_cost_context(panel, config)
 
     result = gross_returns.copy()
     for aum in aum_scenarios:
         net_df = compute_net_returns(
-            gross_returns, positions_history, panel, aum=aum, config=config,
+            gross_returns,
+            positions_history,
+            panel,
+            aum=aum,
+            config=config,
+            tc_context=tc_context,
         )
         label = f"{aum // 1_000_000}M" if aum < 1_000_000_000 else f"{aum // 1_000_000_000}B"
         result[f"ret_ls_net_{label}"] = net_df["ret_long_short_net"]
