@@ -176,7 +176,7 @@ models:
   elastic_net:
     alpha: 0.001
     l1_ratio: 0.5
-    max_iter: 10000
+    max_iter: 5000
     search_space:
       alpha: [ 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1 ]
     n_random_search: 6 # full grid = 6, all evaluated
@@ -191,11 +191,12 @@ models:
     reg_alpha: 0.0
     reg_lambda: 0.1
     search_space:
-      max_depth: [ 2, 3, 4 ]
-      learning_rate: [ 0.001, 0.01, 0.05 ]
-      n_estimators: [ 300, 500, 1000 ]
-      min_child_weight: [ 10, 50, 100 ]
-    n_random_search: 81 # full grid = 81 combos, all evaluated
+      max_depth: [ 1, 2, 3 ]
+      learning_rate: [ 0.005, 0.01, 0.05 ]
+      n_estimators: [ 500, 1000, 2000 ]
+      min_child_weight: [ 1, 5, 10 ]
+      colsample_bytree: [ 0.2, 0.3, 0.5 ]
+    n_random_search: 150 # 150 of 243 combos, matching old motivation XGBoost grid
 
   neural_network:
     hidden_layers: [ 32, 16, 8 ] # GKX (2020) NN3 — best architecture
@@ -231,9 +232,11 @@ models:
 # ----------------------------------------------------------
 training:
   train_window: 120 # months (10 years, rolling)
-  validation_window: 12 # months (1 year, for hyperparameter selection)
+  validation_window: 12 # months (1 year; final NN early stopping / validation-mode tuning)
   test_window: 1 # month (out-of-sample prediction)
   retune_frequency: 12 # months
+  tuning_method: "timeseries_cv" # validation or timeseries_cv for hyperparameter selection
+  cv_n_splits: 5 # month-blocked expanding TimeSeriesSplit folds when tuning_method=timeseries_cv
   oos_start: 200001 # January 2000
   oos_end: 202412 # December 2024
 

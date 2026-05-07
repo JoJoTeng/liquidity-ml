@@ -295,6 +295,9 @@ def main():
                 "features_pre_normalized": True,
                 "feature_missing_fill": 0.5,
                 "training_engine": "src.training.run_rolling_training",
+                "tuning_method": config["training"].get("tuning_method", "validation"),
+                "cv_n_splits": config["training"].get("cv_n_splits"),
+                "validation_window": config["training"].get("validation_window"),
                 "training_diagnostics": "training_diagnostics.csv",
             }, f, indent=2)
         logger.info("Saved canonical formal M_std artifacts to %s", std_dir)
@@ -534,6 +537,9 @@ def main():
         "data_source": "processed_panel.parquet",
         "features_pre_normalized": True,
         "feature_missing_fill": 0.5,
+        "tuning_method": config["training"].get("tuning_method", "validation"),
+        "cv_n_splits": config["training"].get("cv_n_splits"),
+        "validation_window": config["training"].get("validation_window"),
         "spearman_rho_importance_illiq": rho_31,
         "r2_standard_zero": r2_results["r2_standard_zero"],
         "r2_weighted_zero": r2_results["r2_weighted_zero"],
