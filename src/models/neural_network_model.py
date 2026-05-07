@@ -672,6 +672,10 @@ class NeuralNetPredictor(BaseReturnPredictor):
             best_mse,
             {k: best_params.get(k) for k in keys},
         )
+        # The tuning loop forced n_ensemble_seeds=tune_seeds for speed; restore
+        # the configured deployment ensemble size so the final fit and downstream
+        # rolling refits use the intended seed count.
+        best_params["n_ensemble_seeds"] = self.config.get("n_ensemble_seeds", 1)
         self.config = best_params
         self.best_params = best_params
         return best_params
