@@ -214,7 +214,7 @@ models:
     min_learning_rate: 0.000001
     l1_penalty: 0.0001
     weight_decay: 0.0
-    n_ensemble_seeds: 1 # no ensemble
+    n_ensemble_seeds: 3 # Diagnostic ensemble; cheaper than GKX Table A.5 size 10
     tune_n_ensemble_seeds: 1 # ensemble size used for each tuning candidate; <= n_ensemble_seeds for speed
     log_epoch_metrics: false # Keep long rolling NN jobs readable; diagnostics are saved to CSV
     epoch_log_frequency: 10
