@@ -217,7 +217,7 @@ models:
     min_learning_rate: 0.000001
     l1_penalty: 0.0001
     weight_decay: 0.0
-    n_ensemble_seeds: 3 # Stabilize NN predictions with a moderate final ensemble
+    n_ensemble_seeds: 1 # Single seed for fast iteration; SHAP is the sole importance source
     tune_n_ensemble_seeds: 1 # ensemble size used for each tuning candidate; <= n_ensemble_seeds for speed
     log_epoch_metrics: false # Keep long rolling NN jobs readable; diagnostics are saved to CSV
     epoch_log_frequency: 10
@@ -238,6 +238,7 @@ training:
   retune_frequency: 12 # months
   tuning_method: "validation" # validation or timeseries_cv for hyperparameter selection
   cv_n_splits: 5 # only used when tuning_method=timeseries_cv
+  skip_nn_permutation: true # NN permutation importance is slow; SHAP is the canonical importance and is sufficient for downstream analyses
   oos_start: 200001 # January 2000
   oos_end: 202412 # December 2024
 

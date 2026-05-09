@@ -239,6 +239,7 @@ def run_rolling_training(
     skip_importance = bool(train_cfg.get("skip_importance", False))
     compute_shap = bool(shap_cfg.get("compute_shap", True)) and not skip_importance
     compute_native_importance = not skip_importance
+    skip_nn_permutation = bool(train_cfg.get("skip_nn_permutation", False))
 
     all_months = sorted(panel["yyyymm"].unique())
     oos_months = [m for m in all_months if oos_start <= m <= oos_end]
@@ -411,13 +412,21 @@ def run_rolling_training(
             if i == 0:
                 logger.info("  [%s] Native/permutation importance disabled", label)
         elif model_name == "neural_network":
-            try:
-                perm_imp = model.get_permutation_importance(
-                    X_test, y_test, feature_names=features, seed=seed,
-                )
-                native_row.update(perm_imp.to_dict())
-            except Exception as exc:
-                logger.warning("  [%s] Permutation importance failed: %s", label, exc)
+            if skip_nn_permutation:
+                if i == 0:
+                    logger.info(
+                        "  [%s] NN permutation importance disabled by config "
+                        "(skip_nn_permutation=true); SHAP remains the importance source",
+                        label,
+                    )
+            else:
+                try:
+                    perm_imp = model.get_permutation_importance(
+                        X_test, y_test, feature_names=features, seed=seed,
+                    )
+                    native_row.update(perm_imp.to_dict())
+                except Exception as exc:
+                    logger.warning("  [%s] Permutation importance failed: %s", label, exc)
         else:
             imp = model.get_feature_importance(feature_names=features)
             native_row.update(imp.to_dict())
