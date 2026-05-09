@@ -135,6 +135,46 @@ class TestBuildLongShort:
                 short_quantile=1,
             )
 
+    def test_fixed_stocks_per_leg(self):
+        n = 100
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+        })
+        predictions = pd.Series(np.arange(n), index=df.index)
+
+        result = build_long_short_portfolio(
+            df,
+            predictions,
+            fixed_stocks_per_leg=7,
+        )
+
+        assert result["n_long"] == 7
+        assert result["n_short"] == 7
+        assert set(result["positions_long"]) == set(range(10094, 10101))
+        assert set(result["positions_short"]) == set(range(10001, 10008))
+        assert set(result["positions_long"]).isdisjoint(result["positions_short"])
+
+    def test_fixed_stocks_per_leg_too_few_stocks(self):
+        n = 10
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+        })
+        predictions = pd.Series(np.arange(n), index=df.index)
+
+        result = build_long_short_portfolio(
+            df,
+            predictions,
+            fixed_stocks_per_leg=6,
+        )
+
+        assert np.isnan(result["ret_long_short"])
+        assert result["n_long"] == 0
+        assert result["n_short"] == 0
+
     def test_tc_penalised_sort(self, single_month, predictions, tc_per_stock):
         result_std = build_long_short_portfolio(
             single_month, predictions, tc_penalised=False)

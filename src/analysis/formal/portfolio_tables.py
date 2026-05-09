@@ -174,6 +174,7 @@ def compute_quintile_sr_scissors_tables(
     config: dict,
     tc_sort_aum: int | float | None = None,
     quintile_aum_scale: dict[int, float] | None = None,
+    fixed_stocks_per_leg: int | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Compute old-style annualized gross/net Sharpe tables by liquidity quintile.
 
@@ -182,6 +183,8 @@ def compute_quintile_sr_scissors_tables(
     produced using weighted predictions and the TC-aware portfolio sort.
     If ``quintile_aum_scale`` is provided, net-return AUMs and TC-sort AUMs are
     multiplied by the quintile-specific scale.
+    If ``fixed_stocks_per_leg`` is provided, each liquidity quintile-month uses
+    exactly that many long names and short names instead of decile buckets.
     """
     panel_work = panel.copy()
     panel_work["liq_quintile"] = assign_liquidity_quintiles(panel_work, config)
@@ -221,6 +224,7 @@ def compute_quintile_sr_scissors_tables(
                 tc_penalised=tc_penalised,
                 aum=effective_sort_aum,
                 config=config,
+                fixed_stocks_per_leg=fixed_stocks_per_leg,
             )
             if len(ret_df) < 12:
                 continue
@@ -234,6 +238,8 @@ def compute_quintile_sr_scissors_tables(
                 "N_months": int(gross_returns.shape[0]),
                 "Mean_Leg_N": mean_leg_n,
             }
+            if fixed_stocks_per_leg is not None:
+                row["Fixed_Stocks_Per_Leg"] = int(fixed_stocks_per_leg)
             if quintile_aum_scale is not None:
                 row["AUM_Scale"] = aum_scale
             if tc_penalised and effective_sort_aum is not None:

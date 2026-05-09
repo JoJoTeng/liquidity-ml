@@ -96,6 +96,23 @@ def _select_quantile(
     return work.loc[selected_index]
 
 
+def _select_extreme_count(
+    work: pd.DataFrame,
+    signal_col: str,
+    count: int,
+    largest: bool,
+    exclude_index: pd.Index | None = None,
+) -> pd.DataFrame:
+    """Select the top/bottom ``count`` rows by signal, optionally excluding names."""
+    if count <= 0:
+        raise ValueError("fixed_stocks_per_leg must be positive")
+
+    if exclude_index is not None and len(exclude_index) > 0:
+        work = work.loc[work.index.difference(exclude_index, sort=False)]
+
+    return work.sort_values(signal_col, ascending=not largest).head(count)
+
+
 # -- Core: Build Single-Month Portfolio -------------------------------
 
 
@@ -107,6 +124,7 @@ def build_long_short_portfolio(
     n_quantiles: int = 10,
     long_quantile: int | None = None,
     short_quantile: int = 1,
+    fixed_stocks_per_leg: int | None = None,
 ) -> dict[str, Any]:
     """Build a long-short decile portfolio for a single cross-section.
 
@@ -121,6 +139,9 @@ def build_long_short_portfolio(
     n_quantiles : Number of quantiles (default 10 for deciles).
     long_quantile : Quantile to hold long. Defaults to the top quantile.
     short_quantile : Quantile to hold short. Defaults to the bottom quantile.
+    fixed_stocks_per_leg : If provided, select exactly this many top/bottom
+        stocks per leg instead of a quantile bucket. The two legs are kept
+        disjoint.
 
     Returns
     -------
@@ -152,11 +173,47 @@ def build_long_short_portfolio(
     if long_quantile == short_quantile:
         raise ValueError("long_quantile and short_quantile must differ")
 
-    if len(work) < n_quantiles * 2:
+    fixed_leg_n = None
+    if fixed_stocks_per_leg is not None:
+        fixed_leg_n = int(fixed_stocks_per_leg)
+        if fixed_leg_n <= 0:
+            raise ValueError("fixed_stocks_per_leg must be positive")
+        if len(work) < fixed_leg_n * 2:
+            return _empty_result()
+    elif len(work) < n_quantiles * 2:
         return _empty_result()
 
-    # -- Decile assignment ------
-    if tc_penalised:
+    # -- Security selection ------
+    if fixed_leg_n is not None:
+        if tc_penalised:
+            long_df = _select_extreme_count(
+                work,
+                signal_col="_long_signal",
+                count=fixed_leg_n,
+                largest=True,
+            )
+            short_df = _select_extreme_count(
+                work,
+                signal_col="_short_signal",
+                count=fixed_leg_n,
+                largest=False,
+                exclude_index=long_df.index,
+            )
+        else:
+            long_df = _select_extreme_count(
+                work,
+                signal_col="_signal",
+                count=fixed_leg_n,
+                largest=True,
+            )
+            short_df = _select_extreme_count(
+                work,
+                signal_col="_signal",
+                count=fixed_leg_n,
+                largest=False,
+                exclude_index=long_df.index,
+            )
+    elif tc_penalised:
         long_df = _select_quantile(
             work,
             signal_col="_long_signal",
@@ -227,6 +284,7 @@ def build_portfolio_timeseries(
     tc_penalised: bool = False,
     aum: float | None = None,
     config: dict | None = None,
+    fixed_stocks_per_leg: int | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Build monthly long-short portfolios over the full test period.
 
@@ -242,6 +300,8 @@ def build_portfolio_timeseries(
         Interpreted as total gross strategy capital; transaction-cost sizing
         uses half this amount per leg.
     config : Override config dict.
+    fixed_stocks_per_leg : If provided, select exactly this many long and short
+        stocks each month instead of the configured quantile buckets.
 
     Returns
     -------
@@ -255,6 +315,11 @@ def build_portfolio_timeseries(
     n_q = portfolio_cfg["n_quantiles"]
     long_q = portfolio_cfg.get("long_quantile", n_q)
     short_q = portfolio_cfg.get("short_quantile", 1)
+    fixed_leg_n = None
+    if fixed_stocks_per_leg is not None:
+        fixed_leg_n = int(fixed_stocks_per_leg)
+        if fixed_leg_n <= 0:
+            raise ValueError("fixed_stocks_per_leg must be positive")
 
     # Normalise predictions to a DataFrame with [permno, yyyymm, prediction]
     if isinstance(predictions, pd.Series):
@@ -292,7 +357,8 @@ def build_portfolio_timeseries(
         mask = panel_pred["yyyymm"] == yyyymm
         month_panel = panel_pred[mask]
 
-        if len(month_panel) < n_q * 2:
+        min_required = fixed_leg_n * 2 if fixed_leg_n is not None else n_q * 2
+        if len(month_panel) < min_required:
             continue
 
         month_preds = pd.Series(
@@ -311,6 +377,7 @@ def build_portfolio_timeseries(
             n_quantiles=n_q,
             long_quantile=long_q,
             short_quantile=short_q,
+            fixed_stocks_per_leg=fixed_leg_n,
         )
 
         result["yyyymm"] = yyyymm

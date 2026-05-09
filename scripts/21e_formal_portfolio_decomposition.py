@@ -7,6 +7,7 @@ Generate the formal Section 9 portfolio tables:
     outputs/formalanalysis/analysis/{model}/{weight_spec}/within_quintile_portfolio.csv
     outputs/formalanalysis/analysis/{model}/{weight_spec}/within_quintile_portfolio_tc_sort_{aum}.csv
     outputs/formalanalysis/analysis/{model}/{weight_spec}/within_quintile_portfolio_scaled_aum_{aum}.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/within_quintile_portfolio_fixed_{n}.csv
     outputs/formalanalysis/analysis/formal_hypothesis_tests.json
 """
 
@@ -111,6 +112,16 @@ def parse_args():
             "Also write within-quintile/scissors robustness outputs that scale "
             "each quintile's AUM by its average selected-leg stock count "
             "relative to Q1."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-stocks-per-leg",
+        type=int,
+        default=None,
+        help=(
+            "Also write within-quintile/scissors robustness outputs that use "
+            "exactly this many long stocks and this many short stocks in each "
+            "liquidity quintile-month."
         ),
     )
     return parser.parse_args()
@@ -354,6 +365,101 @@ def main():
                             right_title=(
                                 "Weighted + TC-Aware Sort "
                                 f"(Scaled AUM base {tc_sort_label})"
+                            ),
+                        )
+
+            if args.fixed_stocks_per_leg is not None:
+                if args.fixed_stocks_per_leg <= 0:
+                    raise ValueError("--fixed-stocks-per-leg must be positive")
+
+                fixed_n = int(args.fixed_stocks_per_leg)
+                fixed_label = f"fixed_{fixed_n}"
+                logger.info(
+                    "Within-quintile/scissors fixed-leg robustness tables "
+                    "(%d stocks per leg)",
+                    fixed_n,
+                )
+                fixed_tables = compute_quintile_sr_scissors_tables(
+                    preds_standard,
+                    preds_weighted,
+                    panel,
+                    aum_scenarios=aum_scenarios,
+                    config=config,
+                    tc_sort_aum=(
+                        None if args.skip_tc_aware_scissors else primary_aum
+                    ),
+                    fixed_stocks_per_leg=fixed_n,
+                )
+                fixed_tables["std"].to_csv(
+                    out_dir / f"table3_sr_quintile_std_{fixed_label}.csv",
+                    index=False,
+                )
+                fixed_tables["weighted"].to_csv(
+                    out_dir / f"table3_sr_quintile_weighted_{fixed_label}.csv",
+                    index=False,
+                )
+                within_fixed = format_within_quintile_from_scissors(
+                    fixed_tables,
+                    primary_aum,
+                )
+                if len(within_fixed) > 0:
+                    within_fixed.to_csv(
+                        out_dir / f"within_quintile_portfolio_{fixed_label}.csv",
+                        index=False,
+                    )
+
+                fixed_tc_sort_table = fixed_tables.get("weighted_tc_sort")
+                if fixed_tc_sort_table is not None and not fixed_tc_sort_table.empty:
+                    fixed_tc_sort_table.to_csv(
+                        out_dir / (
+                            "table3_sr_quintile_weighted_tc_sort_"
+                            f"{fixed_label}_{tc_sort_label}.csv"
+                        ),
+                        index=False,
+                    )
+                    within_fixed_tc_sort = format_within_quintile_from_scissors(
+                        {
+                            "std": fixed_tables["std"],
+                            "weighted": fixed_tc_sort_table,
+                        },
+                        primary_aum,
+                    )
+                    if len(within_fixed_tc_sort) > 0:
+                        within_fixed_tc_sort.to_csv(
+                            out_dir / (
+                                "within_quintile_portfolio_tc_sort_"
+                                f"{fixed_label}_{tc_sort_label}.csv"
+                            ),
+                            index=False,
+                        )
+
+                if not args.no_figures:
+                    plot_sr_scissors_comparison(
+                        fixed_tables["std"],
+                        fixed_tables["weighted"],
+                        out_dir / f"figure_sr_scissors_comparison_{fixed_label}.png",
+                        spec["model"],
+                        aum_scenarios,
+                        left_title=f"Standard Training ({fixed_n} stocks/leg)",
+                        right_title=f"Weighted Training ({fixed_n} stocks/leg)",
+                    )
+                    if (
+                        fixed_tc_sort_table is not None
+                        and not fixed_tc_sort_table.empty
+                    ):
+                        plot_sr_scissors_comparison(
+                            fixed_tables["std"],
+                            fixed_tc_sort_table,
+                            out_dir / (
+                                "figure_sr_scissors_comparison_tc_sort_"
+                                f"{fixed_label}_{tc_sort_label}.png"
+                            ),
+                            spec["model"],
+                            aum_scenarios,
+                            left_title=f"Standard Training ({fixed_n} stocks/leg)",
+                            right_title=(
+                                "Weighted + TC-Aware Sort "
+                                f"({fixed_n} stocks/leg, {tc_sort_label})"
                             ),
                         )
 
