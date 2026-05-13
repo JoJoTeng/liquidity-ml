@@ -142,7 +142,7 @@ def load_importance(
     ----------
     model_name : ``"elastic_net"``, ``"xgboost"``, or ``"neural_network"``.
     weight_spec : Weighted formal-output folder, e.g. ``"dolvol"``,
-        ``"softmax_rank_lam2"``, or ``"tc_500m"``.
+        ``"softmax_rank_lam2"``, ``"tc_500m"``, or ``"tc_rank_lam3_500m"``.
     importance_type : ``"shap"`` or ``"native"``/``"gain"``.
     output_dir : Override experiment root. Defaults to
         ``outputs/formalanalysis/experiment``.

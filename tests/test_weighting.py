@@ -1,9 +1,10 @@
 """Tests for src/weighting/schemes.py (LiquidityML v3)
 
-Tests the two weighting families:
+Tests the weighting families:
   - dolvol: DolVol/mean(DolVol)
   - softmax_rank: exp(lambda*rank(DolVol)), mean-normalized
   - tc: Eq.23 exp(-alpha*TC), with configurable alpha scale
+  - tc_rank: exp(lambda*rank(-TC)), mean-normalized
 """
 
 import copy
@@ -96,7 +97,12 @@ class TestNormalizeToMeanOne:
 
 class TestRegistry:
     def test_available_schemes(self):
-        assert set(get_available_schemes()) == {"dolvol", "softmax_rank", "tc"}
+        assert set(get_available_schemes()) == {
+            "dolvol",
+            "softmax_rank",
+            "tc",
+            "tc_rank",
+        }
 
     def test_unknown_scheme_raises(self, single_cross_section):
         with pytest.raises(ValueError, match="Unknown scheme"):
@@ -116,6 +122,15 @@ class TestMeanOneInvariant:
 
     def test_softmax_rank_single_month(self, single_cross_section):
         w = compute_weights(single_cross_section, scheme="softmax_rank", config=_cfg)
+        assert abs(w.mean() - 1.0) < 1e-8
+
+    def test_tc_rank_single_month(self, single_cross_section):
+        w = compute_weights(
+            single_cross_section,
+            scheme="tc_rank",
+            config=_cfg,
+            aum=500_000_000,
+        )
         assert abs(w.mean() - 1.0) < 1e-8
 
     def test_dolvol_multi_month(self, multi_month_panel):
@@ -140,6 +155,18 @@ class TestMeanOneInvariant:
 
     def test_tc_multi_month(self, multi_month_panel):
         w = compute_weights(multi_month_panel, scheme="tc", config=_cfg, aum=500_000_000)
+        df = multi_month_panel[["yyyymm"]].copy()
+        df["w"] = w
+        per_month = df.groupby("yyyymm")["w"].mean()
+        np.testing.assert_allclose(per_month.values, 1.0, atol=1e-8)
+
+    def test_tc_rank_multi_month(self, multi_month_panel):
+        w = compute_weights(
+            multi_month_panel,
+            scheme="tc_rank",
+            config=_cfg,
+            aum=500_000_000,
+        )
         df = multi_month_panel[["yyyymm"]].copy()
         df["w"] = w
         per_month = df.groupby("yyyymm")["w"].mean()
@@ -183,6 +210,29 @@ class TestMeanOneInvariant:
         expected = raw / raw.mean()
         np.testing.assert_allclose(w.values, expected, atol=1e-12)
 
+    def test_tc_rank_exact_lambda_three(self):
+        cfg = copy.deepcopy(load_config())
+        cfg["weighting"]["tc_rank_lambda"] = 3.0
+        cfg["transaction_costs"]["lambda_market_impact"] = 1.0
+        cfg["transaction_costs"]["lambda_calibration"]["enabled"] = False
+        cfg["transaction_costs"]["sigma_col"] = "excess_sigma_12m_daily"
+        df = pd.DataFrame({
+            "yyyymm": [202301, 202301, 202301],
+            _LIQ_COL: [1.0, 4.0, 9.0],
+            "liq_BidAskSpread": [0.0, 0.0, 0.0],
+            "liq_excess_sigma_12m_daily": [1.0, 1.0, 1.0],
+            "liq_dvol_21d": [1.0, 4.0, 9.0],
+        })
+
+        w = compute_weights(df, scheme="tc_rank", config=cfg, aum=3.0)
+
+        tc = pd.Series([1.0, 0.5, 1.0 / 3.0])
+        ranks = (-tc).rank(pct=True, method="average").to_numpy()
+        raw = np.exp(3.0 * ranks)
+        expected = raw / raw.mean()
+        np.testing.assert_allclose(w.values, expected, atol=1e-12)
+        assert w.iloc[2] > w.iloc[1] > w.iloc[0]
+
 
 # -- NaN handling -----------------------------------------------------
 
@@ -197,6 +247,15 @@ class TestNaNHandling:
 
     def test_softmax_rank_no_nan_output(self, cross_section_with_nans):
         w = compute_weights(cross_section_with_nans, scheme="softmax_rank", config=_cfg)
+        assert w.isna().sum() == 0
+
+    def test_tc_rank_no_nan_output(self, cross_section_with_nans):
+        w = compute_weights(
+            cross_section_with_nans,
+            scheme="tc_rank",
+            config=_cfg,
+            aum=500_000_000,
+        )
         assert w.isna().sum() == 0
 
 
@@ -220,6 +279,17 @@ class TestMonotonicity:
         corr = single_cross_section[_LIQ_COL].corr(w, method="spearman")
         assert corr > 0.99
 
+    def test_tc_rank_higher_volume_higher_weight(self, single_cross_section):
+        w = compute_weights(
+            single_cross_section,
+            scheme="tc_rank",
+            config=_cfg,
+            aum=500_000_000,
+        )
+        # Higher ADV -> lower TC rank penalty -> higher weight on average.
+        corr = single_cross_section["liq_dvol_21d"].corr(w, method="spearman")
+        assert corr > 0.0
+
 
 # -- TC weights are AUM-dependent -------------------------------------
 
@@ -232,6 +302,30 @@ class TestTCAUMDependence:
     def test_tc_requires_aum(self, single_cross_section):
         with pytest.raises(ValueError, match="aum is required"):
             compute_weights(single_cross_section, scheme="tc", config=_cfg)
+
+    def test_tc_rank_requires_aum(self, single_cross_section):
+        with pytest.raises(ValueError, match="aum is required"):
+            compute_weights(single_cross_section, scheme="tc_rank", config=_cfg)
+
+    def test_tc_rank_can_change_with_aum(self):
+        cfg = copy.deepcopy(load_config())
+        cfg["weighting"]["tc_rank_lambda"] = 3.0
+        cfg["transaction_costs"]["lambda_market_impact"] = 1.0
+        cfg["transaction_costs"]["lambda_calibration"]["enabled"] = False
+        cfg["transaction_costs"]["sigma_col"] = "excess_sigma_12m_daily"
+        df = pd.DataFrame({
+            "yyyymm": [202301, 202301],
+            _LIQ_COL: [1.0, 2.0],
+            "liq_BidAskSpread": [0.001, 0.10],
+            "liq_excess_sigma_12m_daily": [1.0, 1.0],
+            "liq_dvol_21d": [1.0, 1e12],
+        })
+
+        w_low = compute_weights(df, scheme="tc_rank", config=cfg, aum=1e-12)
+        w_high = compute_weights(df, scheme="tc_rank", config=cfg, aum=1e12)
+
+        assert w_low.idxmax() == 0
+        assert w_high.idxmax() == 1
 
 
 class TestLambdaCalibration:
@@ -308,10 +402,15 @@ class TestTCForSorting:
         assert (tc > 0).all()
         assert len(tc) == len(single_cross_section)
 
-    def test_higher_aum_higher_tc(self, single_cross_section):
+    def test_sorting_penalty_is_half_spread(self, single_cross_section):
+        tc = compute_tc_for_sorting(single_cross_section, aum=500_000_000, config=_cfg)
+        expected = single_cross_section["liq_BidAskSpread"].abs() / 2.0
+        pd.testing.assert_series_equal(tc, expected, check_names=False)
+
+    def test_sorting_penalty_is_aum_independent(self, single_cross_section):
         tc_100m = compute_tc_for_sorting(single_cross_section, aum=100_000_000, config=_cfg)
         tc_1b = compute_tc_for_sorting(single_cross_section, aum=1_000_000_000, config=_cfg)
-        assert tc_1b.mean() > tc_100m.mean()
+        pd.testing.assert_series_equal(tc_100m, tc_1b)
 
 
 # -- Edge cases -------------------------------------------------------
@@ -340,5 +439,18 @@ class TestEdgeCases:
             "liq_dvol_21d": [1e8],
         })
         w = compute_weights(df, scheme="tc", config=_cfg, aum=500_000_000)
+        assert len(w) == 1
+        assert abs(w.iloc[0] - 1.0) < 1e-8
+
+    def test_single_stock_tc_rank(self):
+        df = pd.DataFrame({
+            "yyyymm": [202301],
+            _LIQ_COL: [1e8],
+            "liq_BidAskSpread": [0.01],
+            "liq_excess_sigma_12m": [0.10],
+            "liq_excess_sigma_12m_daily": [0.10 / np.sqrt(21.0)],
+            "liq_dvol_21d": [1e8],
+        })
+        w = compute_weights(df, scheme="tc_rank", config=_cfg, aum=500_000_000)
         assert len(w) == 1
         assert abs(w.iloc[0] - 1.0) < 1e-8

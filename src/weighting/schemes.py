@@ -1,7 +1,7 @@
 """
 Implementability Weighting Schemes (LiquidityML v3)
 ====================================================
-Three weighting families for importance-weighted ML training.
+Four weighting families for importance-weighted ML training.
 
 Family 1 - Dollar Volume:
     w_it = DolVol_it / mean(DolVol_t)
@@ -19,7 +19,12 @@ Family 3 - Transaction-Cost-Based (Eq. 23):
     alpha_t = scale / median(TC_t).
     Motivated by cost-sensitive learning. AUM-dependent (via trade size).
 
-Both schemes:
+Family 4 - Transaction-Cost Rank:
+    w_it = exp(lambda * rank_it) / mean(exp(lambda * rank_t))
+    where rank_it is the within-month percentile rank of -TC_it.
+    AUM-dependent through TC_it, but smoother than raw TC-level weights.
+
+All schemes:
   - Operate per cross-section (within each yyyymm)
   - Keep weights mean-normalized within each cross-section
   - Handle NaN by assigning neutral weight (~1.0)
@@ -184,9 +189,9 @@ def _compute_tc_per_stock(
     leg_fraction controls N_effective relative to the cross-section size:
       - leg_fraction=1.0 (default, training weights):
           N_effective = N (full cross-section, used at training stage)
-      - leg_fraction=0.1 (decile-sort portfolios):
-          N_effective = N * 0.1 = N_leg, matching Section 9.2 Q_it = AUM/N_leg
-          for a long-short decile portfolio (one leg holds N/10 stocks).
+      - Smaller leg_fraction values can size costs for a narrower traded book.
+        The current portfolio sorting penalty does not use this helper; it uses
+        spread/2 only.
     """
     n_stocks = len(group)
     if n_stocks == 0:
@@ -262,9 +267,46 @@ def _tc_weights(
     return _normalize_to_mean_one(raw)
 
 
+def _tc_rank_weights(
+    group: pd.DataFrame,
+    aum: float,
+    market_impact_lam: float,
+    rank_lam: float,
+    spread_col: str,
+    sigma_col: str,
+    adv_col: str,
+) -> pd.Series:
+    """Softmax weights on low transaction-cost rank.
+
+    TC-rank keeps the stock-level transaction-cost inputs from the TC family, but
+    turns costs into a within-month percentile rank before applying the softmax:
+
+        rank_it = pct_rank(-TC_it)
+        w_it = exp(lambda * rank_it) / mean_i(exp(lambda * rank_it))
+
+    The lowest-cost stock therefore receives the highest rank and highest
+    training weight. Ranking makes the distribution comparable to softmax_rank
+    while still using spread, volatility, ADV, and AUM in the ranking variable.
+    """
+    tc = _compute_tc_per_stock(
+        group,
+        aum,
+        market_impact_lam,
+        spread_col,
+        sigma_col,
+        adv_col,
+    )
+    if len(tc) == 0:
+        return pd.Series(dtype=float)
+
+    rank = (-tc).rank(pct=True, method="average").fillna(0.5)
+    raw = np.exp(float(rank_lam) * rank)
+    return _normalize_to_mean_one(raw)
+
+
 # -- Registry ---------------------------------------------------------
 
-AVAILABLE_SCHEMES = ["dolvol", "softmax_rank", "tc"]
+AVAILABLE_SCHEMES = ["dolvol", "softmax_rank", "tc", "tc_rank"]
 
 
 def get_available_schemes() -> list[str]:
@@ -289,9 +331,9 @@ def compute_weights(
     Parameters
     ----------
     df : DataFrame with 'yyyymm' and required liquidity columns.
-    scheme : 'dolvol', 'softmax_rank', or 'tc' (Eq. 23).
+    scheme : 'dolvol', 'softmax_rank', 'tc' (Eq. 23), or 'tc_rank'.
     config : full config dict (for column names, lambda, etc.).
-    aum : AUM in dollars. Required if scheme='tc'.
+    aum : AUM in dollars. Required if scheme='tc' or scheme='tc_rank'.
 
     Returns
     -------
@@ -307,14 +349,18 @@ def compute_weights(
     wt_cfg = config.get("weighting", {})
     dolvol_col = f"liq_{liq_cfg['primary']}"
 
-    if scheme == "tc" and aum is None:
-        raise ValueError("aum is required for scheme='tc'")
+    if scheme in {"tc", "tc_rank"} and aum is None:
+        raise ValueError(f"aum is required for scheme={scheme!r}")
 
-    if scheme == "tc":
+    if scheme in {"tc", "tc_rank"}:
         spread_col = f"liq_{tc_cfg['spread_col']}"
         sigma_col = f"liq_{tc_cfg['sigma_col']}"
         adv_col = f"liq_{tc_cfg['adv_col']}"
-        lam = resolve_market_impact_lambda(df, config, sigma_col=sigma_col)
+        market_impact_lam = resolve_market_impact_lambda(
+            df,
+            config,
+            sigma_col=sigma_col,
+        )
 
     parts: list[pd.Series] = []
     for yyyymm, group in df.groupby("yyyymm"):
@@ -326,11 +372,21 @@ def compute_weights(
                 dolvol_col=dolvol_col,
                 lam=wt_cfg.get("softmax_rank_lambda", 2.0),
             )
-        else:  # tc
+        elif scheme == "tc":
             w = _tc_weights(
-                group, aum=aum, lam=lam,
+                group, aum=aum, lam=market_impact_lam,
                 spread_col=spread_col, sigma_col=sigma_col, adv_col=adv_col,
                 alpha_cfg=tc_cfg.get("weight_alpha", {}),
+            )
+        else:  # tc_rank
+            w = _tc_rank_weights(
+                group,
+                aum=aum,
+                market_impact_lam=market_impact_lam,
+                rank_lam=wt_cfg.get("tc_rank_lambda", 3.0),
+                spread_col=spread_col,
+                sigma_col=sigma_col,
+                adv_col=adv_col,
             )
         parts.append(w)
 
@@ -357,40 +413,37 @@ def compute_tc_for_sorting(
     aum: float,
     config: dict,
 ) -> pd.Series:
-    """Compute per-stock TC for the TC-penalised sort (Column 2, Section 9.2).
+    """Compute the spread-only penalty for the TC-penalised sort.
 
-    Uses Q_it = leg_AUM / N_leg where N_leg = N / n_quantiles (typically
-    N/10 for decile sort). Callers that define AUM as total gross long-short
-    capital should pass AUM/2.
+    The portfolio sort uses only the proportional transaction-cost component:
+
+        penalty_it = Spread_it / 2
+
+    This deliberately excludes the market-impact term. Realized portfolio
+    transaction costs are still computed later from actual turnover using both
+    half-spread and market impact.
 
     Parameters
     ----------
     df : single cross-section or panel with yyyymm + liquidity columns.
-    aum : Capital allocated to one portfolio leg, in dollars.
+    aum : Retained for caller compatibility; not used by the spread-only sort.
     config : full config dict.
 
     Returns
     -------
-    pd.Series of one-way TC per stock, aligned to df.index.
+    pd.Series of one-way proportional cost penalties, aligned to df.index.
     """
     tc_cfg = config["transaction_costs"]
     spread_col = f"liq_{tc_cfg['spread_col']}"
-    sigma_col = f"liq_{tc_cfg['sigma_col']}"
-    adv_col = f"liq_{tc_cfg['adv_col']}"
-    lam = resolve_market_impact_lambda(df, config, sigma_col=sigma_col)
-
-    # Decile sort: leg_fraction = 1 / n_quantiles (0.1 for deciles)
-    n_quantiles = config["portfolio"]["n_quantiles"]
-    leg_fraction = 1.0 / n_quantiles
 
     parts: list[pd.Series] = []
     for yyyymm, group in df.groupby("yyyymm"):
-        tc = _compute_tc_per_stock(
-            group, aum=aum, lam=lam,
-            spread_col=spread_col, sigma_col=sigma_col, adv_col=adv_col,
-            leg_fraction=leg_fraction,
-        )
-        parts.append(tc)
+        spread = group[spread_col].copy()
+        spread_median = spread.median()
+        if np.isnan(spread_median):
+            spread_median = 0.01
+        spread = spread.fillna(spread_median).abs().clip(lower=0.0)
+        parts.append(spread / 2.0)
 
     tc_all = pd.concat(parts)
     return tc_all.loc[df.index]

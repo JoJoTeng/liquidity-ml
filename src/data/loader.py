@@ -61,8 +61,8 @@ def load_panel(config: dict | None = None) -> pd.DataFrame:
     -------
     pd.DataFrame with columns:
         permno, yyyymm          — identifiers
-        ret                     — raw return (kept for portfolio analysis)
-        excess_ret              — forward 1-month excess return (target)
+        ret                     — forward raw return for position drift/turnover
+        excess_ret              — forward 1-month excess return (target and portfolio performance)
         ~210 CZ predictor cols  — unnormalized features
         liq_dvol_21d, etc.      — raw liquidity copies for weighting (config-driven)
     """

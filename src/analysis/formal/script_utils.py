@@ -9,7 +9,7 @@ from pathlib import Path
 from src.analysis.formal.common import discover_experiments
 
 MODEL_CHOICES = ["elastic_net", "xgboost", "neural_network"]
-WEIGHT_CHOICES = ["dolvol", "softmax_rank", "tc"]
+WEIGHT_CHOICES = ["dolvol", "softmax_rank", "tc", "tc_rank"]
 
 
 def add_experiment_filters(parser: argparse.ArgumentParser) -> None:

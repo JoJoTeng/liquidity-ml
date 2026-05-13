@@ -1,7 +1,7 @@
 """
 Portfolio Construction (LiquidityML v3, Section 9)
 ===================================================
-Long-short decile portfolios for the 2x2 experimental framework.
+Long-short quantile portfolios for the 2x2 experimental framework.
 
 The 2x2 design:
                     Sort on r_hat       TC-aware sort
@@ -10,24 +10,25 @@ The 2x2 design:
 
 Column 1: standard sort on predicted returns.
 Column 2: TC-penalised sort:
-  - Long candidates sort on r_hat - TC(AUM/2 per leg).
-  - Short candidates sort on r_hat + TC(AUM/2 per leg), because short-leg
-    expected profit is -r_hat - TC.
+  - Long candidates sort on r_hat - spread/2.
+  - Short candidates sort on r_hat + spread/2, because short-leg expected
+    profit is -r_hat - spread/2.
   No explicit liquidity filter - the TC penalty naturally pushes
   illiquid stocks down the ranking.
 
 Portfolio rules:
-  - Decile sort (long Q10, short Q1)
+  - Configured quantile sort (currently long Q5, short Q1)
   - Equal-dollar within each leg
   - Monthly rebalancing
+  - Performance returns use the model target return, currently excess_ret
 
 Net return computation:
   - Uses actual turnover-adjusted trade size DeltaQ_it
     (target position minus drifted position) for market impact,
     NOT the full Q_it = AUM/N_leg.
-  - Interprets AUM as total gross strategy capital for a dollar-neutral
-    long-short portfolio, so each leg uses AUM/2.
-  - Tracks position drift from returns between rebalancing months.
+  - Interprets AUM as total gross strategy capital. The long-short portfolio
+    uses AUM/2 per leg.
+  - Tracks position drift from raw returns between rebalancing months.
 
 Transaction cost model: Frazzini et al. (2018) Eq. 25.
 """
@@ -46,18 +47,30 @@ from src.weighting.schemes import resolve_market_impact_lambda
 logger = logging.getLogger(__name__)
 
 _cfg = load_config()
+PORTFOLIO_MODES = {"long_short"}
 
 
 # -- Helpers ----------------------------------------------------------
 
 
-def _leg_aum(aum: float) -> float:
-    """Capital allocated to one side of a dollar-neutral long-short portfolio."""
+def _validate_portfolio_mode(portfolio_mode: str) -> str:
+    """Validate and normalize the portfolio mode."""
+    if portfolio_mode not in PORTFOLIO_MODES:
+        raise ValueError(
+            f"portfolio_mode must be one of {sorted(PORTFOLIO_MODES)}, "
+            f"got {portfolio_mode!r}"
+        )
+    return portfolio_mode
+
+
+def _leg_aum(aum: float, portfolio_mode: str = "long_short") -> float:
+    """Capital allocated to the traded leg for TC sizing."""
+    _validate_portfolio_mode(portfolio_mode)
     return float(aum) / 2.0
 
 
-def _assign_deciles(values: pd.Series, n_quantiles: int = 10) -> pd.Series:
-    """Assign stocks to decile bins (1 = lowest, 10 = highest).
+def _assign_quantiles(values: pd.Series, n_quantiles: int = 5) -> pd.Series:
+    """Assign stocks to rank quantile bins (1 = lowest, n = highest).
 
     Uses rank-based assignment to handle tied predictions.
     """
@@ -68,6 +81,9 @@ def _assign_deciles(values: pd.Series, n_quantiles: int = 10) -> pd.Series:
     ) + 1  # 1-indexed
 
 
+_assign_deciles = _assign_quantiles
+
+
 def _select_quantile(
     work: pd.DataFrame,
     signal_col: str,
@@ -76,8 +92,8 @@ def _select_quantile(
     exclude_index: pd.Index | None = None,
 ) -> pd.DataFrame:
     """Select one signal quantile, optionally filling around excluded names."""
-    deciles = _assign_deciles(work[signal_col], n_quantiles)
-    selected_index = deciles[deciles == quantile].index
+    quantiles = _assign_quantiles(work[signal_col], n_quantiles)
+    selected_index = quantiles[quantiles == quantile].index
     target_n = len(selected_index)
 
     if exclude_index is not None and len(exclude_index) > 0:
@@ -96,23 +112,6 @@ def _select_quantile(
     return work.loc[selected_index]
 
 
-def _select_extreme_count(
-    work: pd.DataFrame,
-    signal_col: str,
-    count: int,
-    largest: bool,
-    exclude_index: pd.Index | None = None,
-) -> pd.DataFrame:
-    """Select the top/bottom ``count`` rows by signal, optionally excluding names."""
-    if count <= 0:
-        raise ValueError("fixed_stocks_per_leg must be positive")
-
-    if exclude_index is not None and len(exclude_index) > 0:
-        work = work.loc[work.index.difference(exclude_index, sort=False)]
-
-    return work.sort_values(signal_col, ascending=not largest).head(count)
-
-
 # -- Core: Build Single-Month Portfolio -------------------------------
 
 
@@ -121,27 +120,29 @@ def build_long_short_portfolio(
     predictions: pd.Series,
     tc_penalised: bool = False,
     tc_per_stock: pd.Series | None = None,
-    n_quantiles: int = 10,
+    n_quantiles: int = 5,
     long_quantile: int | None = None,
     short_quantile: int = 1,
-    fixed_stocks_per_leg: int | None = None,
+    return_col: str = "excess_ret",
+    portfolio_mode: str = "long_short",
 ) -> dict[str, Any]:
-    """Build a long-short decile portfolio for a single cross-section.
+    """Build a long-short quantile portfolio for one cross-section.
 
     Parameters
     ----------
-    df : DataFrame for one month with columns: permno, ret.
+    df : DataFrame for one month with columns: permno and return_col.
     predictions : Model return predictions aligned to df rows.
     tc_penalised : If True, use TC-aware two-sided sorting for Column 2:
         long candidates sort on predictions - tc_per_stock, while short
         candidates sort on predictions + tc_per_stock.
-    tc_per_stock : One-way TC per stock (required if tc_penalised=True).
-    n_quantiles : Number of quantiles (default 10 for deciles).
+    tc_per_stock : One-way proportional cost penalty per stock, currently
+        half bid-ask spread only (required if tc_penalised=True).
+    n_quantiles : Number of signal quantiles (default 5 for quintiles).
     long_quantile : Quantile to hold long. Defaults to the top quantile.
     short_quantile : Quantile to hold short. Defaults to the bottom quantile.
-    fixed_stocks_per_leg : If provided, select exactly this many top/bottom
-        stocks per leg instead of a quantile bucket. The two legs are kept
-        disjoint.
+    return_col : Realized return column used for portfolio performance.
+        Defaults to excess_ret to match the model target.
+    portfolio_mode : Must be ``"long_short"``.
 
     Returns
     -------
@@ -151,7 +152,10 @@ def build_long_short_portfolio(
         positions_long, positions_short : {permno: weight} dicts
         permnos_long, permnos_short : sets of permnos in each leg
     """
+    _validate_portfolio_mode(portfolio_mode)
     work = df.copy()
+    if return_col not in work.columns:
+        raise KeyError(f"Portfolio return column {return_col!r} not found")
     work["_pred"] = predictions.values if isinstance(predictions, pd.Series) else predictions
 
     # -- Sorting signal ------
@@ -166,54 +170,18 @@ def build_long_short_portfolio(
 
     if long_quantile is None:
         long_quantile = n_quantiles
-    if not (1 <= short_quantile <= n_quantiles):
-        raise ValueError("short_quantile must be between 1 and n_quantiles")
     if not (1 <= long_quantile <= n_quantiles):
         raise ValueError("long_quantile must be between 1 and n_quantiles")
+    if not (1 <= short_quantile <= n_quantiles):
+        raise ValueError("short_quantile must be between 1 and n_quantiles")
     if long_quantile == short_quantile:
         raise ValueError("long_quantile and short_quantile must differ")
 
-    fixed_leg_n = None
-    if fixed_stocks_per_leg is not None:
-        fixed_leg_n = int(fixed_stocks_per_leg)
-        if fixed_leg_n <= 0:
-            raise ValueError("fixed_stocks_per_leg must be positive")
-        if len(work) < fixed_leg_n * 2:
-            return _empty_result()
-    elif len(work) < n_quantiles * 2:
+    if len(work) < n_quantiles * 2:
         return _empty_result()
 
     # -- Security selection ------
-    if fixed_leg_n is not None:
-        if tc_penalised:
-            long_df = _select_extreme_count(
-                work,
-                signal_col="_long_signal",
-                count=fixed_leg_n,
-                largest=True,
-            )
-            short_df = _select_extreme_count(
-                work,
-                signal_col="_short_signal",
-                count=fixed_leg_n,
-                largest=False,
-                exclude_index=long_df.index,
-            )
-        else:
-            long_df = _select_extreme_count(
-                work,
-                signal_col="_signal",
-                count=fixed_leg_n,
-                largest=True,
-            )
-            short_df = _select_extreme_count(
-                work,
-                signal_col="_signal",
-                count=fixed_leg_n,
-                largest=False,
-                exclude_index=long_df.index,
-            )
-    elif tc_penalised:
+    if tc_penalised:
         long_df = _select_quantile(
             work,
             signal_col="_long_signal",
@@ -228,9 +196,9 @@ def build_long_short_portfolio(
             exclude_index=long_df.index,
         )
     else:
-        work["_decile"] = _assign_deciles(work["_signal"], n_quantiles)
-        long_df = work[work["_decile"] == long_quantile]
-        short_df = work[work["_decile"] == short_quantile]
+        work["_rank_quantile"] = _assign_quantiles(work["_signal"], n_quantiles)
+        long_df = work[work["_rank_quantile"] == long_quantile]
+        short_df = work[work["_rank_quantile"] == short_quantile]
 
     if len(long_df) < 2 or len(short_df) < 2:
         return _empty_result()
@@ -240,8 +208,9 @@ def build_long_short_portfolio(
     w_short = pd.Series(1.0 / len(short_df), index=short_df.index)
 
     # -- Gross returns ------
-    ret_long = (w_long * long_df["ret"]).sum()
-    ret_short = (w_short * short_df["ret"]).sum()
+    ret_long = (w_long * long_df[return_col]).sum()
+    ret_short = (w_short * short_df[return_col]).sum()
+    portfolio_ret = ret_long - ret_short
 
     # -- Store positions for TC computation ------
     pos_long = dict(zip(long_df["permno"], w_long))
@@ -250,7 +219,7 @@ def build_long_short_portfolio(
     return {
         "ret_long": ret_long,
         "ret_short": ret_short,
-        "ret_long_short": ret_long - ret_short,
+        "ret_long_short": portfolio_ret,
         "n_long": len(long_df),
         "n_short": len(short_df),
         "positions_long": pos_long,
@@ -284,24 +253,23 @@ def build_portfolio_timeseries(
     tc_penalised: bool = False,
     aum: float | None = None,
     config: dict | None = None,
-    fixed_stocks_per_leg: int | None = None,
+    portfolio_mode: str = "long_short",
 ) -> tuple[pd.DataFrame, dict]:
     """Build monthly long-short portfolios over the full test period.
 
     Parameters
     ----------
-    panel : Full panel with yyyymm, permno, ret, liq_* columns.
+    panel : Full panel with yyyymm, permno, model target return, ret, liq_* columns.
     predictions : Either
         - pd.DataFrame with columns [permno, yyyymm, prediction], or
         - pd.Series indexed by panel row labels (legacy support).
         Merged with panel via (permno, yyyymm) keys.
     tc_penalised : If True, use TC-penalised sort (Column 2).
     aum : AUM in dollars. Required if tc_penalised=True.
-        Interpreted as total gross strategy capital; transaction-cost sizing
-        uses half this amount per leg.
+        Interpreted as total strategy capital; transaction-cost sizing uses
+        half this amount per leg.
     config : Override config dict.
-    fixed_stocks_per_leg : If provided, select exactly this many long and short
-        stocks each month instead of the configured quantile buckets.
+    portfolio_mode : Must be ``"long_short"``.
 
     Returns
     -------
@@ -309,17 +277,14 @@ def build_portfolio_timeseries(
     returns_df : DataFrame with yyyymm, ret_long, ret_short, ret_long_short.
     positions_history : {yyyymm: {"long": {permno: w}, "short": {permno: w}}}
     """
+    portfolio_mode = _validate_portfolio_mode(portfolio_mode)
     if config is None:
         config = _cfg
     portfolio_cfg = config["portfolio"]
     n_q = portfolio_cfg["n_quantiles"]
     long_q = portfolio_cfg.get("long_quantile", n_q)
     short_q = portfolio_cfg.get("short_quantile", 1)
-    fixed_leg_n = None
-    if fixed_stocks_per_leg is not None:
-        fixed_leg_n = int(fixed_stocks_per_leg)
-        if fixed_leg_n <= 0:
-            raise ValueError("fixed_stocks_per_leg must be positive")
+    return_col = config["data"].get("target_col", "excess_ret")
 
     # Normalise predictions to a DataFrame with [permno, yyyymm, prediction]
     if isinstance(predictions, pd.Series):
@@ -345,7 +310,7 @@ def build_portfolio_timeseries(
         from src.weighting.schemes import compute_tc_for_sorting
         tc_for_sort = compute_tc_for_sorting(
             panel_pred,
-            aum=_leg_aum(aum),
+            aum=_leg_aum(aum, portfolio_mode=portfolio_mode),
             config=config,
         )
 
@@ -357,8 +322,7 @@ def build_portfolio_timeseries(
         mask = panel_pred["yyyymm"] == yyyymm
         month_panel = panel_pred[mask]
 
-        min_required = fixed_leg_n * 2 if fixed_leg_n is not None else n_q * 2
-        if len(month_panel) < min_required:
+        if len(month_panel) < n_q * 2:
             continue
 
         month_preds = pd.Series(
@@ -377,7 +341,8 @@ def build_portfolio_timeseries(
             n_quantiles=n_q,
             long_quantile=long_q,
             short_quantile=short_q,
-            fixed_stocks_per_leg=fixed_leg_n,
+            return_col=return_col,
+            portfolio_mode=portfolio_mode,
         )
 
         result["yyyymm"] = yyyymm
@@ -408,6 +373,7 @@ def compute_net_returns(
     aum: float,
     config: dict | None = None,
     tc_context: dict[str, Any] | None = None,
+    portfolio_mode: str = "long_short",
 ) -> pd.DataFrame:
     """Compute net returns using turnover-adjusted trade sizes.
 
@@ -422,9 +388,10 @@ def compute_net_returns(
     convention, ``0.5 * raw_trade_sum``; transaction costs still use the full
     raw trade sum because one-way costs are paid on both buys and sells.
 
-    ``aum`` is interpreted as total gross strategy capital. Each leg uses
-    ``aum / 2`` for dollar trade-size calculations.
+    ``aum`` is interpreted as total strategy capital. The long-short portfolio
+    uses ``aum / 2`` for each leg.
     """
+    portfolio_mode = _validate_portfolio_mode(portfolio_mode)
     if config is None:
         config = _cfg
     if tc_context is None:
@@ -434,6 +401,7 @@ def compute_net_returns(
         positions_history,
         aum=aum,
         tc_context=tc_context,
+        portfolio_mode=portfolio_mode,
     )
 
 
@@ -472,14 +440,16 @@ def _compute_net_returns_with_context(
     positions_history: dict[int, dict],
     aum: float,
     tc_context: dict[str, Any],
+    portfolio_mode: str = "long_short",
 ) -> pd.DataFrame:
     """Compute net returns from a prebuilt transaction-cost context."""
+    portfolio_mode = _validate_portfolio_mode(portfolio_mode)
     lookup = tc_context["lookup"]
     spread_col = tc_context["spread_col"]
     sigma_col = tc_context["sigma_col"]
     adv_col = tc_context["adv_col"]
     lam = tc_context["lam"]
-    leg_aum = _leg_aum(aum)
+    leg_aum = _leg_aum(aum, portfolio_mode=portfolio_mode)
 
     months = sorted(positions_history.keys())
     tc_series = {}
@@ -633,6 +603,7 @@ def compute_net_returns_all_aum(
     positions_history: dict[int, dict],
     panel: pd.DataFrame,
     config: dict | None = None,
+    portfolio_mode: str = "long_short",
 ) -> pd.DataFrame:
     """Compute net returns for all AUM scenarios from config.
 
@@ -640,6 +611,7 @@ def compute_net_returns_all_aum(
     -------
     DataFrame with columns: ret_ls_net_{aum_label} for each total-gross AUM.
     """
+    portfolio_mode = _validate_portfolio_mode(portfolio_mode)
     if config is None:
         config = _cfg
     aum_scenarios = config["transaction_costs"]["aum_scenarios"]
@@ -654,6 +626,7 @@ def compute_net_returns_all_aum(
             aum=aum,
             config=config,
             tc_context=tc_context,
+            portfolio_mode=portfolio_mode,
         )
         label = f"{aum // 1_000_000}M" if aum < 1_000_000_000 else f"{aum // 1_000_000_000}B"
         result[f"ret_ls_net_{label}"] = net_df["ret_long_short_net"]

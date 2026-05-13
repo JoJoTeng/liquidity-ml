@@ -52,6 +52,7 @@ else
     MODELS=(elastic_net xgboost neural_network)
 fi
 SOFTMAX_LAMBDAS=(2 3)
+TC_RANK_LAMBDAS=(3)
 TC_AUMS=(10 100 500 1000)
 
 cd "${REPO_ROOT}"
@@ -166,6 +167,13 @@ for MODEL in "${MODELS[@]}"; do
         write_job "20_${MODEL}_tc_${AUM}m" 4 "12G" "240:0:0" \
             "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights tc --aum ${AUM}"
     done
+    for LAM in "${TC_RANK_LAMBDAS[@]}"; do
+        LAM_LABEL=${LAM//./p}
+        for AUM in "${TC_AUMS[@]}"; do
+            write_job "20_${MODEL}_tc_rank_lam${LAM_LABEL}_${AUM}m" 4 "12G" "240:0:0" \
+                "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights tc_rank --tc-rank-lambda ${LAM} --aum ${AUM}"
+        done
+    done
 done
 
 echo ""
@@ -232,6 +240,13 @@ if [ "${SUBMIT}" = true ]; then
         for AUM in "${TC_AUMS[@]}"; do
             jid=$(submit_job "20_${MODEL}_tc_${AUM}m" "${id04}")
             echo "20_${MODEL}_tc_${AUM}m -> ${jid}"
+        done
+        for LAM in "${TC_RANK_LAMBDAS[@]}"; do
+            LAM_LABEL=${LAM//./p}
+            for AUM in "${TC_AUMS[@]}"; do
+                jid=$(submit_job "20_${MODEL}_tc_rank_lam${LAM_LABEL}_${AUM}m" "${id04}")
+                echo "20_${MODEL}_tc_rank_lam${LAM_LABEL}_${AUM}m -> ${jid}"
+            done
         done
     done
 

@@ -41,6 +41,7 @@ def discover_experiments(base_dir: Path) -> list[dict]:
                 weight_family = "dolvol"
                 aum_label = None
                 softmax_lambda = None
+                tc_rank_lambda = None
             elif dirname.startswith("softmax_rank_lam"):
                 weight_family = "softmax_rank"
                 aum_label = None
@@ -51,10 +52,24 @@ def discover_experiments(base_dir: Path) -> list[dict]:
                     )
                 except ValueError:
                     continue
+                tc_rank_lambda = None
+            elif dirname.startswith("tc_rank_lam"):
+                weight_family = "tc_rank"
+                aum_label = dirname
+                token = dirname.removeprefix("tc_rank_lam")
+                try:
+                    lam_token, _aum_token = token.rsplit("_", 1)
+                    tc_rank_lambda = float(
+                        lam_token.replace("m", "-").replace("p", ".")
+                    )
+                except ValueError:
+                    continue
+                softmax_lambda = None
             elif dirname.startswith("tc_"):
                 weight_family = "tc"
                 aum_label = dirname
                 softmax_lambda = None
+                tc_rank_lambda = None
             else:
                 continue
 
@@ -64,6 +79,7 @@ def discover_experiments(base_dir: Path) -> list[dict]:
                     "weight_family": weight_family,
                     "aum_label": aum_label,
                     "softmax_lambda": softmax_lambda,
+                    "tc_rank_lambda": tc_rank_lambda,
                     "weight_spec": dirname,
                     "std_dir": std_dir,
                     "wt_dir": wt_dir,
@@ -135,10 +151,10 @@ def assign_liquidity_quintiles(panel: pd.DataFrame, config: dict) -> pd.Series:
 
 
 def parse_tc_aum(aum_label: str | None) -> float | None:
-    """Parse a TC folder label such as ``tc_500m`` into dollars."""
+    """Parse a TC folder label such as ``tc_500m`` or ``tc_rank_lam3_500m``."""
     if aum_label is None:
         return None
-    token = aum_label.removeprefix("tc_")
+    token = aum_label.rsplit("_", 1)[-1]
     if not token.endswith("m"):
         raise ValueError(f"Could not parse TC AUM label: {aum_label!r}")
     return float(token[:-1]) * 1_000_000
@@ -156,6 +172,13 @@ def formal_weight_label(spec: dict, config: dict) -> str:
         return f"softmax-rank(lambda={float(lam):g})"
     if family == "tc":
         return f"TC ({spec['aum_label']})"
+    if family == "tc_rank":
+        lam = spec["tc_rank_lambda"]
+        if lam is None:
+            raise ValueError("tc_rank specs must include an explicit lambda")
+        aum = parse_tc_aum(spec["aum_label"])
+        aum_m = int(aum / 1_000_000) if aum is not None else "NA"
+        return f"TC-rank(lambda={float(lam):g}, {aum_m}m)"
     return family
 
 
@@ -176,6 +199,11 @@ def compute_formal_utility_weights(
             "softmax_lambda"
         ]
     elif family == "tc":
+        aum = parse_tc_aum(spec["aum_label"])
+    elif family == "tc_rank":
+        if spec["tc_rank_lambda"] is None:
+            raise ValueError("tc_rank specs must include an explicit lambda")
+        cfg.setdefault("weighting", {})["tc_rank_lambda"] = spec["tc_rank_lambda"]
         aum = parse_tc_aum(spec["aum_label"])
 
     return compute_weights(panel, scheme=family, config=cfg, aum=aum)

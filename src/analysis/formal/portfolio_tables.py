@@ -15,45 +15,8 @@ from src.portfolio.construction import (
     compute_net_returns,
     prepare_transaction_cost_context,
 )
-from src.weighting.schemes import compute_weights
 
 logger = logging.getLogger(__name__)
-
-
-def compute_liquidity_distribution_table(
-    panel: pd.DataFrame,
-    aum_scenarios: list[int | float],
-    config: dict,
-) -> pd.DataFrame:
-    """Compute training and TC-implementability mass by liquidity quintile."""
-    panel_work = panel.copy()
-    panel_work["liq_quintile"] = assign_liquidity_quintiles(panel_work, config)
-    panel_valid = panel_work[panel_work["liq_quintile"].isin([1, 2, 3, 4, 5])].copy()
-
-    rows = []
-    total_n = len(panel_valid)
-    for quintile in [1, 2, 3, 4, 5]:
-        label = _quintile_label(quintile)
-        q_mask = panel_valid["liq_quintile"] == quintile
-        rows.append(
-            {
-                "Quintile": label,
-                "Pct_Training": 100.0 * q_mask.sum() / total_n if total_n else np.nan,
-            }
-        )
-
-    out = pd.DataFrame(rows)
-    for aum in aum_scenarios:
-        weights = compute_weights(panel_valid, scheme="tc", config=config, aum=aum)
-        total_w = weights.sum()
-        col = f"Pct_Impl_{aum_label(aum)}"
-        values = []
-        for quintile in [1, 2, 3, 4, 5]:
-            q_weights = weights[panel_valid["liq_quintile"] == quintile]
-            values.append(100.0 * q_weights.sum() / total_w if total_w else np.nan)
-        out[col] = values
-
-    return out
 
 
 def compute_quintile_aum_scaling(
@@ -111,6 +74,7 @@ def compute_within_quintile_portfolio_table(
     panel: pd.DataFrame,
     aum: int | float,
     config: dict,
+    portfolio_mode: str = "long_short",
 ) -> pd.DataFrame:
     """Compute gross and net Sharpe ratios inside each liquidity quintile."""
     panel_work = panel.copy()
@@ -129,6 +93,7 @@ def compute_within_quintile_portfolio_table(
                 preds,
                 tc_penalised=False,
                 config=config,
+                portfolio_mode=portfolio_mode,
             )
             if len(ret_df) < 12:
                 continue
@@ -141,6 +106,7 @@ def compute_within_quintile_portfolio_table(
                 aum=aum,
                 config=config,
                 tc_context=tc_context,
+                portfolio_mode=portfolio_mode,
             )
             net_sr = sharpe_ratio(net_df["ret_long_short_net"].dropna())
 
@@ -174,7 +140,7 @@ def compute_quintile_sr_scissors_tables(
     config: dict,
     tc_sort_aum: int | float | None = None,
     quintile_aum_scale: dict[int, float] | None = None,
-    fixed_stocks_per_leg: int | None = None,
+    portfolio_mode: str = "long_short",
 ) -> dict[str, pd.DataFrame]:
     """Compute old-style annualized gross/net Sharpe tables by liquidity quintile.
 
@@ -183,8 +149,8 @@ def compute_quintile_sr_scissors_tables(
     produced using weighted predictions and the TC-aware portfolio sort.
     If ``quintile_aum_scale`` is provided, net-return AUMs and TC-sort AUMs are
     multiplied by the quintile-specific scale.
-    If ``fixed_stocks_per_leg`` is provided, each liquidity quintile-month uses
-    exactly that many long names and short names instead of decile buckets.
+    ``portfolio_mode`` is retained for output namespacing; only ``long_short``
+    is currently active.
     """
     panel_work = panel.copy()
     panel_work["liq_quintile"] = assign_liquidity_quintiles(panel_work, config)
@@ -224,7 +190,7 @@ def compute_quintile_sr_scissors_tables(
                 tc_penalised=tc_penalised,
                 aum=effective_sort_aum,
                 config=config,
-                fixed_stocks_per_leg=fixed_stocks_per_leg,
+                portfolio_mode=portfolio_mode,
             )
             if len(ret_df) < 12:
                 continue
@@ -237,9 +203,8 @@ def compute_quintile_sr_scissors_tables(
                 "Avg_Ret_pct": gross_returns.mean() * 100,
                 "N_months": int(gross_returns.shape[0]),
                 "Mean_Leg_N": mean_leg_n,
+                "Portfolio_Mode": portfolio_mode,
             }
-            if fixed_stocks_per_leg is not None:
-                row["Fixed_Stocks_Per_Leg"] = int(fixed_stocks_per_leg)
             if quintile_aum_scale is not None:
                 row["AUM_Scale"] = aum_scale
             if tc_penalised and effective_sort_aum is not None:
@@ -259,6 +224,7 @@ def compute_quintile_sr_scissors_tables(
                     aum=effective_aum,
                     config=config,
                     tc_context=tc_context,
+                    portfolio_mode=portfolio_mode,
                 )
                 if quintile_aum_scale is not None:
                     row[f"Effective_AUM_{label}"] = effective_aum
@@ -449,9 +415,14 @@ def compute_two_by_two_decomposition(
     panel: pd.DataFrame,
     aum: int | float,
     config: dict,
+    portfolio_mode: str = "long_short",
 ) -> dict:
     """Build the 2x2 training-vs-portfolio decomposition at one AUM level."""
-    logger.info("Building 2x2 portfolios at AUM=$%.0fM", aum / 1e6)
+    logger.info(
+        "Building 2x2 portfolios at AUM=$%.0fM, mode=%s",
+        aum / 1e6,
+        portfolio_mode,
+    )
     tc_context = prepare_transaction_cost_context(panel, config)
 
     cells = {}
@@ -467,6 +438,7 @@ def compute_two_by_two_decomposition(
             tc_penalised=tc_penalised,
             aum=aum if tc_penalised else None,
             config=config,
+            portfolio_mode=portfolio_mode,
         )
         net_df = compute_net_returns(
             ret_df,
@@ -475,6 +447,7 @@ def compute_two_by_two_decomposition(
             aum=aum,
             config=config,
             tc_context=tc_context,
+            portfolio_mode=portfolio_mode,
         )
         cells[cell_name] = net_df
 
@@ -565,6 +538,7 @@ def compute_two_by_two_decomposition(
         "return_summary": return_summary,
         "turnover": turnover,
         "raw_trade_sum": raw_trade_sum,
+        "portfolio_mode": portfolio_mode,
     }
 
 
@@ -705,3 +679,64 @@ def format_two_by_two_decomposition_rows(result: dict) -> list[dict]:
         )
 
     return rows
+
+
+def format_two_by_two_timeseries_rows(
+    result: dict,
+    aum: int | float,
+    label: str,
+) -> pd.DataFrame:
+    """Flatten monthly 2x2 portfolio returns and trading costs for CSV export."""
+    cell_meta = {
+        "1A": ("standard", "prediction"),
+        "1B": ("standard", "tc_penalised"),
+        "2A": ("weighted", "prediction"),
+        "2B": ("weighted", "tc_penalised"),
+    }
+    frames = []
+    portfolio_mode = result.get("portfolio_mode", "long_short")
+
+    for cell, df in result["cells"].items():
+        training_model, portfolio_sort = cell_meta[cell]
+        out = df.copy()
+        out["cell"] = cell
+        out["training_model"] = training_model
+        out["portfolio_sort"] = portfolio_sort
+        out["aum"] = aum
+        out["aum_label"] = label
+        out["portfolio_mode"] = portfolio_mode
+        out["gross_return"] = out["ret_long_short"]
+        out["net_return"] = out["ret_long_short_net"]
+        out["gross_return_pct"] = out["gross_return"] * 100.0
+        out["transaction_cost_pct"] = out["transaction_cost"] * 100.0
+        out["net_return_pct"] = out["net_return"] * 100.0
+        frames.append(out)
+
+    if not frames:
+        return pd.DataFrame()
+
+    out = pd.concat(frames, ignore_index=True)
+    columns = [
+        "yyyymm",
+        "cell",
+        "training_model",
+        "portfolio_sort",
+        "aum",
+        "aum_label",
+        "portfolio_mode",
+        "gross_return",
+        "transaction_cost",
+        "net_return",
+        "gross_return_pct",
+        "transaction_cost_pct",
+        "net_return_pct",
+        "turnover",
+        "raw_trade_sum",
+        "ret_long",
+        "ret_short",
+        "n_long",
+        "n_short",
+    ]
+    return out[[c for c in columns if c in out.columns]].sort_values(
+        ["yyyymm", "cell"]
+    )

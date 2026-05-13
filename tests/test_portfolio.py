@@ -2,7 +2,8 @@
 
 Tests the updated portfolio construction:
   - Standard sort (Column 1): sort on r_hat
-  - TC-penalised sort (Column 2): long r_hat - TC, short r_hat + TC
+  - TC-penalised sort (Column 2): long r_hat - spread/2, short r_hat + spread/2
+  - Portfolio performance uses excess_ret, matching the model target
   - Net returns with turnover-adjusted TC
   - No liquidity filter, no position cap
 """
@@ -16,7 +17,7 @@ from src.portfolio.construction import (
     build_long_short_portfolio,
     build_portfolio_timeseries,
     compute_net_returns,
-    _assign_deciles,
+    _assign_quantiles,
     _drift_positions,
 )
 
@@ -30,10 +31,12 @@ def single_month():
     """500 stocks in one month with known data."""
     rng = np.random.RandomState(42)
     n = 500
+    raw_ret = rng.normal(0.01, 0.05, size=n)
     return pd.DataFrame({
         "yyyymm": 202301,
         "permno": range(10001, 10001 + n),
-        "ret": rng.normal(0.01, 0.05, size=n),
+        "ret": raw_ret,
+        "excess_ret": raw_ret - 0.002,
         "liq_dvol_21d": rng.lognormal(mean=18, sigma=2, size=n),
         "liq_BidAskSpread": rng.uniform(0.001, 0.05, size=n),
         "liq_excess_sigma_12m": rng.uniform(0.04, 0.25, size=n),
@@ -57,22 +60,22 @@ def tc_per_stock(single_month):
                      index=single_month.index)
 
 
-# -- _assign_deciles --------------------------------------------------
+# -- _assign_quantiles ------------------------------------------------
 
-class TestAssignDeciles:
+class TestAssignQuantiles:
     def test_basic(self):
         vals = pd.Series(range(100))
-        deciles = _assign_deciles(vals, n_quantiles=10)
-        assert deciles.min() == 1
-        assert deciles.max() == 10
-        assert len(deciles) == 100
+        quantiles = _assign_quantiles(vals, n_quantiles=5)
+        assert quantiles.min() == 1
+        assert quantiles.max() == 5
+        assert len(quantiles) == 100
 
     def test_equal_sized_bins(self):
         vals = pd.Series(range(1000))
-        deciles = _assign_deciles(vals, n_quantiles=10)
-        counts = deciles.value_counts()
-        assert counts.min() == 100
-        assert counts.max() == 100
+        quantiles = _assign_quantiles(vals, n_quantiles=5)
+        counts = quantiles.value_counts()
+        assert counts.min() == 200
+        assert counts.max() == 200
 
 
 # -- build_long_short_portfolio ---------------------------------------
@@ -92,6 +95,34 @@ class TestBuildLongShort:
         assert abs(result["ret_long_short"] -
                    (result["ret_long"] - result["ret_short"])) < 1e-10
 
+    def test_uses_excess_return_for_performance(self):
+        n = 10
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.arange(n, dtype=float) / 100.0,
+        })
+        predictions = pd.Series(np.arange(n), index=df.index)
+
+        result = build_long_short_portfolio(df, predictions)
+
+        expected_long = np.mean([0.08, 0.09])
+        expected_short = np.mean([0.00, 0.01])
+        assert result["ret_long"] == pytest.approx(expected_long)
+        assert result["ret_short"] == pytest.approx(expected_short)
+        assert result["ret_long_short"] == pytest.approx(
+            expected_long - expected_short
+        )
+
+    def test_invalid_portfolio_mode(self, single_month, predictions):
+        with pytest.raises(ValueError, match="portfolio_mode"):
+            build_long_short_portfolio(
+                single_month,
+                predictions,
+                portfolio_mode="bad_mode",
+            )
+
     def test_equal_dollar_weights(self, single_month, predictions):
         result = build_long_short_portfolio(single_month, predictions)
         long_weights = list(result["positions_long"].values())
@@ -102,8 +133,8 @@ class TestBuildLongShort:
         """All stocks should be included (no filtering)."""
         result = build_long_short_portfolio(single_month, predictions)
         total = result["n_long"] + result["n_short"]
-        # Long + short = 2 deciles out of 10 = 20% of 500 = 100 stocks
-        assert total == 100
+        # Long + short = 2 quintiles out of 5 = 40% of 500 = 200 stocks
+        assert total == 200
 
     def test_custom_long_short_quantiles(self):
         """Configured long/short quantiles should control selected legs."""
@@ -112,6 +143,7 @@ class TestBuildLongShort:
             "yyyymm": 202301,
             "permno": range(10001, 10001 + n),
             "ret": np.zeros(n),
+            "excess_ret": np.zeros(n),
         })
         predictions = pd.Series(np.arange(n), index=df.index)
 
@@ -135,46 +167,6 @@ class TestBuildLongShort:
                 short_quantile=1,
             )
 
-    def test_fixed_stocks_per_leg(self):
-        n = 100
-        df = pd.DataFrame({
-            "yyyymm": 202301,
-            "permno": range(10001, 10001 + n),
-            "ret": np.zeros(n),
-        })
-        predictions = pd.Series(np.arange(n), index=df.index)
-
-        result = build_long_short_portfolio(
-            df,
-            predictions,
-            fixed_stocks_per_leg=7,
-        )
-
-        assert result["n_long"] == 7
-        assert result["n_short"] == 7
-        assert set(result["positions_long"]) == set(range(10094, 10101))
-        assert set(result["positions_short"]) == set(range(10001, 10008))
-        assert set(result["positions_long"]).isdisjoint(result["positions_short"])
-
-    def test_fixed_stocks_per_leg_too_few_stocks(self):
-        n = 10
-        df = pd.DataFrame({
-            "yyyymm": 202301,
-            "permno": range(10001, 10001 + n),
-            "ret": np.zeros(n),
-        })
-        predictions = pd.Series(np.arange(n), index=df.index)
-
-        result = build_long_short_portfolio(
-            df,
-            predictions,
-            fixed_stocks_per_leg=6,
-        )
-
-        assert np.isnan(result["ret_long_short"])
-        assert result["n_long"] == 0
-        assert result["n_short"] == 0
-
     def test_tc_penalised_sort(self, single_month, predictions, tc_per_stock):
         result_std = build_long_short_portfolio(
             single_month, predictions, tc_penalised=False)
@@ -190,6 +182,7 @@ class TestBuildLongShort:
             "yyyymm": 202301,
             "permno": range(10001, 10001 + n),
             "ret": np.zeros(n),
+            "excess_ret": np.zeros(n),
         })
         predictions = pd.Series(np.arange(n, dtype=float), index=df.index)
         tc_per_stock = pd.Series(0.0, index=df.index)
@@ -200,6 +193,7 @@ class TestBuildLongShort:
             predictions,
             tc_penalised=True,
             tc_per_stock=tc_per_stock,
+            n_quantiles=10,
         )
 
         high_cost_low_prediction = set(range(10001, 10011))
@@ -213,6 +207,7 @@ class TestBuildLongShort:
             "yyyymm": 202301,
             "permno": range(10001, 10001 + n),
             "ret": np.zeros(n),
+            "excess_ret": np.zeros(n),
         })
         predictions = pd.Series(0.0, index=df.index)
         tc_per_stock = pd.Series(1.0, index=df.index)
@@ -226,8 +221,8 @@ class TestBuildLongShort:
         )
 
         assert set(result["positions_long"]).isdisjoint(result["positions_short"])
-        assert result["n_long"] == 10
-        assert result["n_short"] == 10
+        assert result["n_long"] == 20
+        assert result["n_short"] == 20
 
     def test_tc_penalised_requires_tc(self, single_month, predictions):
         with pytest.raises(ValueError, match="tc_per_stock required"):
@@ -239,11 +234,11 @@ class TestBuildLongShort:
             "yyyymm": [202301] * 5,
             "permno": range(5),
             "ret": [0.01] * 5,
+            "excess_ret": [0.008] * 5,
         })
         tiny_pred = pd.Series([0.01] * 5, index=tiny.index)
         result = build_long_short_portfolio(tiny, tiny_pred)
         assert np.isnan(result["ret_long_short"])
-
 
 # -- _drift_positions -------------------------------------------------
 

@@ -3,12 +3,12 @@
 ====================================
 
 Generate the formal Section 9 portfolio tables:
-    outputs/formalanalysis/analysis/{model}/{weight_spec}/two_by_two_{aum}.csv
-    outputs/formalanalysis/analysis/{model}/{weight_spec}/within_quintile_portfolio.csv
-    outputs/formalanalysis/analysis/{model}/{weight_spec}/within_quintile_portfolio_tc_sort_{aum}.csv
-    outputs/formalanalysis/analysis/{model}/{weight_spec}/within_quintile_portfolio_scaled_aum_{aum}.csv
-    outputs/formalanalysis/analysis/{model}/{weight_spec}/within_quintile_portfolio_fixed_{n}.csv
-    outputs/formalanalysis/analysis/formal_hypothesis_tests.json
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/{portfolio_mode}/two_by_two_{aum}.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/{portfolio_mode}/two_by_two_timeseries_{aum}.xlsx
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/{portfolio_mode}/within_quintile_portfolio.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/{portfolio_mode}/within_quintile_portfolio_tc_sort_{aum}.csv
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/{portfolio_mode}/within_quintile_portfolio_scaled_aum_{aum}.csv
+    outputs/formalanalysis/analysis/formal_hypothesis_tests_{portfolio_mode}.json
 """
 
 from __future__ import annotations
@@ -32,12 +32,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.analysis.formal.common import aum_label, load_predictions  # noqa: E402
 from src.analysis.formal.portfolio_tables import (  # noqa: E402
-    compute_liquidity_distribution_table,
     compute_quintile_aum_scaling,
     compute_quintile_sr_scissors_tables,
     compute_two_by_two_decomposition,
     format_within_quintile_from_scissors,
     format_two_by_two_decomposition_rows,
+    format_two_by_two_timeseries_rows,
     plot_sr_scissors_comparison,
     plot_sr_scissors_table,
 )
@@ -115,13 +115,11 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--fixed-stocks-per-leg",
-        type=int,
-        default=None,
+        "--portfolio-mode",
+        choices=["long_short"],
+        default="long_short",
         help=(
-            "Also write within-quintile/scissors robustness outputs that use "
-            "exactly this many long stocks and this many short stocks in each "
-            "liquidity quintile-month."
+            "Portfolio construction mode. Only long_short is currently active."
         ),
     )
     return parser.parse_args()
@@ -139,16 +137,12 @@ def main():
     aum_scenarios = parse_aum_millions(args.aum, config)
     primary_aum = int(args.primary_aum) * 1_000_000
     primary_decompositions = {}
-    distribution_table = compute_liquidity_distribution_table(
-        panel,
-        aum_scenarios,
-        config,
-    )
 
     for spec in specs:
         spec_label = spec["spec_label"]
         logger.info("=== %s ===", spec_label)
-        out_dir = formal_spec_dir(analysis_dir, spec)
+        out_dir = formal_spec_dir(analysis_dir, spec) / args.portfolio_mode
+        out_dir.mkdir(parents=True, exist_ok=True)
         preds_standard, preds_weighted = load_predictions(spec)
 
         if not args.skip_two_by_two:
@@ -161,21 +155,27 @@ def main():
                     panel,
                     aum=aum,
                     config=config,
+                    portfolio_mode=args.portfolio_mode,
                 )
                 rows = format_two_by_two_decomposition_rows(result)
                 pd.DataFrame(rows).to_csv(
                     out_dir / f"two_by_two_{label}.csv",
                     index=False,
                 )
+                timeseries = format_two_by_two_timeseries_rows(
+                    result,
+                    aum=aum,
+                    label=label,
+                )
+                _write_timeseries_workbook(
+                    timeseries,
+                    out_dir / f"two_by_two_timeseries_{label}.xlsx",
+                )
                 if aum == primary_aum:
                     primary_decompositions[spec_label] = result
 
         if not args.skip_within_quintile:
             logger.info("Within-quintile/scissors portfolio tables")
-            distribution_table.to_csv(
-                out_dir / "table1_distribution.csv",
-                index=False,
-            )
             scissors_tables = compute_quintile_sr_scissors_tables(
                 preds_standard,
                 preds_weighted,
@@ -185,6 +185,7 @@ def main():
                 tc_sort_aum=(
                     None if args.skip_tc_aware_scissors else primary_aum
                 ),
+                portfolio_mode=args.portfolio_mode,
             )
             within_quintile = format_within_quintile_from_scissors(
                 scissors_tables,
@@ -289,6 +290,7 @@ def main():
                         None if args.skip_tc_aware_scissors else primary_aum
                     ),
                     quintile_aum_scale=scale_map,
+                    portfolio_mode=args.portfolio_mode,
                 )
                 scaled_tables["std"].to_csv(
                     out_dir / f"table3_sr_quintile_std_scaled_aum_{tc_sort_label}.csv",
@@ -368,112 +370,50 @@ def main():
                             ),
                         )
 
-            if args.fixed_stocks_per_leg is not None:
-                if args.fixed_stocks_per_leg <= 0:
-                    raise ValueError("--fixed-stocks-per-leg must be positive")
-
-                fixed_n = int(args.fixed_stocks_per_leg)
-                fixed_label = f"fixed_{fixed_n}"
-                logger.info(
-                    "Within-quintile/scissors fixed-leg robustness tables "
-                    "(%d stocks per leg)",
-                    fixed_n,
-                )
-                fixed_tables = compute_quintile_sr_scissors_tables(
-                    preds_standard,
-                    preds_weighted,
-                    panel,
-                    aum_scenarios=aum_scenarios,
-                    config=config,
-                    tc_sort_aum=(
-                        None if args.skip_tc_aware_scissors else primary_aum
-                    ),
-                    fixed_stocks_per_leg=fixed_n,
-                )
-                fixed_tables["std"].to_csv(
-                    out_dir / f"table3_sr_quintile_std_{fixed_label}.csv",
-                    index=False,
-                )
-                fixed_tables["weighted"].to_csv(
-                    out_dir / f"table3_sr_quintile_weighted_{fixed_label}.csv",
-                    index=False,
-                )
-                within_fixed = format_within_quintile_from_scissors(
-                    fixed_tables,
-                    primary_aum,
-                )
-                if len(within_fixed) > 0:
-                    within_fixed.to_csv(
-                        out_dir / f"within_quintile_portfolio_{fixed_label}.csv",
-                        index=False,
-                    )
-
-                fixed_tc_sort_table = fixed_tables.get("weighted_tc_sort")
-                if fixed_tc_sort_table is not None and not fixed_tc_sort_table.empty:
-                    fixed_tc_sort_table.to_csv(
-                        out_dir / (
-                            "table3_sr_quintile_weighted_tc_sort_"
-                            f"{fixed_label}_{tc_sort_label}.csv"
-                        ),
-                        index=False,
-                    )
-                    within_fixed_tc_sort = format_within_quintile_from_scissors(
-                        {
-                            "std": fixed_tables["std"],
-                            "weighted": fixed_tc_sort_table,
-                        },
-                        primary_aum,
-                    )
-                    if len(within_fixed_tc_sort) > 0:
-                        within_fixed_tc_sort.to_csv(
-                            out_dir / (
-                                "within_quintile_portfolio_tc_sort_"
-                                f"{fixed_label}_{tc_sort_label}.csv"
-                            ),
-                            index=False,
-                        )
-
-                if not args.no_figures:
-                    plot_sr_scissors_comparison(
-                        fixed_tables["std"],
-                        fixed_tables["weighted"],
-                        out_dir / f"figure_sr_scissors_comparison_{fixed_label}.png",
-                        spec["model"],
-                        aum_scenarios,
-                        left_title=f"Standard Training ({fixed_n} stocks/leg)",
-                        right_title=f"Weighted Training ({fixed_n} stocks/leg)",
-                    )
-                    if (
-                        fixed_tc_sort_table is not None
-                        and not fixed_tc_sort_table.empty
-                    ):
-                        plot_sr_scissors_comparison(
-                            fixed_tables["std"],
-                            fixed_tc_sort_table,
-                            out_dir / (
-                                "figure_sr_scissors_comparison_tc_sort_"
-                                f"{fixed_label}_{tc_sort_label}.png"
-                            ),
-                            spec["model"],
-                            aum_scenarios,
-                            left_title=f"Standard Training ({fixed_n} stocks/leg)",
-                            right_title=(
-                                "Weighted + TC-Aware Sort "
-                                f"({fixed_n} stocks/leg, {tc_sort_label})"
-                            ),
-                        )
-
     if primary_decompositions:
-        _write_hypothesis_summary(primary_decompositions, analysis_dir)
+        _write_hypothesis_summary(
+            primary_decompositions,
+            analysis_dir,
+            portfolio_mode=args.portfolio_mode,
+        )
     logger.info("Done")
 
 
-def _write_hypothesis_summary(results: dict, out_dir: Path) -> None:
+def _write_timeseries_workbook(timeseries: pd.DataFrame, path: Path) -> None:
+    """Write monthly 2x2 time-series output with one worksheet per cell."""
+    redundant_sheet_cols = [
+        "cell",
+        "training_model",
+        "portfolio_sort",
+        "aum",
+        "aum_label",
+        "portfolio_mode",
+        "gross_return_pct",
+        "transaction_cost_pct",
+        "net_return_pct",
+    ]
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        for cell in ["1A", "1B", "2A", "2B"]:
+            cell_df = timeseries[timeseries["cell"] == cell].copy()
+            if cell_df.empty:
+                continue
+            cell_df = cell_df.drop(
+                columns=[c for c in redundant_sheet_cols if c in cell_df.columns]
+            )
+            cell_df.to_excel(writer, sheet_name=cell, index=False)
+
+
+def _write_hypothesis_summary(
+    results: dict,
+    out_dir: Path,
+    portfolio_mode: str = "long_short",
+) -> None:
     """Save consolidated hypothesis-test statistics from primary-AUM decompositions."""
     summary = {}
     for spec_label, result in results.items():
         decomp = result["decomposition"]
         summary[spec_label] = {
+            "portfolio_mode": portfolio_mode,
             "H1_training_share_pct": result["training_share"],
             "H1_lw_pvalue": decomp["lw_h3"].get("p_value"),
             "H3_total_effect": decomp["total_effect"],
@@ -484,7 +424,8 @@ def _write_hypothesis_summary(results: dict, out_dir: Path) -> None:
             "interaction": decomp["interaction"],
         }
 
-    with open(out_dir / "formal_hypothesis_tests.json", "w") as handle:
+    filename = f"formal_hypothesis_tests_{portfolio_mode}.json"
+    with open(out_dir / filename, "w") as handle:
         json.dump(summary, handle, indent=2, default=str)
 
 

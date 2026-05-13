@@ -6,7 +6,8 @@ Rolling-window ML training for the formal analysis.
 Each invocation trains ONE specification:
   - One model (elastic_net / xgboost / neural_network)
   - One weight family + AUM/lambda when needed
-    (dolvol, softmax_rank at a chosen lambda, or tc at a given AUM)
+    (dolvol, softmax_rank at a chosen lambda, tc at a given AUM,
+     or tc_rank at a chosen lambda and AUM)
 
 Produces:
   - M_std (standard training) predictions + importance
@@ -29,6 +30,7 @@ HPC usage:
   python scripts/20_formal_run_experiment.py --model xgboost --weights softmax_rank --softmax-lambda 3
   python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 10
   python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 500
+  python scripts/20_formal_run_experiment.py --model xgboost --weights tc_rank --tc-rank-lambda 3 --aum 500
   python scripts/20_formal_run_experiment.py --model elastic_net --weights dolvol
   ...
 
@@ -74,11 +76,11 @@ def parse_args():
     p.add_argument("--model", required=True,
                     choices=["elastic_net", "xgboost", "neural_network"])
     p.add_argument("--weights", default=None,
-                    choices=["dolvol", "softmax_rank", "tc"])
+                    choices=["dolvol", "softmax_rank", "tc", "tc_rank"])
     p.add_argument("--aum", type=int, default=None,
                     choices=[10, 100, 500, 1000],
                     help=(
-                        "AUM in $M for TC weights. Choices match "
+                        "AUM in $M for TC or TC-rank weights. Choices match "
                         "transaction_costs.aum_scenarios in config."
                     ))
     p.add_argument("--softmax-lambda", type=float, default=None,
@@ -86,6 +88,11 @@ def parse_args():
                         "Softmax-rank lambda. Required when "
                         "--weights softmax_rank; must be in "
                         "weighting.softmax_rank_lambdas."
+                    ))
+    p.add_argument("--tc-rank-lambda", type=float, default=None,
+                    help=(
+                        "TC-rank softmax lambda. Required when "
+                        "--weights tc_rank; must be in weighting.tc_rank_lambdas."
                     ))
     p.add_argument(
         "--standard-only",
@@ -139,8 +146,8 @@ def main():
     if not args.standard_only and args.weights is None:
         print("ERROR: --weights is required unless --standard-only is set", file=sys.stderr)
         sys.exit(1)
-    if args.weights == "tc" and args.aum is None:
-        print("ERROR: --aum required when --weights tc", file=sys.stderr)
+    if args.weights in {"tc", "tc_rank"} and args.aum is None:
+        print(f"ERROR: --aum required when --weights {args.weights}", file=sys.stderr)
         sys.exit(1)
     if args.weights == "softmax_rank" and args.softmax_lambda is None:
         print(
@@ -154,9 +161,22 @@ def main():
             file=sys.stderr,
         )
         sys.exit(1)
+    if args.weights == "tc_rank" and args.tc_rank_lambda is None:
+        print(
+            "ERROR: --tc-rank-lambda required when --weights tc_rank",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if args.weights != "tc_rank" and args.tc_rank_lambda is not None:
+        print(
+            "ERROR: --tc-rank-lambda is only valid when --weights tc_rank",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     aum_dollars = args.aum * 1_000_000 if args.aum else None
 
     softmax_lam = None
+    tc_rank_lam = None
     if args.weights == "softmax_rank":
         softmax_lam = float(args.softmax_lambda)
         if not np.isfinite(softmax_lam) or softmax_lam < 0:
@@ -171,6 +191,20 @@ def main():
             )
             sys.exit(1)
         config.setdefault("weighting", {})["softmax_rank_lambda"] = softmax_lam
+    elif args.weights == "tc_rank":
+        tc_rank_lam = float(args.tc_rank_lambda)
+        if not np.isfinite(tc_rank_lam) or tc_rank_lam < 0:
+            print("ERROR: --tc-rank-lambda must be finite and non-negative", file=sys.stderr)
+            sys.exit(1)
+        allowed_lams = config.get("weighting", {}).get("tc_rank_lambdas", [])
+        if allowed_lams and tc_rank_lam not in {float(lam) for lam in allowed_lams}:
+            choices = ", ".join(f"{float(lam):g}" for lam in allowed_lams)
+            print(
+                f"ERROR: --tc-rank-lambda must be one of: {choices}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        config.setdefault("weighting", {})["tc_rank_lambda"] = tc_rank_lam
 
     # -- Output paths --
     base_dir = Path(config["project"]["output_dir"]) / "formalanalysis" / "experiment"
@@ -179,6 +213,8 @@ def main():
 
     if args.weights == "tc":
         wt_dir = model_dir / f"tc_{args.aum}m"
+    elif args.weights == "tc_rank":
+        wt_dir = model_dir / f"tc_rank_{_lambda_label(tc_rank_lam)}_{args.aum}m"
     elif args.weights == "softmax_rank":
         wt_dir = model_dir / f"softmax_rank_{_lambda_label(softmax_lam)}"
     elif args.weights is not None:
@@ -277,6 +313,8 @@ def main():
     weight_label = args.weights
     if args.weights == "softmax_rank":
         weight_label = f"softmax_rank(lambda={softmax_lam:g})"
+    elif args.weights == "tc_rank":
+        weight_label = f"tc_rank(lambda={tc_rank_lam:g})"
     logger.info("Computing %s weights (aum=%s)...", weight_label,
                 f"${args.aum}M" if args.aum else "N/A")
     w = compute_weights(panel, scheme=args.weights, config=config, aum=aum_dollars)
@@ -307,6 +345,7 @@ def main():
         "weight_spec": wt_dir.name,
         "aum": args.aum,
         "softmax_rank_lambda": softmax_lam,
+        "tc_rank_lambda": tc_rank_lam,
         "data_source": "processed_panel.parquet",
         "features_pre_normalized": True,
         "feature_missing_fill": 0.5,

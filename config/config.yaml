@@ -152,8 +152,10 @@ weighting:
   # Family 1: dolvol - DolVol/mean(DolVol), AUM-independent
   # Family 2: softmax_rank - exp(lambda * rank(DolVol)), AUM-independent
   # Family 3: tc - Eq.23 exp(-alpha*TC), AUM-dependent
+  # Family 4: tc_rank - exp(lambda * rank(-TC)), AUM-dependent
   # This block only selects the default training-weight family.
-  # dolvol and softmax_rank use liquidity.primary; tc uses transaction_costs below.
+  # dolvol and softmax_rank use liquidity.primary; tc and tc_rank use
+  # transaction_costs below.
   primary: "dolvol"
   # Default softmax-rank lambda used when --softmax-lambda is omitted.
   softmax_rank_lambda: 2.0
@@ -161,6 +163,10 @@ weighting:
   # reads an individual value through --softmax-lambda; generate_hpc_jobs.sh runs
   # both values and writes separate folders: softmax_rank_lam2 and lam3.
   softmax_rank_lambdas: [ 2.0, 3.0 ]
+  # Default and robustness grid for TC-rank training weights. TC-rank uses the
+  # same stock-level TC formula as the tc family, then softmaxes rank(-TC).
+  tc_rank_lambda: 3.0
+  tc_rank_lambdas: [ 3.0 ]
 
 # ----------------------------------------------------------
 # ML Models (3 models, each run with standard + weighted)
@@ -192,13 +198,13 @@ models:
     reg_lambda: 0.1
     search_space:
       max_depth: [ 2, 3, 4 ]
-      learning_rate: [ 0.001, 0.005, 0.01, 0.03, 0.05 ]
-      n_estimators: [ 300, 500, 1000, 2000 ]
-      min_child_weight: [ 5, 10, 50, 100 ]
+      learning_rate: [ 0.001, 0.005, 0.01 ]
+      n_estimators: [ 300, 500, 1000 ]
+      min_child_weight: [ 5, 50, 100 ]
       colsample_bytree: [ 0.2, 0.3, 0.5 ]
-      subsample: [ 0.6, 0.8, 1.0 ]
-      reg_lambda: [ 0.01, 0.1, 1.0 ]
-    n_random_search: 150 # random search over 6480 possible XGBoost combinations
+      subsample: [ 0.6, 1.0 ]
+      reg_lambda: [ 0.1, 1.0 ]
+    n_random_search: 150 # random search over 972 possible XGBoost combinations
 
   neural_network:
     hidden_layers: [ 32, 16, 8 ] # GKX (2020) NN3 — best architecture
@@ -250,12 +256,12 @@ training:
 # Portfolio Construction
 # ----------------------------------------------------------
 portfolio:
-  n_quantiles: 10
-  long_quantile: 10
+  n_quantiles: 5
+  long_quantile: 5
   short_quantile: 1
   rebalance_frequency: "monthly"
   # No liquidity filter - TC-penalised sort (Column 2) replaces it.
-  # No position cap - equal-dollar within each decile leg.
+  # No position cap - equal-dollar within each selected quantile leg.
 
   # ----------------------------------------------------------
   # Transaction Cost Model
