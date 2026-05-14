@@ -6,6 +6,7 @@
 #   bash scripts/generate_hpc_jobs.sh --submit
 #   bash scripts/generate_hpc_jobs.sh --from-processed
 #   bash scripts/generate_hpc_jobs.sh --from-processed --submit
+#   bash scripts/generate_hpc_jobs.sh --from-processed --include-tc-target --submit
 #
 # Login-node rule: this script only creates/submits SLURM jobs. All Python
 # commands run inside jobs.
@@ -18,6 +19,7 @@ PROJECT_DIR="${PROJECT_DIR:-/data/home/tew775/liquidity-ml}"
 VENV="${VENV:-source ~/liquidml_env/bin/activate}"
 SUBMIT=false
 FROM_PROCESSED=false
+INCLUDE_TC_TARGET=false
 
 for arg in "$@"; do
     case "${arg}" in
@@ -27,14 +29,22 @@ for arg in "$@"; do
         --from-processed|--skip-data)
             FROM_PROCESSED=true
             ;;
+        --include-tc-target)
+            INCLUDE_TC_TARGET=true
+            ;;
         -h|--help)
             cat <<EOF
 Usage:
-  bash scripts/generate_hpc_jobs.sh [--from-processed] [--submit]
+  bash scripts/generate_hpc_jobs.sh [--from-processed] [--include-tc-target] [--submit]
 
 Options:
   --from-processed  Skip jobs 00/01. Use when processed_panel.parquet and
                     feature_list.json were created locally and uploaded to HPC.
+  --include-tc-target
+                    Also train target-adjusted formal models with target
+                    excess_ret - BidAskSpread/2. Creates a separate
+                    tc_target/standard job before weighted formal jobs to avoid
+                    parallel cache writes.
   --submit          Submit the generated SLURM jobs with dependencies.
 EOF
             exit 0
@@ -54,6 +64,10 @@ fi
 SOFTMAX_LAMBDAS=(2 3)
 TC_RANK_LAMBDAS=(3)
 TC_AUMS=(10 100 500 1000)
+TC_TARGET_ARG=""
+if [ "${INCLUDE_TC_TARGET}" = true ]; then
+    TC_TARGET_ARG=" --include-tc-target"
+fi
 
 cd "${REPO_ROOT}"
 mkdir -p jobs logs
@@ -156,22 +170,26 @@ for MODEL in "${MODELS[@]}"; do
         "python scripts/06_motivation_step3e_quintile_specific_models.py --model ${MODEL} --liquidity dvol --normalization global --use-baseline-params --use-cache"
 
     # Formal weighted-training specs. M_std is pre-populated by Step 04.
+    if [ "${INCLUDE_TC_TARGET}" = true ]; then
+        write_job "20_${MODEL}_tc_target_standard" 4 "12G" "240:0:0" \
+            "python scripts/20_formal_run_experiment.py --model ${MODEL} --standard-only --include-tc-target"
+    fi
     write_job "20_${MODEL}_dolvol" 4 "12G" "240:0:0" \
-        "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights dolvol"
+        "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights dolvol${TC_TARGET_ARG}"
     for LAM in "${SOFTMAX_LAMBDAS[@]}"; do
         LAM_LABEL=${LAM//./p}
         write_job "20_${MODEL}_softmax_rank_lam${LAM_LABEL}" 4 "12G" "240:0:0" \
-            "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights softmax_rank --softmax-lambda ${LAM}"
+            "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights softmax_rank --softmax-lambda ${LAM}${TC_TARGET_ARG}"
     done
     for AUM in "${TC_AUMS[@]}"; do
         write_job "20_${MODEL}_tc_${AUM}m" 4 "12G" "240:0:0" \
-            "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights tc --aum ${AUM}"
+            "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights tc --aum ${AUM}${TC_TARGET_ARG}"
     done
     for LAM in "${TC_RANK_LAMBDAS[@]}"; do
         LAM_LABEL=${LAM//./p}
         for AUM in "${TC_AUMS[@]}"; do
             write_job "20_${MODEL}_tc_rank_lam${LAM_LABEL}_${AUM}m" 4 "12G" "240:0:0" \
-                "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights tc_rank --tc-rank-lambda ${LAM} --aum ${AUM}"
+                "python scripts/20_formal_run_experiment.py --model ${MODEL} --weights tc_rank --tc-rank-lambda ${LAM} --aum ${AUM}${TC_TARGET_ARG}"
         done
     done
 done
@@ -230,21 +248,28 @@ if [ "${SUBMIT}" = true ]; then
         id06=$(submit_job "06_quintile_${MODEL}_collect" "$(join_by_colon "${quintile_ids[@]}")")
         echo "06_quintile_${MODEL}_collect -> ${id06}"
 
-        jid=$(submit_job "20_${MODEL}_dolvol" "${id04}")
+        formal_dep="${id04}"
+        if [ "${INCLUDE_TC_TARGET}" = true ]; then
+            jid=$(submit_job "20_${MODEL}_tc_target_standard" "${id04}")
+            echo "20_${MODEL}_tc_target_standard -> ${jid}"
+            formal_dep="${jid}"
+        fi
+
+        jid=$(submit_job "20_${MODEL}_dolvol" "${formal_dep}")
         echo "20_${MODEL}_dolvol -> ${jid}"
         for LAM in "${SOFTMAX_LAMBDAS[@]}"; do
             LAM_LABEL=${LAM//./p}
-            jid=$(submit_job "20_${MODEL}_softmax_rank_lam${LAM_LABEL}" "${id04}")
+            jid=$(submit_job "20_${MODEL}_softmax_rank_lam${LAM_LABEL}" "${formal_dep}")
             echo "20_${MODEL}_softmax_rank_lam${LAM_LABEL} -> ${jid}"
         done
         for AUM in "${TC_AUMS[@]}"; do
-            jid=$(submit_job "20_${MODEL}_tc_${AUM}m" "${id04}")
+            jid=$(submit_job "20_${MODEL}_tc_${AUM}m" "${formal_dep}")
             echo "20_${MODEL}_tc_${AUM}m -> ${jid}"
         done
         for LAM in "${TC_RANK_LAMBDAS[@]}"; do
             LAM_LABEL=${LAM//./p}
             for AUM in "${TC_AUMS[@]}"; do
-                jid=$(submit_job "20_${MODEL}_tc_rank_lam${LAM_LABEL}_${AUM}m" "${id04}")
+                jid=$(submit_job "20_${MODEL}_tc_rank_lam${LAM_LABEL}_${AUM}m" "${formal_dep}")
                 echo "20_${MODEL}_tc_rank_lam${LAM_LABEL}_${AUM}m -> ${jid}"
             done
         done

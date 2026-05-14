@@ -12,6 +12,10 @@ Each invocation trains ONE specification:
 Produces:
   - M_std (standard training) predictions + importance
   - M_w  (weighted training)  predictions + importance
+  - Optional TC-target variants, where the target is
+    excess_ret - BidAskSpread/2:
+      * M_std_tc_target (no sample weights)
+      * M_w_tc_target (same sample weights as M_w)
   - Tuned hyperparameters per retune window
 
 M_std is shared across weight families. If the complete standard artifact set
@@ -39,6 +43,7 @@ HPC usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import os
@@ -56,7 +61,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import load_config, get_data_dir
 from src.data.loader import load_processed_panel
 from src.training import run_rolling_training
-from src.weighting.schemes import compute_weights
+from src.weighting.schemes import compute_tc_for_sorting, compute_weights
 
 # -- Logging -----------------------------------------------------------
 logging.basicConfig(
@@ -112,6 +117,20 @@ def parse_args():
             "training diagnostics when only predictions and loss logs are needed."
         ),
     )
+    p.add_argument(
+        "--include-tc-target",
+        action="store_true",
+        help=(
+            "Also train target-adjusted models with target equal to "
+            "excess_ret - BidAskSpread/2. Produces both no-weight and weighted "
+            "versions under experiment/{model}/tc_target/."
+        ),
+    )
+    p.add_argument(
+        "--force-tc-target",
+        action="store_true",
+        help="Retrain TC-target artifacts even if complete cached outputs exist.",
+    )
     return p.parse_args()
 
 
@@ -119,6 +138,129 @@ def _lambda_label(lam: float) -> str:
     """Compact filesystem-safe label, e.g. 3 -> lam3 and 2.5 -> lam2p5."""
     token = f"{lam:g}".replace("-", "m").replace(".", "p")
     return f"lam{token}"
+
+
+def _required_training_artifacts(out_dir: Path, meta_name: str) -> list[Path]:
+    """Return the complete artifact set for one training run."""
+    return [
+        out_dir / "predictions.parquet",
+        out_dir / "importance_shap.csv",
+        out_dir / "importance_native.csv",
+        out_dir / "tuned_params.csv",
+        out_dir / "training_diagnostics.csv",
+        out_dir / meta_name,
+    ]
+
+
+def _train_and_save(
+    *,
+    panel: pd.DataFrame,
+    features: list[str],
+    model_name: str,
+    weights: pd.Series | None,
+    config: dict,
+    seed: int,
+    label: str,
+    out_dir: Path,
+    meta_name: str,
+    meta: dict,
+    force: bool,
+    description: str,
+) -> pd.DataFrame:
+    """Run one training block unless a complete cached artifact set exists."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pred_path = out_dir / "predictions.parquet"
+    required = _required_training_artifacts(out_dir, meta_name)
+
+    if all(path.exists() for path in required) and not force:
+        logger.info("Complete %s artifacts already exist at %s - skipping", description, out_dir)
+        return pd.read_parquet(pred_path)
+
+    missing = [path.name for path in required if not path.exists()]
+    if force:
+        logger.info("Retraining %s because force was requested", description)
+    elif pred_path.exists():
+        logger.info(
+            "%s cache is incomplete (%s missing); retraining",
+            description,
+            ", ".join(missing),
+        )
+
+    logger.info("=== Training %s ===", description)
+    t0 = time.time()
+    preds, imp, native, params, diag = run_rolling_training(
+        panel,
+        features,
+        model_name,
+        weights=weights,
+        config=config,
+        seed=seed,
+        label=label,
+    )
+    elapsed = time.time() - t0
+    logger.info("%s complete: %d predictions in %.1f min", description, len(preds), elapsed / 60)
+
+    preds.to_parquet(pred_path, index=False)
+    imp.to_csv(out_dir / "importance_shap.csv", index=False)
+    native.to_csv(out_dir / "importance_native.csv", index=False)
+    params.to_csv(out_dir / "tuned_params.csv", index=False)
+    diag.to_csv(out_dir / "training_diagnostics.csv", index=False)
+
+    meta = {
+        **meta,
+        "n_predictions": len(preds),
+        "training_diagnostics": "training_diagnostics.csv",
+        "timestamp": datetime.now().isoformat(),
+    }
+    with open(out_dir / meta_name, "w") as handle:
+        json.dump(meta, handle, indent=2)
+
+    logger.info("%s saved to %s", description, out_dir)
+    return preds
+
+
+def _build_tc_target_panel(
+    panel: pd.DataFrame,
+    config: dict,
+) -> tuple[pd.DataFrame, dict, str]:
+    """Create a panel/config pair whose target is excess return minus spread/2."""
+    base_target = config["data"]["target_col"]
+    target_col = f"{base_target}_minus_tc_prop"
+    tc_prop = compute_tc_for_sorting(panel, aum=0.0, config=config)
+
+    panel_tc = panel.copy()
+    panel_tc[target_col] = panel_tc[base_target] - tc_prop
+
+    config_tc = copy.deepcopy(config)
+    config_tc.setdefault("data", {})["target_col"] = target_col
+    return panel_tc, config_tc, target_col
+
+
+def _common_meta(
+    *,
+    args: argparse.Namespace,
+    config: dict,
+    seed: int,
+    target_col: str,
+    target_adjustment: str | None = None,
+) -> dict:
+    """Metadata shared by formal training artifacts."""
+    return {
+        "model": args.model,
+        "data_source": "processed_panel.parquet",
+        "features_pre_normalized": True,
+        "feature_missing_fill": 0.5,
+        "training_engine": "src.training.run_rolling_training",
+        "target_col": target_col,
+        "target_adjustment": target_adjustment,
+        "tuning_method": config["training"].get("tuning_method", "validation"),
+        "cv_n_splits": config["training"].get("cv_n_splits"),
+        "validation_window": config["training"].get("validation_window"),
+        "skip_importance": bool(args.skip_importance),
+        "seed": seed,
+        "n_threads": os.environ.get("OMP_NUM_THREADS", "unknown"),
+        "python_version": sys.version,
+    }
 
 
 # -- Main --------------------------------------------------------------
@@ -249,6 +391,26 @@ def main():
     logger.info("Panel: %d rows, %d features, %d months",
                 len(panel), len(features), panel["yyyymm"].nunique())
 
+    panel_tc_target = None
+    config_tc_target = None
+    tc_target_col = None
+    tc_target_std_dir = None
+    tc_target_wt_dir = None
+    if args.include_tc_target:
+        panel_tc_target, config_tc_target, tc_target_col = _build_tc_target_panel(
+            panel,
+            config,
+        )
+        tc_target_root = model_dir / "tc_target"
+        tc_target_std_dir = tc_target_root / "standard"
+        if wt_dir is not None:
+            tc_target_wt_dir = tc_target_root / wt_dir.name
+        logger.info(
+            "Prepared TC-target training panel: %s = %s - BidAskSpread/2",
+            tc_target_col,
+            config["data"]["target_col"],
+        )
+
     # -- Phase 1: Standard training (M_std) --
     std_pred_path = std_dir / "predictions.parquet"
     std_diagnostics_path = std_dir / "training_diagnostics.csv"
@@ -294,6 +456,8 @@ def main():
                 "features_pre_normalized": True,
                 "feature_missing_fill": 0.5,
                 "training_engine": "src.training.run_rolling_training",
+                "target_col": config["data"]["target_col"],
+                "target_adjustment": None,
                 "tuning_method": config["training"].get("tuning_method", "validation"),
                 "cv_n_splits": config["training"].get("cv_n_splits"),
                 "validation_window": config["training"].get("validation_window"),
@@ -302,9 +466,47 @@ def main():
             }, f, indent=2)
         logger.info("M_std saved to %s", std_dir)
 
+    preds_tc_std = None
+    if args.include_tc_target:
+        assert panel_tc_target is not None
+        assert config_tc_target is not None
+        assert tc_target_col is not None
+        assert tc_target_std_dir is not None
+        tc_std_meta = _common_meta(
+            args=args,
+            config=config_tc_target,
+            seed=SEED,
+            target_col=tc_target_col,
+            target_adjustment="minus_bid_ask_half_spread",
+        )
+        tc_std_meta.update({
+            "weights": None,
+            "weight_spec": "standard",
+            "sample_weighted": False,
+            "base_target_col": config["data"]["target_col"],
+            "tc_target_component": "BidAskSpread/2",
+        })
+        preds_tc_std = _train_and_save(
+            panel=panel_tc_target,
+            features=features,
+            model_name=args.model,
+            weights=None,
+            config=config_tc_target,
+            seed=SEED,
+            label="std_tc_target",
+            out_dir=tc_target_std_dir,
+            meta_name="training_meta.json",
+            meta=tc_std_meta,
+            force=args.force_tc_target or args.force_standard,
+            description="M_std_tc_target",
+        )
+
     if args.standard_only:
         logger.info("--standard-only requested; skipping weighted training")
-        logger.info("All done. Outputs in:\n  std: %s", std_dir)
+        msg = f"All done. Outputs in:\n  std: {std_dir}"
+        if tc_target_std_dir is not None:
+            msg += f"\n  std_tc_target: {tc_target_std_dir}"
+        logger.info(msg)
         return
 
     # -- Compute weights for weighted training --
@@ -349,6 +551,8 @@ def main():
         "data_source": "processed_panel.parquet",
         "features_pre_normalized": True,
         "feature_missing_fill": 0.5,
+        "target_col": config["data"]["target_col"],
+        "target_adjustment": None,
         "tuning_method": config["training"].get("tuning_method", "validation"),
         "cv_n_splits": config["training"].get("cv_n_splits"),
         "validation_window": config["training"].get("validation_window"),
@@ -372,7 +576,52 @@ def main():
     with open(wt_dir / "meta.json", "w") as f:
         json.dump(meta, f, indent=2)
 
-    logger.info("All done. Outputs in:\n  std: %s\n  wt:  %s", std_dir, wt_dir)
+    if args.include_tc_target:
+        assert panel_tc_target is not None
+        assert config_tc_target is not None
+        assert tc_target_col is not None
+        assert tc_target_wt_dir is not None
+        tc_wt_meta = _common_meta(
+            args=args,
+            config=config_tc_target,
+            seed=SEED,
+            target_col=tc_target_col,
+            target_adjustment="minus_bid_ask_half_spread",
+        )
+        tc_wt_meta.update({
+            "weights": args.weights,
+            "weight_spec": wt_dir.name,
+            "aum": args.aum,
+            "softmax_rank_lambda": softmax_lam,
+            "tc_rank_lambda": tc_rank_lam,
+            "sample_weighted": True,
+            "base_target_col": config["data"]["target_col"],
+            "tc_target_component": "BidAskSpread/2",
+            "n_predictions_std_tc_target": (
+                len(preds_tc_std) if preds_tc_std is not None else None
+            ),
+        })
+        _train_and_save(
+            panel=panel_tc_target,
+            features=features,
+            model_name=args.model,
+            weights=w,
+            config=config_tc_target,
+            seed=SEED,
+            label="wt_tc_target",
+            out_dir=tc_target_wt_dir,
+            meta_name="meta.json",
+            meta=tc_wt_meta,
+            force=args.force_tc_target,
+            description=f"M_w_tc_target ({weight_label})",
+        )
+
+    msg = f"All done. Outputs in:\n  std: {std_dir}\n  wt:  {wt_dir}"
+    if tc_target_std_dir is not None:
+        msg += f"\n  std_tc_target: {tc_target_std_dir}"
+    if tc_target_wt_dir is not None:
+        msg += f"\n  wt_tc_target:  {tc_target_wt_dir}"
+    logger.info(msg)
 
 
 if __name__ == "__main__":
