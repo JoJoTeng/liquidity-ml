@@ -8,10 +8,10 @@ scipy==1.17.1
 scikit-learn==1.8.0
 
 # Models — version differences change predictions and SHAP values
-xgboost==3.2.0
+xgboost==2.1.1  # 2.x keeps scalar base_score; required for shap 0.47.x TreeExplainer
 tensorflow==2.16.2
 keras==3.5.0
-shap==0.51.0  # 0.47.x cannot parse xgboost>=3.0's JSON-array base_score, returns empty SHAP silently
+shap==0.47.1  # 0.49+ requires numpy>=2 which conflicts with TF 2.16 (numpy<2)
 
 # Statistics + IO — pinned for consistent regression and parquet behavior
 statsmodels==0.14.6
