@@ -11,7 +11,7 @@ scikit-learn==1.8.0
 xgboost==3.2.0
 tensorflow==2.16.2
 keras==3.5.0
-shap==0.47.1
+shap==0.51.0  # 0.47.x cannot parse xgboost>=3.0's JSON-array base_score, returns empty SHAP silently
 
 # Statistics + IO — pinned for consistent regression and parquet behavior
 statsmodels==0.14.6
