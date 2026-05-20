@@ -20,7 +20,8 @@ asset-pricing predictions and portfolio performance. The project has two main
 branches:
 
 - Motivation analyses in scripts `02` through `07`.
-- Formal model training and analysis in scripts `20` and `21a` through `21e`.
+- Formal model training and analysis in scripts `20` and `21a` through `21e`,
+  with `22` preparing paper-style Excel tables from `21e` outputs.
 
 The main model input is `data/processed_panel.parquet`, produced by running
 `scripts/00_fetch_data.py` and `scripts/01_process_data.py`.
@@ -43,12 +44,29 @@ python scripts/06_motivation_step3e_quintile_specific_models.py --model xgboost 
 python scripts/07_motivation_regime_analysis.py --model xgboost --liquidity dvol
 
 python scripts/20_formal_run_experiment.py --model xgboost --weights dolvol
+python scripts/20_formal_run_experiment.py --model xgboost --weights softmax_rank --softmax-lambda 2
+python scripts/20_formal_run_experiment.py --model xgboost --weights softmax_rank --softmax-lambda 3
+python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 10
+python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 100
+python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 500
+python scripts/20_formal_run_experiment.py --model xgboost --weights tc --aum 1000
+python scripts/20_formal_run_experiment.py --model xgboost --weights tc_rank --tc-rank-lambda 3 --aum 10
+python scripts/20_formal_run_experiment.py --model xgboost --weights tc_rank --tc-rank-lambda 3 --aum 100
+python scripts/20_formal_run_experiment.py --model xgboost --weights tc_rank --tc-rank-lambda 3 --aum 500
+python scripts/20_formal_run_experiment.py --model xgboost --weights tc_rank --tc-rank-lambda 3 --aum 1000
+
 python scripts/21a_formal_liquid_r2.py
 python scripts/21b_formal_importance_reallocation.py
 python scripts/21c_formal_restriction_curve.py
 python scripts/21d_formal_error_differential.py
 python scripts/21e_formal_portfolio_decomposition.py
+python scripts/22_prepare_portfolio_excel_tables.py --table table11 --model all --weight-spec all --aum all --skip-missing
+python scripts/22_prepare_portfolio_excel_tables.py --table table12 --model all --weight-spec all --aum all --skip-missing
 ```
+
+Run the formal `20` grid for each active model (`elastic_net`, `xgboost`,
+`neural_network`). The commands above show one model; the HPC generator emits
+the full grid automatically.
 
 For Apocrita, do not run compute-heavy Python scripts on the login node. Generate
 and submit SLURM jobs instead:
@@ -58,7 +76,10 @@ bash scripts/generate_hpc_jobs.sh --from-processed --submit
 ```
 
 Use `--from-processed` when `00` and `01` were run locally and the processed
-data files were uploaded to the cluster.
+data files were uploaded to the cluster. Add `--include-tc-target` only when
+you also want target-adjusted formal models with target
+`excess_ret - BidAskSpread/2`; these are written under
+`outputs/formalanalysis/experiment/{model}/tc_target/`.
 
 ## Active Models
 
@@ -99,13 +120,15 @@ All active models implement the `BaseReturnPredictor` API:
 
 ## Weight Families
 
-Formal weighted training supports three families:
+Formal weighted training supports four families:
 
 - `dolvol`: `DolVol_it / mean_i(DolVol_it)`.
 - `softmax_rank`: `exp(lambda * rank_it)` normalized to mean one, with formal
   lambdas `2` and `3`.
 - `tc`: transaction-cost weights based on spread, daily-scaled volatility, ADV,
   and AUM.
+- `tc_rank`: softmax weights on the within-month percentile rank of `-TC_it`,
+  with formal lambda `3` and AUMs `10`, `100`, `500`, and `1000` million.
 
 All training weights are normalized to mean one within each month.
 
@@ -122,6 +145,18 @@ outputs/formalanalysis/experiment/{model}/tc_10m/
 outputs/formalanalysis/experiment/{model}/tc_100m/
 outputs/formalanalysis/experiment/{model}/tc_500m/
 outputs/formalanalysis/experiment/{model}/tc_1000m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_10m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_100m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_500m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_1000m/
+```
+
+If `--include-tc-target` is used, `20_formal_run_experiment.py` also writes
+target-adjusted runs under:
+
+```text
+outputs/formalanalysis/experiment/{model}/tc_target/standard/
+outputs/formalanalysis/experiment/{model}/tc_target/{weight_spec}/
 ```
 
 Each fitted directory stores:
@@ -130,6 +165,8 @@ Each fitted directory stores:
 - `importance_shap.csv`
 - `importance_native.csv`
 - `tuned_params.csv`
+- `training_diagnostics.csv`
+- `training_meta.json` for `standard`, or `meta.json` for weighted specs
 
 Formal analysis scripts write to:
 
@@ -141,6 +178,20 @@ For example:
 
 ```text
 outputs/formalanalysis/analysis/xgboost/tc_500m/r2_by_quintile.csv
+```
+
+Portfolio decomposition outputs from `21e` are nested by portfolio mode, for
+example:
+
+```text
+outputs/formalanalysis/analysis/xgboost/tc_500m/long_short/two_by_two_500M.csv
+```
+
+Formatted Excel report tables from `22_prepare_portfolio_excel_tables.py` write
+to:
+
+```text
+outputs/formalanalysis/tables/
 ```
 
 ## Normalization Contract
@@ -164,10 +215,16 @@ The restricted-universe motivation scripts `05` and `06` support two modes:
   namespaces their outputs.
 - The primary formal R-squared tables use the zero benchmark. Extra benchmarks
   are available with `scripts/21a_formal_liquid_r2.py --extra-benchmarks`.
+- Formal analysis scripts discover all complete experiment folders, including
+  `tc_rank_lam3_*`. Use `--weights dolvol`, `--weights softmax_rank`,
+  `--weights tc`, or `--weights tc_rank` to restrict analysis.
 - Formal importance reallocation expects Step 2 full outputs, especially
   `interaction_regression_full.csv` and `quintile_fm_coefficients_full_raw.csv`.
 - Formal restriction-curve comparison expects Step 3d baseline/global output:
   `outputs/motivation/step3_restriction/{model}/dvol/global/baseline/restriction_comparison.csv`.
+- Formal portfolio decomposition currently supports `--portfolio-mode long_short`
+  only. `22_prepare_portfolio_excel_tables.py` does not recompute portfolios; it
+  reads the CSV outputs created by `21e`.
 
 ## Testing And Verification
 
@@ -187,4 +244,3 @@ python scripts/<changed_script>.py --help
 
 Some SHAP and neural-network tests are skipped automatically if optional runtime
 dependencies are unavailable.
-
