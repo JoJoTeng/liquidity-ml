@@ -1,7 +1,7 @@
 """
 Portfolio Construction (LiquidityML v3, Section 9)
 ===================================================
-Long-short quantile portfolios for the 2x2 experimental framework.
+Prediction-sorted quantile portfolios for the formal framework.
 
 The 2x2 design:
                     Sort on r_hat       TC-aware sort
@@ -16,9 +16,14 @@ Column 2: TC-penalised sort:
   No explicit liquidity filter - the TC penalty naturally pushes
   illiquid stocks down the ranking.
 
+TC-target score sort:
+  - For a prediction trained on s = r_hat - spread/2, long candidates sort on s.
+  - Short candidates sort on s + spread, which recovers r_hat + spread/2 for
+    the short-leg cost ranking.
+
 Portfolio rules:
-  - Configured quantile sort (currently long Q5, short Q1)
-  - Equal-dollar within each leg
+  - Configured prediction quantile sort (currently Q1-Q5)
+  - Equal-dollar within each quantile by default; value-weighted quantiles are optional
   - Monthly rebalancing
   - Performance returns use the model target return, currently excess_ret
 
@@ -26,8 +31,10 @@ Net return computation:
   - Uses actual turnover-adjusted trade size DeltaQ_it
     (target position minus drifted position) for market impact,
     NOT the full Q_it = AUM/N_leg.
-  - Interprets AUM as total gross strategy capital. The long-short portfolio
-    uses AUM/2 per leg.
+  - Interprets AUM as total portfolio capital. The legacy long-short helper
+    uses AUM/2 per leg; the quantile-first formal helper treats each
+    prediction quantile as a standalone long-only portfolio with the full
+    scenario AUM.
   - Tracks position drift from raw returns between rebalancing months.
 
 Transaction cost model: Frazzini et al. (2018) Eq. 25.
@@ -48,6 +55,8 @@ logger = logging.getLogger(__name__)
 
 _cfg = load_config()
 PORTFOLIO_MODES = {"long_short"}
+PORTFOLIO_WEIGHTINGS = {"equal", "value"}
+PROPORTIONAL_TC_ALIASES = {"proportional", "proportional_tc", "prop_tc", "spread_only"}
 
 
 # -- Helpers ----------------------------------------------------------
@@ -61,6 +70,21 @@ def _validate_portfolio_mode(portfolio_mode: str) -> str:
             f"got {portfolio_mode!r}"
         )
     return portfolio_mode
+
+
+def _validate_portfolio_weighting(portfolio_weighting: str) -> str:
+    """Validate and normalize the selected-stock weighting method."""
+    if portfolio_weighting not in PORTFOLIO_WEIGHTINGS:
+        raise ValueError(
+            f"portfolio_weighting must be one of {sorted(PORTFOLIO_WEIGHTINGS)}, "
+            f"got {portfolio_weighting!r}"
+        )
+    return portfolio_weighting
+
+
+def _is_proportional_tc_scenario(value: object) -> bool:
+    """Return True for the spread-only TC reporting scenario."""
+    return isinstance(value, str) and value.strip().lower() in PROPORTIONAL_TC_ALIASES
 
 
 def _leg_aum(aum: float, portfolio_mode: str = "long_short") -> float:
@@ -79,10 +103,6 @@ def _assign_quantiles(values: pd.Series, n_quantiles: int = 5) -> pd.Series:
         q=n_quantiles,
         labels=False,
     ) + 1  # 1-indexed
-
-
-_assign_deciles = _assign_quantiles
-
 
 def _select_quantile(
     work: pd.DataFrame,
@@ -112,6 +132,30 @@ def _select_quantile(
     return work.loc[selected_index]
 
 
+def _selected_leg_weights(
+    leg_df: pd.DataFrame,
+    portfolio_weighting: str,
+    value_weight_col: str,
+) -> pd.Series:
+    """Return selected-leg weights that sum to one."""
+    portfolio_weighting = _validate_portfolio_weighting(portfolio_weighting)
+    if len(leg_df) == 0:
+        return pd.Series(dtype=float)
+
+    if portfolio_weighting == "equal":
+        return pd.Series(1.0 / len(leg_df), index=leg_df.index)
+
+    if value_weight_col not in leg_df.columns:
+        raise KeyError(f"Value-weight column {value_weight_col!r} not found")
+
+    raw = pd.to_numeric(leg_df[value_weight_col], errors="coerce")
+    raw = raw.where(np.isfinite(raw) & (raw > 0.0))
+    total = raw.sum(skipna=True)
+    if not np.isfinite(total) or total <= 0.0:
+        return pd.Series(1.0 / len(leg_df), index=leg_df.index)
+    return raw.fillna(0.0) / total
+
+
 # -- Core: Build Single-Month Portfolio -------------------------------
 
 
@@ -119,12 +163,15 @@ def build_long_short_portfolio(
     df: pd.DataFrame,
     predictions: pd.Series,
     tc_penalised: bool = False,
+    tc_target_score: bool = False,
     tc_per_stock: pd.Series | None = None,
     n_quantiles: int = 5,
     long_quantile: int | None = None,
     short_quantile: int = 1,
     return_col: str = "excess_ret",
     portfolio_mode: str = "long_short",
+    portfolio_weighting: str = "equal",
+    value_weight_col: str = "liq_me_raw",
 ) -> dict[str, Any]:
     """Build a long-short quantile portfolio for one cross-section.
 
@@ -135,14 +182,20 @@ def build_long_short_portfolio(
     tc_penalised : If True, use TC-aware two-sided sorting for Column 2:
         long candidates sort on predictions - tc_per_stock, while short
         candidates sort on predictions + tc_per_stock.
+    tc_target_score : If True, treat predictions as a TC-adjusted target score
+        ``s = r_hat - tc``. Long candidates sort on ``s``; short candidates
+        sort on ``s + 2 * tc``.
     tc_per_stock : One-way proportional cost penalty per stock, currently
-        half bid-ask spread only (required if tc_penalised=True).
+        half bid-ask spread only (required for any TC-aware sort).
     n_quantiles : Number of signal quantiles (default 5 for quintiles).
     long_quantile : Quantile to hold long. Defaults to the top quantile.
     short_quantile : Quantile to hold short. Defaults to the bottom quantile.
     return_col : Realized return column used for portfolio performance.
         Defaults to excess_ret to match the model target.
     portfolio_mode : Must be ``"long_short"``.
+    portfolio_weighting : ``"equal"`` for equal-dollar selected-leg weights or
+        ``"value"`` for market-cap weights within each selected leg.
+    value_weight_col : Column used for value-weighted selected-leg weights.
 
     Returns
     -------
@@ -153,18 +206,26 @@ def build_long_short_portfolio(
         permnos_long, permnos_short : sets of permnos in each leg
     """
     _validate_portfolio_mode(portfolio_mode)
+    portfolio_weighting = _validate_portfolio_weighting(portfolio_weighting)
+    if tc_penalised and tc_target_score:
+        raise ValueError("tc_penalised and tc_target_score are mutually exclusive")
     work = df.copy()
     if return_col not in work.columns:
         raise KeyError(f"Portfolio return column {return_col!r} not found")
     work["_pred"] = predictions.values if isinstance(predictions, pd.Series) else predictions
 
     # -- Sorting signal ------
-    if tc_penalised:
+    two_sided_sort = tc_penalised or tc_target_score
+    if two_sided_sort:
         if tc_per_stock is None:
-            raise ValueError("tc_per_stock required for TC-penalised sort")
+            raise ValueError("tc_per_stock required for TC-aware sort")
         tc = tc_per_stock.reindex(work.index).fillna(0.0)
-        work["_long_signal"] = work["_pred"] - tc
-        work["_short_signal"] = work["_pred"] + tc
+        if tc_penalised:
+            work["_long_signal"] = work["_pred"] - tc
+            work["_short_signal"] = work["_pred"] + tc
+        else:
+            work["_long_signal"] = work["_pred"]
+            work["_short_signal"] = work["_pred"] + 2.0 * tc
     else:
         work["_signal"] = work["_pred"]
 
@@ -181,7 +242,7 @@ def build_long_short_portfolio(
         return _empty_result()
 
     # -- Security selection ------
-    if tc_penalised:
+    if two_sided_sort:
         long_df = _select_quantile(
             work,
             signal_col="_long_signal",
@@ -203,9 +264,17 @@ def build_long_short_portfolio(
     if len(long_df) < 2 or len(short_df) < 2:
         return _empty_result()
 
-    # -- Equal-dollar weights ------
-    w_long = pd.Series(1.0 / len(long_df), index=long_df.index)
-    w_short = pd.Series(1.0 / len(short_df), index=short_df.index)
+    # -- Selected-leg weights ------
+    w_long = _selected_leg_weights(
+        long_df,
+        portfolio_weighting=portfolio_weighting,
+        value_weight_col=value_weight_col,
+    )
+    w_short = _selected_leg_weights(
+        short_df,
+        portfolio_weighting=portfolio_weighting,
+        value_weight_col=value_weight_col,
+    )
 
     # -- Gross returns ------
     ret_long = (w_long * long_df[return_col]).sum()
@@ -251,9 +320,12 @@ def build_portfolio_timeseries(
     panel: pd.DataFrame,
     predictions: pd.DataFrame | pd.Series,
     tc_penalised: bool = False,
+    tc_target_score: bool = False,
     aum: float | None = None,
     config: dict | None = None,
     portfolio_mode: str = "long_short",
+    portfolio_weighting: str = "equal",
+    value_weight_col: str = "liq_me_raw",
 ) -> tuple[pd.DataFrame, dict]:
     """Build monthly long-short portfolios over the full test period.
 
@@ -265,11 +337,16 @@ def build_portfolio_timeseries(
         - pd.Series indexed by panel row labels (legacy support).
         Merged with panel via (permno, yyyymm) keys.
     tc_penalised : If True, use TC-penalised sort (Column 2).
-    aum : AUM in dollars. Required if tc_penalised=True.
+    tc_target_score : If True, treat predictions as ``r_hat - spread/2`` scores
+        and use the legacy two-sided TC-target long/short ranking.
+    aum : AUM in dollars. Required for TC-aware sorting.
         Interpreted as total strategy capital; transaction-cost sizing uses
         half this amount per leg.
     config : Override config dict.
     portfolio_mode : Must be ``"long_short"``.
+    portfolio_weighting : ``"equal"`` for equal-dollar selected-leg weights or
+        ``"value"`` for market-cap weights within each selected leg.
+    value_weight_col : Column used for value-weighted selected-leg weights.
 
     Returns
     -------
@@ -278,6 +355,9 @@ def build_portfolio_timeseries(
     positions_history : {yyyymm: {"long": {permno: w}, "short": {permno: w}}}
     """
     portfolio_mode = _validate_portfolio_mode(portfolio_mode)
+    portfolio_weighting = _validate_portfolio_weighting(portfolio_weighting)
+    if tc_penalised and tc_target_score:
+        raise ValueError("tc_penalised and tc_target_score are mutually exclusive")
     if config is None:
         config = _cfg
     portfolio_cfg = config["portfolio"]
@@ -304,9 +384,9 @@ def build_portfolio_timeseries(
 
     # Precompute TC for sorting if needed — on the merged panel
     tc_for_sort = None
-    if tc_penalised:
+    if tc_penalised or tc_target_score:
         if aum is None:
-            raise ValueError("aum required for TC-penalised sort")
+            raise ValueError("aum required for TC-aware sort")
         from src.weighting.schemes import compute_tc_for_sorting
         tc_for_sort = compute_tc_for_sorting(
             panel_pred,
@@ -330,19 +410,22 @@ def build_portfolio_timeseries(
         )
 
         tc_month = None
-        if tc_penalised and tc_for_sort is not None:
+        if (tc_penalised or tc_target_score) and tc_for_sort is not None:
             tc_month = tc_for_sort.loc[month_panel.index]
 
         result = build_long_short_portfolio(
             df=month_panel,
             predictions=month_preds,
             tc_penalised=tc_penalised,
+            tc_target_score=tc_target_score,
             tc_per_stock=tc_month,
             n_quantiles=n_q,
             long_quantile=long_q,
             short_quantile=short_q,
             return_col=return_col,
             portfolio_mode=portfolio_mode,
+            portfolio_weighting=portfolio_weighting,
+            value_weight_col=value_weight_col,
         )
 
         result["yyyymm"] = yyyymm
@@ -363,6 +446,160 @@ def build_portfolio_timeseries(
     return returns_df, positions_history
 
 
+def build_prediction_quantile_timeseries(
+    panel: pd.DataFrame,
+    predictions: pd.DataFrame | pd.Series,
+    sort_mode: str = "prediction",
+    aum: float | None = None,
+    config: dict | None = None,
+    tc_context: dict[str, Any] | None = None,
+    portfolio_weighting: str = "equal",
+    value_weight_col: str = "liq_me_raw",
+    proportional_tc_only: bool = False,
+) -> pd.DataFrame:
+    """Build monthly prediction-quantile portfolios and net returns.
+
+    ``sort_mode`` controls the score used to assign stocks to quantiles:
+    ``"prediction"`` uses raw model predictions, ``"tc_net"`` uses
+    prediction minus the one-way TC penalty, and ``"tc_target_score"`` uses
+    the supplied TC-target prediction score directly. Each quantile is treated
+    as a standalone long-only portfolio and receives the full scenario ``aum``
+    for transaction-cost sizing unless ``proportional_tc_only`` is true, in
+    which case realized net returns use spread/2 only and ignore market impact.
+    """
+    portfolio_weighting = _validate_portfolio_weighting(portfolio_weighting)
+    if sort_mode not in {"prediction", "tc_net", "tc_target_score"}:
+        raise ValueError("sort_mode must be one of prediction, tc_net, tc_target_score")
+    if aum is None and not proportional_tc_only:
+        raise ValueError("aum is required for quantile portfolio net returns")
+    if config is None:
+        config = _cfg
+    if tc_context is None:
+        tc_context = prepare_transaction_cost_context(panel, config)
+
+    portfolio_cfg = config["portfolio"]
+    n_q = int(portfolio_cfg["n_quantiles"])
+    return_col = config["data"].get("target_col", "excess_ret")
+    quantile_aum = 0.0 if proportional_tc_only else float(aum)
+
+    pred_df = _predictions_to_frame(panel, predictions)
+    panel_pred = panel.merge(pred_df, on=["permno", "yyyymm"], how="inner")
+    panel_pred = panel_pred.reset_index(drop=True)
+
+    if return_col not in panel_pred.columns:
+        raise KeyError(f"Portfolio return column {return_col!r} not found")
+
+    score = panel_pred["prediction"].astype(float).copy()
+    if sort_mode == "tc_net":
+        from src.weighting.schemes import compute_tc_for_sorting
+
+        score = score - compute_tc_for_sorting(
+            panel_pred,
+            aum=quantile_aum,
+            config=config,
+        )
+    panel_pred["_quantile_score"] = score
+
+    records: list[dict[str, Any]] = []
+    positions_by_quantile: dict[int, dict[int, dict[str, dict[int, float]]]] = {
+        q: {} for q in range(1, n_q + 1)
+    }
+
+    for yyyymm, month_panel in panel_pred.groupby("yyyymm", sort=True):
+        if len(month_panel) < n_q * 2:
+            continue
+
+        month_panel = month_panel.copy()
+        month_panel["_prediction_quantile"] = _assign_quantiles(
+            month_panel["_quantile_score"],
+            n_q,
+        )
+
+        for q in range(1, n_q + 1):
+            q_df = month_panel[month_panel["_prediction_quantile"] == q].copy()
+            if len(q_df) < 2:
+                continue
+
+            weights = _selected_leg_weights(
+                q_df,
+                portfolio_weighting=portfolio_weighting,
+                value_weight_col=value_weight_col,
+            )
+            gross_return = float((weights * q_df[return_col]).sum())
+            positions = dict(zip(q_df["permno"], weights))
+            records.append(
+                {
+                    "yyyymm": yyyymm,
+                    "prediction_quantile": q,
+                    "gross_return": gross_return,
+                    "n_stocks": int(len(q_df)),
+                    "weight_sum": float(weights.sum()),
+                    "score_mean": float(q_df["_quantile_score"].mean()),
+                }
+            )
+            positions_by_quantile[q][yyyymm] = {
+                "long": positions,
+                "short": {},
+            }
+
+    if not records:
+        logger.warning("No valid months for prediction-quantile portfolio construction")
+        return pd.DataFrame()
+
+    gross = pd.DataFrame(records)
+    frames = []
+    for q in range(1, n_q + 1):
+        gross_q = gross[gross["prediction_quantile"] == q].copy()
+        if gross_q.empty:
+            continue
+
+        net_input = gross_q[["yyyymm", "gross_return"]].rename(
+            columns={"gross_return": "ret_long_short"}
+        )
+        net_q = _compute_net_returns_with_context(
+            net_input,
+            positions_by_quantile[q],
+            aum=0.0 if proportional_tc_only else float(aum),
+            tc_context=tc_context,
+            leg_aum_override=quantile_aum,
+            proportional_tc_only=proportional_tc_only,
+        )
+        out = gross_q.merge(
+            net_q[
+                [
+                    "yyyymm",
+                    "transaction_cost",
+                    "raw_trade_sum",
+                    "turnover",
+                    "ret_long_short_net",
+                ]
+            ],
+            on="yyyymm",
+            how="left",
+        )
+        out["net_return"] = out["ret_long_short_net"]
+        frames.append(out.drop(columns=["ret_long_short_net"]))
+
+    return pd.concat(frames, ignore_index=True).sort_values(
+        ["yyyymm", "prediction_quantile"]
+    )
+
+
+def _predictions_to_frame(
+    panel: pd.DataFrame,
+    predictions: pd.DataFrame | pd.Series,
+) -> pd.DataFrame:
+    """Normalize predictions to permno, yyyymm, prediction columns."""
+    if isinstance(predictions, pd.Series):
+        common = panel.index.intersection(predictions.index)
+        return pd.DataFrame({
+            "permno": panel.loc[common, "permno"].values,
+            "yyyymm": panel.loc[common, "yyyymm"].values,
+            "prediction": predictions.loc[common].values,
+        })
+    return predictions[["permno", "yyyymm", "prediction"]].copy()
+
+
 # -- Transaction Cost: Turnover-Adjusted (Net Returns) ----------------
 
 
@@ -374,6 +611,7 @@ def compute_net_returns(
     config: dict | None = None,
     tc_context: dict[str, Any] | None = None,
     portfolio_mode: str = "long_short",
+    proportional_tc_only: bool = False,
 ) -> pd.DataFrame:
     """Compute net returns using turnover-adjusted trade sizes.
 
@@ -389,7 +627,8 @@ def compute_net_returns(
     raw trade sum because one-way costs are paid on both buys and sells.
 
     ``aum`` is interpreted as total strategy capital. The long-short portfolio
-    uses ``aum / 2`` for each leg.
+    uses ``aum / 2`` for each leg. If ``proportional_tc_only`` is true, only
+    spread/2 is applied and the market-impact term is set to zero.
     """
     portfolio_mode = _validate_portfolio_mode(portfolio_mode)
     if config is None:
@@ -402,6 +641,7 @@ def compute_net_returns(
         aum=aum,
         tc_context=tc_context,
         portfolio_mode=portfolio_mode,
+        proportional_tc_only=proportional_tc_only,
     )
 
 
@@ -441,6 +681,8 @@ def _compute_net_returns_with_context(
     aum: float,
     tc_context: dict[str, Any],
     portfolio_mode: str = "long_short",
+    leg_aum_override: float | None = None,
+    proportional_tc_only: bool = False,
 ) -> pd.DataFrame:
     """Compute net returns from a prebuilt transaction-cost context."""
     portfolio_mode = _validate_portfolio_mode(portfolio_mode)
@@ -449,7 +691,11 @@ def _compute_net_returns_with_context(
     sigma_col = tc_context["sigma_col"]
     adv_col = tc_context["adv_col"]
     lam = tc_context["lam"]
-    leg_aum = _leg_aum(aum, portfolio_mode=portfolio_mode)
+    leg_aum = (
+        float(leg_aum_override)
+        if leg_aum_override is not None
+        else _leg_aum(aum, portfolio_mode=portfolio_mode)
+    )
 
     months = sorted(positions_history.keys())
     tc_series = {}
@@ -492,7 +738,7 @@ def _compute_net_returns_with_context(
 
                 raw_trade_sum += delta_w
 
-                # Dollar trade amount
+                # Dollar trade amount; only used for market-impact sizing.
                 delta_q = delta_w * leg_aum
 
                 # Look up stock characteristics. If an eliminated holding is
@@ -513,9 +759,14 @@ def _compute_net_returns_with_context(
 
                 spread = abs(spread)
 
-                # Frazzini et al. Eq. 25 with actual DeltaQ
+                # Frazzini et al. Eq. 25 with actual DeltaQ. The
+                # proportional-only reporting case keeps only spread/2.
                 half_spread = spread / 2.0
-                market_impact = lam * sigma * np.sqrt(delta_q / adv)
+                market_impact = (
+                    0.0
+                    if proportional_tc_only
+                    else lam * sigma * np.sqrt(delta_q / adv)
+                )
                 tc_i = half_spread + market_impact
 
                 total_tc += delta_w * tc_i
@@ -619,16 +870,27 @@ def compute_net_returns_all_aum(
 
     result = gross_returns.copy()
     for aum in aum_scenarios:
+        proportional_tc_only = _is_proportional_tc_scenario(aum)
+        sizing_aum = 0.0 if proportional_tc_only else float(aum)
         net_df = compute_net_returns(
             gross_returns,
             positions_history,
             panel,
-            aum=aum,
+            aum=sizing_aum,
             config=config,
             tc_context=tc_context,
             portfolio_mode=portfolio_mode,
+            proportional_tc_only=proportional_tc_only,
         )
-        label = f"{aum // 1_000_000}M" if aum < 1_000_000_000 else f"{aum // 1_000_000_000}B"
+        label = (
+            "PropTC"
+            if proportional_tc_only
+            else (
+                f"{int(aum // 1_000_000)}M"
+                if aum < 1_000_000_000
+                else f"{int(aum // 1_000_000_000)}B"
+            )
+        )
         result[f"ret_ls_net_{label}"] = net_df["ret_long_short_net"]
 
     return result

@@ -5,6 +5,9 @@
 Generate the Q4-Q5 mean-squared-error differential table and figure:
     outputs/formalanalysis/analysis/{model}/{weight_spec}/liquid_squared_error_differential.csv
     outputs/formalanalysis/analysis/{model}/{weight_spec}/liquid_squared_error_differential.png
+
+Breakpoint-dependent outputs are written under:
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/liquidity_breakpoints/{mode}/
 """
 
 from __future__ import annotations
@@ -30,9 +33,14 @@ from src.analysis.formal.error_differential import (  # noqa: E402
 )
 from src.analysis.formal.script_utils import (  # noqa: E402
     add_experiment_filters,
+    add_liquidity_breakpoint_option,
+    config_for_liquidity_breakpoint,
     formal_output_dirs,
     formal_spec_dir,
+    liquidity_breakpoint_dir,
     load_filtered_specs,
+    namespace_liquidity_breakpoints,
+    resolve_liquidity_breakpoints,
 )
 from src.config import load_config  # noqa: E402
 from src.data.loader import load_processed_panel  # noqa: E402
@@ -49,6 +57,7 @@ def parse_args():
         description="Generate formal liquid-stock mean-squared-error differentials"
     )
     add_experiment_filters(parser)
+    add_liquidity_breakpoint_option(parser)
     parser.add_argument(
         "--no-figures",
         action="store_true",
@@ -65,28 +74,47 @@ def main():
 
     logger.info("Loading processed panel")
     panel = load_processed_panel()
+    breakpoint_modes = resolve_liquidity_breakpoints(
+        config,
+        args.liquidity_breakpoints,
+    )
+    use_breakpoint_namespace = namespace_liquidity_breakpoints(
+        args.liquidity_breakpoints,
+    )
 
     for spec in specs:
         spec_label = spec["spec_label"]
         logger.info("=== %s ===", spec_label)
-        out_dir = formal_spec_dir(analysis_dir, spec)
+        base_out_dir = formal_spec_dir(analysis_dir, spec)
         preds_standard, preds_weighted = load_predictions(spec)
-        result = compute_liquid_squared_error_differential(
-            preds_standard,
-            preds_weighted,
-            panel,
-            config,
-        )
-        result.to_csv(
-            out_dir / "liquid_squared_error_differential.csv",
-            index=False,
-        )
-        if not args.no_figures:
-            plot_liquid_squared_error_differential(
-                result,
-                out_dir / "liquid_squared_error_differential.png",
-                spec["model"],
+
+        for breakpoint_mode in breakpoint_modes:
+            logger.info("Liquidity breakpoints: %s", breakpoint_mode)
+            breakpoint_config = config_for_liquidity_breakpoint(
+                config,
+                breakpoint_mode,
             )
+            out_dir = liquidity_breakpoint_dir(
+                base_out_dir,
+                breakpoint_mode,
+                use_breakpoint_namespace,
+            )
+            result = compute_liquid_squared_error_differential(
+                preds_standard,
+                preds_weighted,
+                panel,
+                breakpoint_config,
+            )
+            result.to_csv(
+                out_dir / "liquid_squared_error_differential.csv",
+                index=False,
+            )
+            if not args.no_figures:
+                plot_liquid_squared_error_differential(
+                    result,
+                    out_dir / "liquid_squared_error_differential.png",
+                    spec["model"],
+                )
 
     logger.info("Done")
 

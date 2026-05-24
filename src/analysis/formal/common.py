@@ -14,6 +14,41 @@ from src.weighting.schemes import compute_weights
 
 logger = logging.getLogger(__name__)
 
+PROPORTIONAL_TC_SCENARIO = "proportional_tc"
+PROPORTIONAL_TC_ALIASES = {
+    "proportional",
+    "proportional_tc",
+    "prop_tc",
+    "spread_only",
+    "spread-only",
+}
+
+
+def is_proportional_tc_scenario(value: object) -> bool:
+    """Return True for the AUM-independent spread-only TC reporting scenario."""
+    return isinstance(value, str) and value.strip().lower() in PROPORTIONAL_TC_ALIASES
+
+
+def parse_tc_reporting_scenario(value: object) -> int | float | str:
+    """Parse a realized-return TC scenario.
+
+    Numeric values are dollar AUMs. String aliases such as ``"proportional_tc"``
+    select the spread-only proportional-cost case with no market impact.
+    """
+    if is_proportional_tc_scenario(value):
+        return PROPORTIONAL_TC_SCENARIO
+    if isinstance(value, str):
+        token = value.strip().replace("_", "")
+        return int(token)
+    return value
+
+
+def scenario_sizing_aum(value: int | float | str) -> float:
+    """Return numeric AUM for sizing market impact in a reporting scenario."""
+    if is_proportional_tc_scenario(value):
+        return 0.0
+    return float(value)
+
 
 def discover_experiments(base_dir: Path) -> list[dict]:
     """Discover completed standard-vs-weighted formal experiment specs."""
@@ -125,29 +160,65 @@ def load_importance(
 
 
 def assign_liquidity_quintiles(panel: pd.DataFrame, config: dict) -> pd.Series:
-    """Assign Q1-Q5 liquidity buckets using monthly NYSE breakpoints."""
+    """Assign Q1-Q5 liquidity buckets using configured monthly breakpoints.
+
+    ``liquidity.quintile_breakpoints`` controls the breakpoint universe:
+    ``"nyse"`` uses monthly NYSE breakpoints, while ``"full_sample"`` uses the
+    full monthly cross-section. In both cases Q1 is most illiquid and Q5 is most
+    liquid for the current primary liquidity variable.
+    """
     liq_col = f"liq_{config['liquidity']['primary']}"
+    breakpoint_universe = config["liquidity"].get("quintile_breakpoints", "nyse")
+
+    if breakpoint_universe == "full_sample":
+        return _assign_full_sample_quintiles(panel, sort_col=liq_col, ascending=True)
+
+    if breakpoint_universe != "nyse":
+        raise ValueError(
+            "liquidity.quintile_breakpoints must be 'nyse' or 'full_sample', "
+            f"got {breakpoint_universe!r}"
+        )
+
     if "exchcd" not in panel.columns:
         logger.warning(
             "exchcd column missing; falling back to full-sample quintiles. "
             "Re-run scripts/00_fetch_data.py to get NYSE breakpoints."
         )
-        quintiles = pd.Series(np.nan, index=panel.index, name="liq_quintile")
-        for _, group in panel.groupby("yyyymm"):
-            liq = group[liq_col]
-            breaks = liq.quantile([0.0, 0.2, 0.4, 0.6, 0.8, 1.0]).values
-            breaks[0] = -np.inf
-            breaks[-1] = np.inf
-            q = pd.cut(
-                liq,
-                bins=breaks,
-                labels=[1, 2, 3, 4, 5],
-                include_lowest=True,
-            )
-            quintiles.loc[group.index] = q.astype(float)
-        return quintiles
+        return _assign_full_sample_quintiles(panel, sort_col=liq_col, ascending=True)
 
     return assign_nyse_quintiles(panel, sort_col=liq_col, ascending=True)
+
+
+def _assign_full_sample_quintiles(
+    panel: pd.DataFrame,
+    sort_col: str,
+    ascending: bool = True,
+) -> pd.Series:
+    """Assign Q1-Q5 using the full monthly cross-section as breakpoints."""
+
+    def _per_month(group):
+        vals = group[sort_col]
+        valid = vals.dropna()
+        if len(valid) < 20:
+            return pd.Series(np.nan, index=group.index, dtype="float64")
+
+        ranks = vals.rank(method="first", ascending=ascending)
+        quintiles = pd.qcut(
+            ranks,
+            q=5,
+            labels=False,
+            duplicates="drop",
+        )
+        out = quintiles.astype(float) + 1
+        out[vals.isna()] = np.nan
+        return pd.Series(out, index=group.index, dtype="float64")
+
+    results = []
+    for _, group in panel.groupby("yyyymm"):
+        results.append(_per_month(group))
+    if not results:
+        return pd.Series(np.nan, index=panel.index, dtype="float64")
+    return pd.concat(results).sort_index()
 
 
 def parse_tc_aum(aum_label: str | None) -> float | None:
@@ -230,8 +301,10 @@ def predictions_for_utility_r2(
     )
 
 
-def aum_label(aum: int | float) -> str:
-    """Format an AUM value for filenames."""
+def aum_label(aum: int | float | str) -> str:
+    """Format a TC reporting scenario for filenames and column labels."""
+    if is_proportional_tc_scenario(aum):
+        return "PropTC"
     if aum < 1_000_000_000:
         return f"{int(aum // 1_000_000)}M"
     return f"{int(aum // 1_000_000_000)}B"

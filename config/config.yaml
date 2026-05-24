@@ -137,6 +137,7 @@ data:
 # ----------------------------------------------------------
 liquidity:
   primary: "dvol_21d" # 21-day trailing avg dollar volume (Eq. 14)
+  quintile_breakpoints: "nyse" # nyse or full_sample; used by formal liquidity-sorted analyses
   # Columns that need raw liq_* copies for current weighting, quintile,
   # robustness, and transaction-cost code.
   measures:
@@ -261,7 +262,7 @@ portfolio:
   short_quantile: 1
   rebalance_frequency: "monthly"
   # No liquidity filter - TC-penalised sort (Column 2) replaces it.
-  # No position cap - equal-dollar within each selected quantile leg.
+  # No position cap - equal-dollar within each selected quintile leg.
 
   # ----------------------------------------------------------
   # Transaction Cost Model
@@ -280,7 +281,7 @@ transaction_costs:
   sigma_col: "excess_sigma_12m_daily" # daily-scaled 12-month excess-return volatility
   adv_col: "dvol_21d" # average daily dollar volume
   aum_scenarios:
-    - 10_000_000 # $10M - small fund
+    - "proportional_tc" # spread/2 only; no market impact
     - 100_000_000 # $100M - medium fund
     - 500_000_000 # $500M - primary specification
     - 1_000_000_000 # $1B - large fund

@@ -398,7 +398,8 @@ example:
 ```text
 outputs/formalanalysis/analysis/xgboost/tc_500m/r2_by_quintile.csv
 outputs/formalanalysis/analysis/xgboost/tc_500m/importance_shift.csv
-outputs/formalanalysis/analysis/xgboost/tc_500m/two_by_two_500M.csv
+outputs/formalanalysis/analysis/xgboost/tc_500m/prediction_quantile/two_by_three_500M.csv
+outputs/formalanalysis/analysis/xgboost/tc_500m/prediction_quantile/prediction_quantile_timeseries_500M.csv
 ```
 
 Look for real failures:

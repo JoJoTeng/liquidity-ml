@@ -5,6 +5,9 @@
 Generate the formal liquid-stock prediction tables:
     outputs/formalanalysis/analysis/{model}/{weight_spec}/r2_by_quintile.csv
     outputs/formalanalysis/analysis/{model}/{weight_spec}/utility_weighted_r2.csv
+
+Breakpoint-dependent outputs are written under:
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/liquidity_breakpoints/{mode}/
 """
 
 from __future__ import annotations
@@ -31,9 +34,14 @@ from src.analysis.formal.liquidity_sorted_r2 import (  # noqa: E402
 )
 from src.analysis.formal.script_utils import (  # noqa: E402
     add_experiment_filters,
+    add_liquidity_breakpoint_option,
+    config_for_liquidity_breakpoint,
     formal_output_dirs,
     formal_spec_dir,
+    liquidity_breakpoint_dir,
     load_filtered_specs,
+    namespace_liquidity_breakpoints,
+    resolve_liquidity_breakpoints,
 )
 from src.config import load_config  # noqa: E402
 from src.data.loader import load_processed_panel  # noqa: E402
@@ -48,6 +56,7 @@ logger = logging.getLogger("21a_formal_liquid_r2")
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate formal liquid-stock R2 tables")
     add_experiment_filters(parser)
+    add_liquidity_breakpoint_option(parser)
     parser.add_argument(
         "--extra-benchmarks",
         action="store_true",
@@ -72,38 +81,57 @@ def main():
 
     logger.info("Loading processed panel")
     panel = load_processed_panel()
+    breakpoint_modes = resolve_liquidity_breakpoints(
+        config,
+        args.liquidity_breakpoints,
+    )
+    use_breakpoint_namespace = namespace_liquidity_breakpoints(
+        args.liquidity_breakpoints,
+    )
 
     for spec in specs:
         spec_label = spec["spec_label"]
         logger.info("=== %s ===", spec_label)
-        out_dir = formal_spec_dir(analysis_dir, spec)
+        base_out_dir = formal_spec_dir(analysis_dir, spec)
         preds_standard, preds_weighted = load_predictions(spec)
-        result = evaluate_liquid_stock_r2(
-            preds_standard,
-            preds_weighted,
-            panel,
-            config,
-            spec,
-            include_extra_benchmarks=args.extra_benchmarks,
-        )
-        result["quintile_r2"].to_csv(
-            out_dir / "r2_by_quintile.csv",
-            index=False,
-        )
-        format_legacy_quintile_r2_table(result["quintile_r2"]).to_csv(
-            out_dir / "table2_oos_r2_quintile.csv",
-            index=False,
-        )
-        result["utility_weighted_r2"].to_csv(
-            out_dir / "utility_weighted_r2.csv",
-            index=False,
-        )
-        if not args.no_figures:
-            plot_quintile_r2_comparison(
-                result["quintile_r2"],
-                out_dir / "figure_r2_by_quintile.png",
-                spec["model"],
+
+        for breakpoint_mode in breakpoint_modes:
+            logger.info("Liquidity breakpoints: %s", breakpoint_mode)
+            breakpoint_config = config_for_liquidity_breakpoint(
+                config,
+                breakpoint_mode,
             )
+            out_dir = liquidity_breakpoint_dir(
+                base_out_dir,
+                breakpoint_mode,
+                use_breakpoint_namespace,
+            )
+            result = evaluate_liquid_stock_r2(
+                preds_standard,
+                preds_weighted,
+                panel,
+                breakpoint_config,
+                spec,
+                include_extra_benchmarks=args.extra_benchmarks,
+            )
+            result["quintile_r2"].to_csv(
+                out_dir / "r2_by_quintile.csv",
+                index=False,
+            )
+            format_legacy_quintile_r2_table(result["quintile_r2"]).to_csv(
+                out_dir / "table2_oos_r2_quintile.csv",
+                index=False,
+            )
+            result["utility_weighted_r2"].to_csv(
+                out_dir / "utility_weighted_r2.csv",
+                index=False,
+            )
+            if not args.no_figures:
+                plot_quintile_r2_comparison(
+                    result["quintile_r2"],
+                    out_dir / "figure_r2_by_quintile.png",
+                    spec["model"],
+                )
 
     logger.info("Done")
 

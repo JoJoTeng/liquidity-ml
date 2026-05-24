@@ -270,7 +270,6 @@ After the runs finish, the main output folders to inspect are:
 - Formal:
   - `outputs/formalanalysis/experiment/`
   - `outputs/formalanalysis/analysis/{model}/{weight_spec}/`
-  - `outputs/formalanalysis/analysis/formal_hypothesis_tests.json`
 
 For example, formal analysis outputs for the XGBoost TC-500M specification are
 stored together under:

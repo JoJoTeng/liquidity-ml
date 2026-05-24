@@ -5,6 +5,9 @@
 Compare each weighted formal model with the Step 3d hard-restriction curve:
     outputs/formalanalysis/analysis/{model}/{weight_spec}/restriction_curve_comparison.csv
     outputs/formalanalysis/analysis/{model}/{weight_spec}/restriction_curve_comparison.png
+
+Breakpoint-dependent outputs are written under:
+    outputs/formalanalysis/analysis/{model}/{weight_spec}/liquidity_breakpoints/{mode}/
 """
 
 from __future__ import annotations
@@ -30,9 +33,14 @@ from src.analysis.formal.restriction_curve import (  # noqa: E402
 )
 from src.analysis.formal.script_utils import (  # noqa: E402
     add_experiment_filters,
+    add_liquidity_breakpoint_option,
+    config_for_liquidity_breakpoint,
     formal_output_dirs,
     formal_spec_dir,
+    liquidity_breakpoint_dir,
     load_filtered_specs,
+    namespace_liquidity_breakpoints,
+    resolve_liquidity_breakpoints,
 )
 from src.config import load_config  # noqa: E402
 from src.data.loader import load_processed_panel  # noqa: E402
@@ -49,6 +57,7 @@ def parse_args():
         description="Generate formal restriction-curve comparison outputs"
     )
     add_experiment_filters(parser)
+    add_liquidity_breakpoint_option(parser)
     parser.add_argument(
         "--no-figures",
         action="store_true",
@@ -65,11 +74,18 @@ def main():
 
     logger.info("Loading processed panel")
     panel = load_processed_panel()
+    breakpoint_modes = resolve_liquidity_breakpoints(
+        config,
+        args.liquidity_breakpoints,
+    )
+    use_breakpoint_namespace = namespace_liquidity_breakpoints(
+        args.liquidity_breakpoints,
+    )
 
     for spec in specs:
         spec_label = spec["spec_label"]
         logger.info("=== %s ===", spec_label)
-        out_dir = formal_spec_dir(analysis_dir, spec)
+        base_out_dir = formal_spec_dir(analysis_dir, spec)
         _, preds_weighted = load_predictions(spec)
         restriction_csv = (
             Path(config["project"]["output_dir"])
@@ -81,26 +97,38 @@ def main():
             / "baseline"
             / "restriction_comparison.csv"
         )
-        result = compare_weighted_model_to_restriction_curve(
-            preds_weighted,
-            panel,
-            config,
-            restriction_csv,
-        )
-        if result["restriction_df"] is None:
-            continue
 
-        result["restriction_df"].to_csv(
-            out_dir / "restriction_curve_comparison.csv",
-            index=False,
-        )
-        if not args.no_figures:
-            plot_restriction_curve_comparison(
-                result,
-                out_dir / "restriction_curve_comparison.png",
-                spec["model"],
-                spec["weight_family"],
+        for breakpoint_mode in breakpoint_modes:
+            logger.info("Liquidity breakpoints: %s", breakpoint_mode)
+            breakpoint_config = config_for_liquidity_breakpoint(
+                config,
+                breakpoint_mode,
             )
+            out_dir = liquidity_breakpoint_dir(
+                base_out_dir,
+                breakpoint_mode,
+                use_breakpoint_namespace,
+            )
+            result = compare_weighted_model_to_restriction_curve(
+                preds_weighted,
+                panel,
+                breakpoint_config,
+                restriction_csv,
+            )
+            if result["restriction_df"] is None:
+                continue
+
+            result["restriction_df"].to_csv(
+                out_dir / "restriction_curve_comparison.csv",
+                index=False,
+            )
+            if not args.no_figures:
+                plot_restriction_curve_comparison(
+                    result,
+                    out_dir / "restriction_curve_comparison.png",
+                    spec["model"],
+                    spec["weight_family"],
+                )
 
     logger.info("Done")
 

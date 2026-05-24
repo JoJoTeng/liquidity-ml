@@ -85,8 +85,7 @@ def parse_args():
     p.add_argument("--aum", type=int, default=None,
                     choices=[10, 100, 500, 1000],
                     help=(
-                        "AUM in $M for TC or TC-rank weights. Choices match "
-                        "transaction_costs.aum_scenarios in config."
+                        "AUM in $M for TC or TC-rank training weights."
                     ))
     p.add_argument("--softmax-lambda", type=float, default=None,
                     help=(

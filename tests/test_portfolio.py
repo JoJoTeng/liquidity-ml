@@ -13,15 +13,34 @@ import pandas as pd
 import pytest
 
 from src.config import load_config
+from src.analysis.formal.portfolio_tables import (
+    compute_two_by_three_decomposition,
+    format_prediction_quantile_timeseries_rows,
+)
 from src.portfolio.construction import (
     build_long_short_portfolio,
     build_portfolio_timeseries,
+    build_prediction_quantile_timeseries,
     compute_net_returns,
     _assign_quantiles,
     _drift_positions,
 )
 
 _cfg = load_config()
+
+
+def _portfolio_test_config():
+    cfg = load_config()
+    cfg.setdefault("data", {})["target_col"] = "excess_ret"
+    cfg["portfolio"]["n_quantiles"] = 5
+    cfg["portfolio"]["long_quantile"] = 5
+    cfg["portfolio"]["short_quantile"] = 1
+    cfg["transaction_costs"]["sigma_col"] = "excess_sigma_12m_daily"
+    cfg["transaction_costs"]["lambda_market_impact"] = 0.1
+    cfg["transaction_costs"]["lambda_calibration"]["enabled"] = False
+    cfg["inference"]["bootstrap_samples"] = 10
+    cfg["inference"]["calibrate_block_length"] = False
+    return cfg
 
 
 # -- Fixtures ---------------------------------------------------------
@@ -37,6 +56,7 @@ def single_month():
         "permno": range(10001, 10001 + n),
         "ret": raw_ret,
         "excess_ret": raw_ret - 0.002,
+        "liq_me_raw": rng.lognormal(mean=18, sigma=1.5, size=n),
         "liq_dvol_21d": rng.lognormal(mean=18, sigma=2, size=n),
         "liq_BidAskSpread": rng.uniform(0.001, 0.05, size=n),
         "liq_excess_sigma_12m": rng.uniform(0.04, 0.25, size=n),
@@ -129,6 +149,37 @@ class TestBuildLongShort:
         # Equal-dollar: all weights should be equal
         assert abs(max(long_weights) - min(long_weights)) < 1e-10
 
+    def test_value_weighted_leg_weights(self):
+        n = 10
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.arange(n, dtype=float) / 100.0,
+            "liq_me_raw": [1, 1, 1, 1, 1, 1, 1, 1, 2, 6],
+        })
+        predictions = pd.Series(np.arange(n), index=df.index)
+
+        result = build_long_short_portfolio(
+            df,
+            predictions,
+            portfolio_weighting="value",
+        )
+
+        assert result["positions_long"][10009] == pytest.approx(0.25)
+        assert result["positions_long"][10010] == pytest.approx(0.75)
+        assert result["ret_long"] == pytest.approx(0.0875)
+        assert sum(result["positions_long"].values()) == pytest.approx(1.0)
+        assert sum(result["positions_short"].values()) == pytest.approx(1.0)
+
+    def test_value_weighting_requires_market_cap_column(self, single_month, predictions):
+        with pytest.raises(KeyError, match="Value-weight column"):
+            build_long_short_portfolio(
+                single_month.drop(columns=["liq_me_raw"]),
+                predictions,
+                portfolio_weighting="value",
+            )
+
     def test_no_liquidity_filter(self, single_month, predictions):
         """All stocks should be included (no filtering)."""
         result = build_long_short_portfolio(single_month, predictions)
@@ -201,6 +252,31 @@ class TestBuildLongShort:
         assert set(result["positions_short"]) == set(range(10011, 10021))
         assert set(result["positions_long"]) == set(range(10091, 10101))
 
+    def test_tc_target_score_short_leg_adds_two_tc(self):
+        n = 100
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.zeros(n),
+        })
+        tc_target_scores = pd.Series(np.arange(n, dtype=float), index=df.index)
+        tc_per_stock = pd.Series(0.0, index=df.index)
+        tc_per_stock.iloc[:10] = 1_000.0
+
+        result = build_long_short_portfolio(
+            df,
+            tc_target_scores,
+            tc_target_score=True,
+            tc_per_stock=tc_per_stock,
+            n_quantiles=10,
+        )
+
+        high_cost_low_score = set(range(10001, 10011))
+        assert high_cost_low_score.isdisjoint(result["positions_short"])
+        assert set(result["positions_short"]) == set(range(10011, 10021))
+        assert set(result["positions_long"]) == set(range(10091, 10101))
+
     def test_tc_penalised_legs_are_disjoint(self):
         n = 100
         df = pd.DataFrame({
@@ -229,6 +305,16 @@ class TestBuildLongShort:
             build_long_short_portfolio(
                 single_month, predictions, tc_penalised=True)
 
+    def test_tc_sort_modes_are_mutually_exclusive(self, single_month, predictions):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            build_long_short_portfolio(
+                single_month,
+                predictions,
+                tc_penalised=True,
+                tc_target_score=True,
+                tc_per_stock=pd.Series(0.0, index=single_month.index),
+            )
+
     def test_too_few_stocks(self, predictions):
         tiny = pd.DataFrame({
             "yyyymm": [202301] * 5,
@@ -239,6 +325,226 @@ class TestBuildLongShort:
         tiny_pred = pd.Series([0.01] * 5, index=tiny.index)
         result = build_long_short_portfolio(tiny, tiny_pred)
         assert np.isnan(result["ret_long_short"])
+
+
+# -- build_prediction_quantile_timeseries -----------------------------
+
+class TestBuildPredictionQuantileTimeseries:
+    def test_quantiles_cover_universe_and_equal_weights(self, single_month):
+        cfg = _portfolio_test_config()
+        preds = pd.DataFrame({
+            "permno": single_month["permno"],
+            "yyyymm": single_month["yyyymm"],
+            "prediction": np.arange(len(single_month), dtype=float),
+        })
+
+        out = build_prediction_quantile_timeseries(
+            single_month,
+            preds,
+            sort_mode="prediction",
+            aum=500_000_000,
+            config=cfg,
+            portfolio_weighting="equal",
+        )
+
+        assert set(out["prediction_quantile"]) == {1, 2, 3, 4, 5}
+        assert out["n_stocks"].sum() == len(single_month)
+        assert (out["n_stocks"] == len(single_month) / 5).all()
+        assert np.allclose(out["weight_sum"], 1.0)
+
+    def test_value_weighted_quantile_return(self):
+        cfg = _portfolio_test_config()
+        n = 10
+        panel = pd.DataFrame({
+            "yyyymm": [202301] * n,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.arange(n, dtype=float) / 100.0,
+            "liq_me_raw": [1, 1, 1, 1, 1, 1, 1, 1, 2, 6],
+            "liq_BidAskSpread": [0.01] * n,
+            "liq_excess_sigma_12m_daily": [0.10] * n,
+            "liq_dvol_21d": [100_000_000.0] * n,
+        })
+        preds = pd.DataFrame({
+            "permno": panel["permno"],
+            "yyyymm": panel["yyyymm"],
+            "prediction": np.arange(n, dtype=float),
+        })
+
+        out = build_prediction_quantile_timeseries(
+            panel,
+            preds,
+            sort_mode="prediction",
+            aum=500_000_000,
+            config=cfg,
+            portfolio_weighting="value",
+        )
+
+        q5 = out.loc[out["prediction_quantile"] == 5].iloc[0]
+        assert q5["gross_return"] == pytest.approx(0.0875)
+        assert q5["weight_sum"] == pytest.approx(1.0)
+
+    def test_quantile_transaction_cost_uses_full_scenario_aum(self):
+        cfg = _portfolio_test_config()
+        n = 10
+        panel = pd.DataFrame({
+            "yyyymm": [202301] * n,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.zeros(n),
+            "liq_me_raw": np.ones(n),
+            "liq_BidAskSpread": [1e-8] * n,
+            "liq_excess_sigma_12m_daily": [0.10] * n,
+            "liq_dvol_21d": [100_000_000.0] * n,
+        })
+        preds = pd.DataFrame({
+            "permno": panel["permno"],
+            "yyyymm": panel["yyyymm"],
+            "prediction": np.arange(n, dtype=float),
+        })
+
+        out = build_prediction_quantile_timeseries(
+            panel,
+            preds,
+            sort_mode="prediction",
+            aum=500_000_000,
+            config=cfg,
+            portfolio_weighting="equal",
+        )
+
+        quantile_aum = 500_000_000
+        stock_weight = 0.5
+        expected = (
+            1e-8 / 2.0
+            + 0.1 * 0.10 * np.sqrt(stock_weight * quantile_aum / 100_000_000.0)
+        )
+        q1 = out.loc[out["prediction_quantile"] == 1].iloc[0]
+        assert q1["transaction_cost"] == pytest.approx(expected)
+        assert q1["net_return"] == pytest.approx(
+            q1["gross_return"] - q1["transaction_cost"]
+        )
+
+    def test_quantile_transaction_cost_supports_proportional_only_case(self):
+        cfg = _portfolio_test_config()
+        n = 10
+        panel = pd.DataFrame({
+            "yyyymm": [202301] * n,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.zeros(n),
+            "liq_me_raw": np.ones(n),
+            "liq_BidAskSpread": [0.02] * n,
+            "liq_excess_sigma_12m_daily": [10.0] * n,
+            "liq_dvol_21d": [1_000.0] * n,
+        })
+        preds = pd.DataFrame({
+            "permno": panel["permno"],
+            "yyyymm": panel["yyyymm"],
+            "prediction": np.arange(n, dtype=float),
+        })
+
+        out = build_prediction_quantile_timeseries(
+            panel,
+            preds,
+            sort_mode="prediction",
+            aum=1_000_000_000,
+            config=cfg,
+            portfolio_weighting="equal",
+            proportional_tc_only=True,
+        )
+
+        q1 = out.loc[out["prediction_quantile"] == 1].iloc[0]
+        assert q1["transaction_cost"] == pytest.approx(0.02 / 2.0)
+        assert q1["net_return"] == pytest.approx(
+            q1["gross_return"] - q1["transaction_cost"]
+        )
+
+    def test_tc_net_sort_uses_single_net_score_for_all_quantiles(self):
+        cfg = _portfolio_test_config()
+        n = 100
+        panel = pd.DataFrame({
+            "yyyymm": [202301] * n,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.zeros(n),
+            "liq_me_raw": np.ones(n),
+            "liq_BidAskSpread": [0.0] * 50 + [10_000.0] * 50,
+            "liq_excess_sigma_12m_daily": [0.10] * n,
+            "liq_dvol_21d": [100_000_000.0] * n,
+        })
+        preds = pd.DataFrame({
+            "permno": panel["permno"],
+            "yyyymm": panel["yyyymm"],
+            "prediction": np.arange(n, dtype=float),
+        })
+
+        out = build_prediction_quantile_timeseries(
+            panel,
+            preds,
+            sort_mode="tc_net",
+            aum=500_000_000,
+            config=cfg,
+            portfolio_weighting="equal",
+        )
+
+        assert out.loc[out["prediction_quantile"] == 5, "score_mean"].iloc[0] < 50.0
+
+
+class TestBucketFirstFormalDecomposition:
+    def test_two_by_three_exports_quantile_timeseries_and_derived_long_short(self):
+        cfg = _portfolio_test_config()
+        months = list(range(202001, 202013))
+        rows = []
+        for month_idx, yyyymm in enumerate(months):
+            for i in range(10):
+                rows.append({
+                    "yyyymm": yyyymm,
+                    "permno": 10001 + i,
+                    "ret": 0.0,
+                    "excess_ret": i / 100.0 + month_idx / 1000.0,
+                    "liq_me_raw": 1.0 + i,
+                    "liq_BidAskSpread": 1e-8,
+                    "liq_excess_sigma_12m_daily": 0.10,
+                    "liq_dvol_21d": 100_000_000.0,
+                })
+        panel = pd.DataFrame(rows)
+        preds = panel[["permno", "yyyymm"]].copy()
+        preds["prediction"] = panel.groupby("yyyymm").cumcount().astype(float)
+
+        result = compute_two_by_three_decomposition(
+            preds,
+            preds,
+            preds,
+            preds,
+            panel,
+            aum=500_000_000,
+            config=cfg,
+            portfolio_weighting="equal",
+        )
+        quantile_rows = format_prediction_quantile_timeseries_rows(
+            result,
+            aum=500_000_000,
+            label="500M",
+        )
+
+        assert set(result["cells"]) == {"1A", "1B", "1C", "2A", "2B", "2C"}
+        assert len(quantile_rows) == 6 * 5 * len(months)
+
+        cell_1a = result["cells"]["1A"].iloc[0]
+        q = result["quantile_timeseries"]["1A"]
+        q_month = q[q["yyyymm"] == cell_1a["yyyymm"]]
+        q1 = q_month[q_month["prediction_quantile"] == 1].iloc[0]
+        q5 = q_month[q_month["prediction_quantile"] == 5].iloc[0]
+
+        assert cell_1a["ret_long_short"] == pytest.approx(
+            q5["gross_return"] - q1["gross_return"]
+        )
+        assert cell_1a["transaction_cost"] == pytest.approx(
+            q5["transaction_cost"] + q1["transaction_cost"]
+        )
+        assert cell_1a["ret_long_short_net"] == pytest.approx(
+            cell_1a["ret_long_short"] - cell_1a["transaction_cost"]
+        )
 
 # -- _drift_positions -------------------------------------------------
 
@@ -318,3 +624,31 @@ class TestComputeNetReturns:
         assert net_df.loc[net_df["yyyymm"] == 202302, "transaction_cost"].iloc[0] == pytest.approx(expected)
         assert net_df.loc[net_df["yyyymm"] == 202302, "raw_trade_sum"].iloc[0] == pytest.approx(1.0)
         assert net_df.loc[net_df["yyyymm"] == 202302, "turnover"].iloc[0] == pytest.approx(0.5)
+
+    def test_proportional_only_net_returns_exclude_market_impact(self):
+        cfg = _portfolio_test_config()
+        panel = pd.DataFrame({
+            "permno": [10001],
+            "yyyymm": [202301],
+            "ret": [0.0],
+            "liq_BidAskSpread": [0.02],
+            "liq_excess_sigma_12m_daily": [10.0],
+            "liq_dvol_21d": [1_000.0],
+        })
+        returns_df = pd.DataFrame({
+            "yyyymm": [202301],
+            "ret_long_short": [0.0],
+        })
+        pos_hist = {202301: {"long": {10001: 1.0}, "short": {}}}
+
+        net_df = compute_net_returns(
+            returns_df,
+            pos_hist,
+            panel,
+            aum=1_000_000_000,
+            config=cfg,
+            proportional_tc_only=True,
+        )
+
+        assert net_df["transaction_cost"].iloc[0] == pytest.approx(0.02 / 2.0)
+        assert net_df["ret_long_short_net"].iloc[0] == pytest.approx(-0.01)

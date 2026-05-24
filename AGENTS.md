@@ -62,6 +62,8 @@ python scripts/21d_formal_error_differential.py
 python scripts/21e_formal_portfolio_decomposition.py
 python scripts/22_prepare_portfolio_excel_tables.py --table table11 --model all --weight-spec all --aum all --skip-missing
 python scripts/22_prepare_portfolio_excel_tables.py --table table12 --model all --weight-spec all --aum all --skip-missing
+python scripts/22_prepare_portfolio_excel_tables.py --table table13 --model all --weight-spec all --aum all --skip-missing
+python scripts/22_prepare_portfolio_excel_tables.py --table table14 --model all --weight-spec all --aum all --skip-missing
 ```
 
 Run the formal `20` grid for each active model (`elastic_net`, `xgboost`,
@@ -180,12 +182,25 @@ For example:
 outputs/formalanalysis/analysis/xgboost/tc_500m/r2_by_quintile.csv
 ```
 
-Portfolio decomposition outputs from `21e` are nested by portfolio mode, for
+Portfolio decomposition outputs from `21e` are nested by portfolio run, for
 example:
 
 ```text
-outputs/formalanalysis/analysis/xgboost/tc_500m/long_short/two_by_two_500M.csv
+outputs/formalanalysis/analysis/xgboost/tc_500m/prediction_quantile/two_by_three_500M.csv
 ```
+
+By default `21e` uses equal-dollar weights within each prediction quantile.
+Use `--portfolio-weighting value` to use `liq_me_raw` market-cap weights
+inside each prediction quantile, or `--portfolio-weighting both` to write
+equal-weight outputs under `prediction_quantile/` and value-weight outputs
+under `prediction_quantile_value_weight/`.
+
+`21e` writes `two_by_three_{AUM}.csv` and
+`two_by_three_timeseries_{AUM}.xlsx` when `tc_target` predictions are available.
+It also writes `prediction_quantile_timeseries_{AUM}.csv/xlsx`. The 2x3
+long-short cells are derived from Q5 minus Q1 after first computing standalone
+Q1-Q5 prediction-quantile portfolios. Each prediction quantile uses
+`AUM / portfolio.n_quantiles` for transaction-cost sizing.
 
 Formatted Excel report tables from `22_prepare_portfolio_excel_tables.py` write
 to:
@@ -193,6 +208,13 @@ to:
 ```text
 outputs/formalanalysis/tables/
 ```
+
+The active formatted portfolio tables are:
+
+- `table11`: within-liquidity-quintile long-short performance.
+- `table12`: 2x3 Q5-Q1 long-short decomposition.
+- `table13`: standalone Q1-Q5 prediction-quantile portfolios.
+- `table14`: Table-12-style 2x3 decompositions for each standalone prediction quantile.
 
 ## Normalization Contract
 
@@ -222,9 +244,12 @@ The restricted-universe motivation scripts `05` and `06` support two modes:
   `interaction_regression_full.csv` and `quintile_fm_coefficients_full_raw.csv`.
 - Formal restriction-curve comparison expects Step 3d baseline/global output:
   `outputs/motivation/step3_restriction/{model}/dvol/global/baseline/restriction_comparison.csv`.
-- Formal portfolio decomposition currently supports `--portfolio-mode long_short`
-  only. `22_prepare_portfolio_excel_tables.py` does not recompute portfolios; it
-  reads the CSV outputs created by `21e`.
+- Formal portfolio decomposition builds prediction-quantile portfolios first.
+  The 2x3 Q5-Q1 long-short series is derived from those quantile portfolios.
+  Portfolio holding weights are controlled with
+  `--portfolio-weighting equal|value|both`; `22_prepare_portfolio_excel_tables.py`
+  selects the output folder with `--portfolio-run prediction_quantile|prediction_quantile_value_weight|both`.
+  It does not recompute portfolios; it reads the CSV outputs created by `21e`.
 
 ## Testing And Verification
 
