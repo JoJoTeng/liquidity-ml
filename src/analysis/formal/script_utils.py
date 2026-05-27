@@ -21,6 +21,7 @@ PRIMARY_WEIGHT_SPECS = [
     "tc_rank_lam3_500m",
 ]
 LIQUIDITY_BREAKPOINT_CHOICES = ["nyse", "full_sample", "both"]
+STOCK_UNIVERSE_CHOICES = ["full_sample", "nyse", "both"]
 
 
 def add_experiment_filters(parser: argparse.ArgumentParser) -> None:
@@ -58,6 +59,21 @@ def add_liquidity_breakpoint_option(parser: argparse.ArgumentParser) -> None:
         help=(
             "Liquidity-quintile breakpoint universe for breakpoint-dependent "
             "outputs. 'both' writes separate nyse and full_sample folders."
+        ),
+    )
+
+
+def add_stock_universe_option(parser: argparse.ArgumentParser) -> None:
+    """Add the common stock-universe selector to a formal-analysis parser."""
+    parser.add_argument(
+        "--stock-universe",
+        default="full_sample",
+        choices=STOCK_UNIVERSE_CHOICES,
+        help=(
+            "Stock universe for portfolio construction or table export. "
+            "'full_sample' preserves the legacy full-sample behavior, 'nyse' "
+            "restricts to NYSE-listed stocks, and 'both' processes both "
+            "universes with separate outputs."
         ),
     )
 
@@ -118,6 +134,59 @@ def liquidity_breakpoint_dir(
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
+
+
+def resolve_stock_universes(choice: str) -> list[str]:
+    """Resolve a CLI stock-universe choice to concrete universe values."""
+    if choice == "both":
+        return ["full_sample", "nyse"]
+    if choice in {"full_sample", "nyse"}:
+        return [choice]
+    valid = ", ".join(STOCK_UNIVERSE_CHOICES)
+    raise ValueError(f"Unknown stock universe choice {choice!r}: {valid}")
+
+
+def namespace_stock_universe(choice: str) -> bool:
+    """Return whether 21e should write stock-universe subfolders."""
+    return choice != "full_sample"
+
+
+def stock_universe_dir(
+    base_dir: Path,
+    stock_universe: str,
+    use_namespace: bool,
+) -> Path:
+    """Return the output directory for a stock-universe run."""
+    if stock_universe not in {"full_sample", "nyse"}:
+        raise ValueError(
+            "stock_universe must be 'full_sample' or 'nyse', "
+            f"got {stock_universe!r}"
+        )
+    out_dir = (
+        base_dir / "stock_universe" / stock_universe
+        if use_namespace
+        else base_dir
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def stock_universe_read_dir(base_dir: Path, stock_universe: str) -> Path:
+    """Return the 21e output folder for a stock universe.
+
+    Full-sample outputs historically lived directly in ``base_dir``. If a
+    newer namespaced full-sample folder exists, prefer it; otherwise read the
+    legacy path. NYSE-only outputs are always namespaced.
+    """
+    if stock_universe not in {"full_sample", "nyse"}:
+        raise ValueError(
+            "stock_universe must be 'full_sample' or 'nyse', "
+            f"got {stock_universe!r}"
+        )
+    namespaced = base_dir / "stock_universe" / stock_universe
+    if stock_universe == "full_sample":
+        return namespaced if namespaced.exists() else base_dir
+    return namespaced
 
 
 def load_filtered_specs(

@@ -6,8 +6,12 @@ from src.analysis.formal.script_utils import (
     liquidity_breakpoint_dir,
     load_filtered_specs,
     namespace_liquidity_breakpoints,
+    namespace_stock_universe,
     parse_aum_millions,
     resolve_liquidity_breakpoints,
+    resolve_stock_universes,
+    stock_universe_dir,
+    stock_universe_read_dir,
 )
 
 
@@ -123,6 +127,40 @@ def test_liquidity_breakpoint_dir_uses_explicit_namespace(tmp_path):
         liquidity_breakpoint_dir(base, "full_sample", True)
         == base / "liquidity_breakpoints" / "full_sample"
     )
+
+
+def test_resolve_stock_universes_uses_explicit_modes():
+    assert resolve_stock_universes("full_sample") == ["full_sample"]
+    assert resolve_stock_universes("nyse") == ["nyse"]
+    assert resolve_stock_universes("both") == ["full_sample", "nyse"]
+
+
+def test_stock_universe_dir_namespaces_nyse_and_both_outputs(tmp_path):
+    base = tmp_path / "elastic_net" / "dolvol" / "prediction_quantile"
+
+    assert namespace_stock_universe("full_sample") is False
+    assert namespace_stock_universe("nyse") is True
+    assert stock_universe_dir(base, "full_sample", False) == base
+    assert (
+        stock_universe_dir(base, "full_sample", True)
+        == base / "stock_universe" / "full_sample"
+    )
+    assert (
+        stock_universe_dir(base, "nyse", True)
+        == base / "stock_universe" / "nyse"
+    )
+
+
+def test_stock_universe_read_dir_prefers_namespaced_full_sample_when_present(tmp_path):
+    base = tmp_path / "elastic_net" / "dolvol" / "prediction_quantile"
+    legacy = stock_universe_read_dir(base, "full_sample")
+    assert legacy == base
+
+    namespaced = base / "stock_universe" / "full_sample"
+    namespaced.mkdir(parents=True)
+
+    assert stock_universe_read_dir(base, "full_sample") == namespaced
+    assert stock_universe_read_dir(base, "nyse") == base / "stock_universe" / "nyse"
 
 
 def test_parse_aum_millions_supports_proportional_tc_reporting_case():

@@ -7,9 +7,8 @@ writes formatted Excel tables for reporting. Multi-table exports use one
 workbook per model, one worksheet per weighted-training spec, and one repeated
 subtable per AUM case.
 
-For Table 11, ``--liquidity-breakpoints nyse|full_sample`` reads the
-corresponding 21e ``liquidity_breakpoints/{mode}`` output folder. Tables 12
-through 14 are prediction-quantile based and do not use liquidity breakpoints.
+Tables 13 and 14 are prediction-quantile based. Use ``--stock-universe nyse``
+to read NYSE-only 21e portfolio outputs.
 """
 
 from __future__ import annotations
@@ -33,6 +32,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.analysis.formal.common import is_proportional_tc_scenario  # noqa: E402
+from src.analysis.formal.script_utils import (  # noqa: E402
+    STOCK_UNIVERSE_CHOICES,
+    resolve_stock_universes,
+    stock_universe_read_dir,
+)
 from src.config import load_config  # noqa: E402
 from src.evaluation.statistics import sharpe_ratio  # noqa: E402
 
@@ -63,7 +67,6 @@ PORTFOLIO_RUN_CHOICES = [
     "prediction_quantile",
     "prediction_quantile_value_weight",
 ]
-LIQUIDITY_BREAKPOINT_CHOICES = ["nyse", "full_sample"]
 
 
 def parse_args():
@@ -72,14 +75,14 @@ def parse_args():
     )
     parser.add_argument(
         "--table",
-        default="table11",
-        choices=["table11", "table12", "table13", "table14"],
+        default="table13",
+        choices=["table13", "table14"],
         help=(
-            "Report table to export. table11 is within-quintile performance; "
-            "table12 is the 2x3 Q5-Q1 long-short decomposition; table13 is "
-            "the standalone Q1-Q5 prediction-quantile portfolio table; "
-            "table14 is the Table-12-style 2x3 decomposition for each "
-            "standalone prediction quantile."
+            "Report table to export. table13 is the standalone Q1-Q5 "
+            "prediction-quantile portfolio table; table14 is the 2x3 "
+            "decomposition for each standalone prediction quantile. "
+            "(The Q5-Q1 long-short decomposition lives in "
+            "scripts/22b_table12_two_sided.py.)"
         ),
     )
     parser.add_argument(
@@ -105,12 +108,14 @@ def parse_args():
         help="Portfolio output folder produced by 21e, or 'both'.",
     )
     parser.add_argument(
-        "--liquidity-breakpoints",
-        default="nyse",
-        choices=LIQUIDITY_BREAKPOINT_CHOICES,
+        "--stock-universe",
+        default="full_sample",
+        choices=STOCK_UNIVERSE_CHOICES,
         help=(
-            "Breakpoint folder to read for table11 within-quintile outputs. "
-            "Ignored for tables 12, 13, and 14."
+            "Stock universe used by 21e portfolio construction. 'full_sample' "
+            "reads legacy full-sample outputs when no namespaced folder exists; "
+            "'nyse' reads stock_universe/nyse; 'both' writes separate table "
+            "workbooks for full_sample and nyse."
         ),
     )
     parser.add_argument(
@@ -237,12 +242,35 @@ def _portfolio_run_title(portfolio_run: str) -> str:
     return labels.get(portfolio_run, portfolio_run.replace("_", "-"))
 
 
-def _quintile_label(q: str) -> str:
-    if q == "Q1":
-        return "Q1 (Illiquid)"
-    if q == "Q5":
-        return "Q5 (Liquid)"
-    return q
+def _stock_universe_title(stock_universe: str) -> str:
+    labels = {
+        "full_sample": "Full stock universe",
+        "nyse": "NYSE stock universe",
+    }
+    return labels.get(stock_universe, stock_universe.replace("_", " ").title())
+
+
+def _stock_universe_filename_part(
+    selected: Sequence[str],
+    all_available: Sequence[str],
+) -> str:
+    if list(selected) == list(all_available):
+        return "both_stock_universes"
+    if len(selected) == 1:
+        return f"{selected[0]}_stocks"
+    return f"{len(selected)}_stock_universes"
+
+
+def _portfolio_output_dir(
+    analysis_dir: Path,
+    model: str,
+    weight_spec: str,
+    portfolio_run: str,
+    stock_universe: str,
+) -> Path:
+    """Return the 21e output directory for a portfolio run and stock universe."""
+    base_dir = analysis_dir / model / weight_spec / portfolio_run
+    return stock_universe_read_dir(base_dir, stock_universe)
 
 
 def _selection_label(
@@ -266,20 +294,6 @@ def _aum_title(aum_millions: int | str) -> str:
     if is_proportional_tc_scenario(aum_millions):
         return "proportional TC only"
     return f"${_aum_label(aum_millions)} AUM"
-
-
-def _set_common_widths(ws) -> None:
-    widths = {
-        "A": 18,
-        "B": 11,
-        "C": 11,
-        "D": 11,
-        "E": 11,
-        "F": 11,
-        "G": 11,
-    }
-    for col, width in widths.items():
-        ws.column_dimensions[col].width = width
 
 
 def _set_table13_widths(ws) -> None:
@@ -309,192 +323,6 @@ def _set_table12_widths(ws) -> None:
     }
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
-
-
-def _write_table_block(
-    ws,
-    table: pd.DataFrame,
-    start_row: int,
-    title: str,
-    subtitle: str | None = None,
-) -> int:
-    thin = Side(style="thin", color="808080")
-    medium = Side(style="medium", color="404040")
-    header_fill = PatternFill("solid", fgColor="F2F2F2")
-
-    title_row = start_row
-    ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=7)
-    title_cell = ws.cell(row=title_row, column=1, value=title)
-    title_cell.font = Font(bold=True, size=12)
-    title_cell.alignment = Alignment(horizontal="center")
-
-    group_row = title_row + 2
-    if subtitle:
-        subtitle_row = title_row + 1
-        ws.merge_cells(
-            start_row=subtitle_row,
-            start_column=1,
-            end_row=subtitle_row,
-            end_column=7,
-        )
-        subtitle_cell = ws.cell(row=subtitle_row, column=1, value=subtitle)
-        subtitle_cell.font = Font(italic=True, size=10, color="555555")
-        subtitle_cell.alignment = Alignment(horizontal="center")
-        group_row = title_row + 3
-
-    for first_col, last_col, label in [
-        (2, 3, "Gross SR"),
-        (4, 5, "Net SR"),
-        (6, 7, "Difference"),
-    ]:
-        ws.merge_cells(
-            start_row=group_row,
-            start_column=first_col,
-            end_row=group_row,
-            end_column=last_col,
-        )
-        cell = ws.cell(row=group_row, column=first_col, value=label)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center")
-        cell.border = Border(top=medium, bottom=thin)
-        cell.fill = header_fill
-
-    header_row = group_row + 1
-    headers = ["Quintile", "M^std", "M^w", "M^std", "M^w", "Gross", "Net"]
-    for col_idx, value in enumerate(headers, start=1):
-        cell = ws.cell(row=header_row, column=col_idx, value=value)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center")
-        cell.border = Border(bottom=medium)
-        cell.fill = header_fill
-
-    data_start = header_row + 1
-    for row_offset, (_, row) in enumerate(table.iterrows()):
-        excel_row = data_start + row_offset
-        values = [
-            row["Quintile"],
-            row["Gross_SR_Mstd"],
-            row["Gross_SR_Mw"],
-            row["Net_SR_Mstd"],
-            row["Net_SR_Mw"],
-            row["Diff_Gross"],
-            row["Diff_Net"],
-        ]
-        for col_idx, value in enumerate(values, start=1):
-            cell = ws.cell(row=excel_row, column=col_idx, value=value)
-            cell.alignment = Alignment(
-                horizontal="left" if col_idx == 1 else "center"
-            )
-            if col_idx > 1:
-                cell.number_format = "0.000"
-
-    bottom_row = data_start + len(table) - 1
-    for col_idx in range(1, 8):
-        ws.cell(row=bottom_row, column=col_idx).border = Border(bottom=medium)
-
-    return bottom_row + 1
-
-
-def load_two_by_three_table(
-    analysis_dir: Path,
-    model: str,
-    weight_spec: str,
-    portfolio_run: str,
-    aum_millions: int | str,
-) -> dict[str, float]:
-    """Derive Table 12's 2x3 Q5-Q1 decomposition from quantile time series."""
-    raw = _load_prediction_quantile_timeseries(
-        analysis_dir=analysis_dir,
-        model=model,
-        weight_spec=weight_spec,
-        portfolio_run=portfolio_run,
-        aum_millions=aum_millions,
-    )
-    return _q5_q1_decomposition_from_timeseries(raw)
-
-
-def _q5_q1_decomposition_from_timeseries(raw: pd.DataFrame) -> dict[str, float]:
-    """Build annualized 2x3 Q_high-Q_low metrics from Q1-Q5 monthly rows."""
-    cells = ["1A", "1B", "1C", "2A", "2B", "2C"]
-    quantiles = sorted(raw["prediction_quantile"].dropna().astype(int).unique())
-    if len(quantiles) < 2:
-        raise ValueError("Need at least two prediction quantiles to derive Q_high-Q_low")
-    short_q = quantiles[0]
-    long_q = quantiles[-1]
-
-    cell_returns: dict[str, pd.DataFrame] = {}
-    common_months: set[int] | None = None
-    for cell in cells:
-        cell_raw = raw[raw["cell"] == cell].copy()
-        long = cell_raw[cell_raw["prediction_quantile"].astype(int) == long_q]
-        short = cell_raw[cell_raw["prediction_quantile"].astype(int) == short_q]
-        merged = long.merge(
-            short,
-            on="yyyymm",
-            how="inner",
-            suffixes=("_long", "_short"),
-        )
-        if merged.empty:
-            continue
-        out = pd.DataFrame({
-            "yyyymm": merged["yyyymm"].astype(int),
-            "gross_return": (
-                merged["gross_return_long"] - merged["gross_return_short"]
-            ),
-            "transaction_cost": (
-                merged["transaction_cost_long"]
-                + merged["transaction_cost_short"]
-            ),
-        })
-        out["net_return"] = out["gross_return"] - out["transaction_cost"]
-        cell_returns[cell] = out
-        months = set(out["yyyymm"])
-        common_months = months if common_months is None else common_months & months
-
-    if set(cell_returns) != set(cells) or not common_months:
-        missing = sorted(set(cells).difference(cell_returns))
-        raise ValueError(
-            "Need complete 1A/1B/1C/2A/2B/2C monthly quantile rows "
-            f"to derive Table 12; missing={missing}"
-        )
-
-    aligned = {
-        cell: frame[frame["yyyymm"].isin(common_months)].sort_values("yyyymm")
-        for cell, frame in cell_returns.items()
-    }
-    net_sr = {
-        cell: sharpe_ratio(aligned[cell]["net_return"], annualize=True)
-        for cell in cells
-    }
-
-    training_effect = net_sr["2A"] - net_sr["1A"]
-    portfolio_effect = net_sr["1B"] - net_sr["1A"]
-    total_effect = net_sr["2B"] - net_sr["1A"]
-    interaction = total_effect - training_effect - portfolio_effect
-
-    return {
-        "SR_net_1A": net_sr["1A"],
-        "SR_net_1B": net_sr["1B"],
-        "SR_net_1C": net_sr["1C"],
-        "SR_net_2A": net_sr["2A"],
-        "SR_net_2B": net_sr["2B"],
-        "SR_net_2C": net_sr["2C"],
-        "training_effect": training_effect,
-        "portfolio_effect": portfolio_effect,
-        "total_effect": total_effect,
-        "interaction": interaction,
-        "training_share_pct": (
-            training_effect / total_effect * 100.0
-            if abs(total_effect) > 1e-10
-            else float("nan")
-        ),
-        "tc_target_standard_vs_prediction": net_sr["1C"] - net_sr["1A"],
-        "tc_target_standard_vs_tc_sort": net_sr["1C"] - net_sr["1B"],
-        "tc_target_weighted_vs_prediction": net_sr["2C"] - net_sr["2A"],
-        "tc_target_weighted_vs_tc_sort": net_sr["2C"] - net_sr["2B"],
-        "tc_target_training_effect": net_sr["2C"] - net_sr["1C"],
-        "tc_target_total_effect": net_sr["2C"] - net_sr["1A"],
-    }
 
 
 def _write_table12_block(
@@ -634,209 +462,8 @@ def _write_table12_block(
     return bottom_row + 1
 
 
-def load_within_quintile_table(
-    analysis_dir: Path,
-    model: str,
-    weight_spec: str,
-    portfolio_run: str,
-    aum_millions: int | str,
-    liquidity_breakpoints: str = "config",
-) -> pd.DataFrame:
-    """Load 21e annualized within-quintile SR outputs and make Table 11 rows."""
-    spec_dir = analysis_dir / model / weight_spec / portfolio_run
-    spec_dir = spec_dir / "liquidity_breakpoints" / liquidity_breakpoints
-    std_path = spec_dir / "table3_sr_quintile_std.csv"
-    weighted_path = spec_dir / "table3_sr_quintile_weighted.csv"
-
-    missing = [str(p) for p in [std_path, weighted_path] if not p.exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Missing 21e within-quintile output(s):\n"
-            + "\n".join(missing)
-            + "\nRun 21e before preparing the Excel table."
-        )
-
-    net_col = f"Net_SR_{_aum_label(aum_millions)}"
-    std = pd.read_csv(std_path)
-    weighted = pd.read_csv(weighted_path)
-
-    for path, frame in [(std_path, std), (weighted_path, weighted)]:
-        required = {"Quintile", "Gross_SR", net_col}
-        missing_cols = required.difference(frame.columns)
-        if missing_cols:
-            raise ValueError(f"{path} missing columns: {sorted(missing_cols)}")
-
-    out = std[["Quintile", "Gross_SR", net_col]].rename(
-        columns={
-            "Gross_SR": "Gross_SR_Mstd",
-            net_col: "Net_SR_Mstd",
-        }
-    )
-    out = out.merge(
-        weighted[["Quintile", "Gross_SR", net_col]].rename(
-            columns={
-                "Gross_SR": "Gross_SR_Mw",
-                net_col: "Net_SR_Mw",
-            }
-        ),
-        on="Quintile",
-        how="inner",
-    )
-    out["Diff_Gross"] = out["Gross_SR_Mw"] - out["Gross_SR_Mstd"]
-    out["Diff_Net"] = out["Net_SR_Mw"] - out["Net_SR_Mstd"]
-    out["Quintile"] = out["Quintile"].map(_quintile_label)
-
-    return out[
-        [
-            "Quintile",
-            "Gross_SR_Mstd",
-            "Gross_SR_Mw",
-            "Net_SR_Mstd",
-            "Net_SR_Mw",
-            "Diff_Gross",
-            "Diff_Net",
-        ]
-    ]
-
-
-def write_table11_excel(
-    table: pd.DataFrame,
-    output_path: Path,
-    model: str,
-    weight_spec: str,
-    portfolio_run: str,
-    aum_millions: int | str,
-    liquidity_breakpoints: str = "config",
-) -> None:
-    """Write a formatted Table 11 workbook."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Table 11"
-
-    no_border = Border()
-
-    title = (
-        "Table 11: Within-Quintile Portfolio Performance "
-        f"({_aum_title(aum_millions)})"
-    )
-    subtitle = (
-        f"{_model_title(model)} - {_spec_title(weight_spec)} - "
-        f"{_portfolio_run_title(portfolio_run)}"
-    )
-    subtitle += f" - liquidity breakpoints: {liquidity_breakpoints}"
-
-    bottom_row = _write_table_block(
-        ws=ws,
-        table=table,
-        start_row=1,
-        title=title,
-        subtitle=subtitle,
-    ) - 1
-
-    note_row = bottom_row + 2
-    ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=7)
-    ws.cell(row=note_row, column=1).value = (
-        "Difference columns report weighted training minus standard training. "
-        "Sharpe ratios are annualized and read from 21e table3_sr_quintile outputs."
-    )
-    ws.cell(row=note_row, column=1).font = Font(size=9, color="555555")
-    ws.cell(row=note_row, column=1).alignment = Alignment(wrap_text=True)
-
-    _set_common_widths(ws)
-
-    for row_idx in range(1, note_row + 1):
-        ws.row_dimensions[row_idx].height = 20
-
-    ws.freeze_panes = "A6"
-    ws.sheet_view.showGridLines = False
-
-    # Keep a clean workbook: no default borders outside the table.
-    for row in ws.iter_rows(min_row=1, max_row=note_row, min_col=1, max_col=7):
-        for cell in row:
-            if cell.border == no_border:
-                cell.border = Border()
-
-    wb.save(output_path)
-
-
 def _safe_spec_sheet_title(weight_spec: str) -> str:
     return weight_spec[:31]
-
-
-def _load_model_spec_tables(
-    analysis_dir: Path,
-    model: str,
-    weight_specs: Sequence[str],
-    portfolio_run: str,
-    aums: Sequence[int | str],
-    skip_missing: bool,
-    liquidity_breakpoints: str = "config",
-) -> tuple[dict[str, list[tuple[int, pd.DataFrame]]], list[str]]:
-    tables_by_spec: dict[str, list[tuple[int, pd.DataFrame]]] = {}
-    skipped: list[str] = []
-
-    for weight_spec in weight_specs:
-        spec_tables: list[tuple[int, pd.DataFrame]] = []
-        for aum_millions in aums:
-            try:
-                table = load_within_quintile_table(
-                    analysis_dir=analysis_dir,
-                    model=model,
-                    weight_spec=weight_spec,
-                    portfolio_run=portfolio_run,
-                    aum_millions=aum_millions,
-                    liquidity_breakpoints=liquidity_breakpoints,
-                )
-            except (FileNotFoundError, ValueError) as exc:
-                if not skip_missing:
-                    raise
-                skipped.append(
-                    f"{model}/{weight_spec}/{portfolio_run}/{_aum_label(aum_millions)}: {exc}"
-                )
-                continue
-            spec_tables.append((aum_millions, table))
-        if spec_tables:
-            tables_by_spec[weight_spec] = spec_tables
-
-    return tables_by_spec, skipped
-
-
-def _load_model_spec_decomp_tables(
-    analysis_dir: Path,
-    model: str,
-    weight_specs: Sequence[str],
-    portfolio_run: str,
-    aums: Sequence[int | str],
-    skip_missing: bool,
-) -> tuple[dict[str, list[tuple[int, dict[str, float]]]], list[str]]:
-    tables_by_spec: dict[str, list[tuple[int, dict[str, float]]]] = {}
-    skipped: list[str] = []
-
-    for weight_spec in weight_specs:
-        spec_tables: list[tuple[int, dict[str, float]]] = []
-        for aum_millions in aums:
-            try:
-                table = load_two_by_three_table(
-                    analysis_dir=analysis_dir,
-                    model=model,
-                    weight_spec=weight_spec,
-                    portfolio_run=portfolio_run,
-                    aum_millions=aum_millions,
-                )
-            except (FileNotFoundError, ValueError) as exc:
-                if not skip_missing:
-                    raise
-                skipped.append(
-                    f"{model}/{weight_spec}/{portfolio_run}/{_aum_label(aum_millions)}: {exc}"
-                )
-                continue
-            spec_tables.append((aum_millions, table))
-        if spec_tables:
-            tables_by_spec[weight_spec] = spec_tables
-
-    return tables_by_spec, skipped
 
 
 def load_prediction_quantile_table(
@@ -845,9 +472,16 @@ def load_prediction_quantile_table(
     weight_spec: str,
     portfolio_run: str,
     aum_millions: int | str,
+    stock_universe: str = "full_sample",
 ) -> pd.DataFrame:
     """Load 21e Q1-Q5 prediction-quantile output and make Table 13 rows."""
-    spec_dir = analysis_dir / model / weight_spec / portfolio_run
+    spec_dir = _portfolio_output_dir(
+        analysis_dir,
+        model,
+        weight_spec,
+        portfolio_run,
+        stock_universe,
+    )
     path = spec_dir / f"prediction_quantile_timeseries_{_aum_label(aum_millions)}.csv"
     if not path.exists():
         raise FileNotFoundError(
@@ -914,9 +548,16 @@ def _load_prediction_quantile_timeseries(
     weight_spec: str,
     portfolio_run: str,
     aum_millions: int | str,
+    stock_universe: str = "full_sample",
 ) -> pd.DataFrame:
     """Load the 21e monthly Q1-Q5 prediction-quantile time series."""
-    spec_dir = analysis_dir / model / weight_spec / portfolio_run
+    spec_dir = _portfolio_output_dir(
+        analysis_dir,
+        model,
+        weight_spec,
+        portfolio_run,
+        stock_universe,
+    )
     path = spec_dir / f"prediction_quantile_timeseries_{_aum_label(aum_millions)}.csv"
     if not path.exists():
         raise FileNotFoundError(
@@ -1009,6 +650,7 @@ def load_prediction_quantile_decomposition_tables(
     weight_spec: str,
     portfolio_run: str,
     aum_millions: int | str,
+    stock_universe: str = "full_sample",
 ) -> dict[int, dict[str, float]]:
     """Load 21e Q1-Q5 time series and make Table-14 quantile decomposition rows."""
     raw = _load_prediction_quantile_timeseries(
@@ -1017,12 +659,14 @@ def load_prediction_quantile_decomposition_tables(
         weight_spec=weight_spec,
         portfolio_run=portfolio_run,
         aum_millions=aum_millions,
+        stock_universe=stock_universe,
     )
     tables = _quantile_decomposition_from_timeseries(raw)
     if not tables:
         raise ValueError(
             f"No complete Q1-Q5 2x3 quantile decompositions for "
-            f"{model}/{weight_spec}/{portfolio_run}/{_aum_label(aum_millions)}"
+            f"{model}/{weight_spec}/{portfolio_run}/{stock_universe}/"
+            f"{_aum_label(aum_millions)}"
         )
     return tables
 
@@ -1053,6 +697,7 @@ def _load_model_spec_quantile_tables(
     portfolio_run: str,
     aums: Sequence[int | str],
     skip_missing: bool,
+    stock_universe: str = "full_sample",
 ) -> tuple[dict[str, list[tuple[int | str, pd.DataFrame]]], list[str]]:
     tables_by_spec: dict[str, list[tuple[int | str, pd.DataFrame]]] = {}
     skipped: list[str] = []
@@ -1067,12 +712,14 @@ def _load_model_spec_quantile_tables(
                     weight_spec=weight_spec,
                     portfolio_run=portfolio_run,
                     aum_millions=aum_millions,
+                    stock_universe=stock_universe,
                 )
             except (FileNotFoundError, ValueError) as exc:
                 if not skip_missing:
                     raise
                 skipped.append(
-                    f"{model}/{weight_spec}/{portfolio_run}/{_aum_label(aum_millions)}: {exc}"
+                    f"{model}/{weight_spec}/{portfolio_run}/{stock_universe}/"
+                    f"{_aum_label(aum_millions)}: {exc}"
                 )
                 continue
             spec_tables.append((aum_millions, table))
@@ -1089,6 +736,7 @@ def _load_model_spec_quantile_decomp_tables(
     portfolio_run: str,
     aums: Sequence[int | str],
     skip_missing: bool,
+    stock_universe: str = "full_sample",
 ) -> tuple[dict[str, list[tuple[int | str, dict[int, dict[str, float]]]]], list[str]]:
     tables_by_spec: dict[str, list[tuple[int | str, dict[int, dict[str, float]]]]] = {}
     skipped: list[str] = []
@@ -1103,12 +751,14 @@ def _load_model_spec_quantile_decomp_tables(
                     weight_spec=weight_spec,
                     portfolio_run=portfolio_run,
                     aum_millions=aum_millions,
+                    stock_universe=stock_universe,
                 )
             except (FileNotFoundError, ValueError) as exc:
                 if not skip_missing:
                     raise
                 skipped.append(
-                    f"{model}/{weight_spec}/{portfolio_run}/{_aum_label(aum_millions)}: {exc}"
+                    f"{model}/{weight_spec}/{portfolio_run}/{stock_universe}/"
+                    f"{_aum_label(aum_millions)}: {exc}"
                 )
                 continue
             spec_tables.append((aum_millions, table))
@@ -1118,178 +768,6 @@ def _load_model_spec_quantile_decomp_tables(
     return tables_by_spec, skipped
 
 
-def write_table11_model_workbook(
-    model: str,
-    tables_by_spec: dict[str, list[tuple[int, pd.DataFrame]]],
-    output_path: Path,
-    portfolio_run: str,
-    liquidity_breakpoints: str = "config",
-    skipped: Sequence[str] | None = None,
-) -> None:
-    """Write one model workbook with one worksheet per weighted spec."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    wb = Workbook()
-    default_ws = wb.active
-
-    for idx, (weight_spec, spec_tables) in enumerate(tables_by_spec.items()):
-        ws = default_ws if idx == 0 else wb.create_sheet()
-        ws.title = _safe_spec_sheet_title(weight_spec)
-        ws.sheet_view.showGridLines = False
-        _set_common_widths(ws)
-
-        ws.merge_cells("A1:G1")
-        ws["A1"] = (
-            f"Within-Quintile Portfolio Performance - {_model_title(model)} - "
-            f"{_spec_title(weight_spec)}"
-        )
-        ws["A1"].font = Font(bold=True, size=14)
-        ws["A1"].alignment = Alignment(horizontal="center")
-
-        ws.merge_cells("A2:G2")
-        ws["A2"] = (
-            f"Portfolio run: {_portfolio_run_title(portfolio_run)}. "
-            "Each block reports one AUM case."
-        )
-        ws["A2"] = (
-            f"{ws['A2'].value} Liquidity breakpoints: "
-            f"{liquidity_breakpoints}."
-        )
-        ws["A2"].font = Font(size=9, color="555555")
-        ws["A2"].alignment = Alignment(horizontal="center", wrap_text=True)
-
-        next_row = 4
-        for aum_millions, table in spec_tables:
-            title = (
-                f"Within-Quintile Portfolio Performance "
-                f"({_aum_title(aum_millions)})"
-            )
-            subtitle = (
-                f"{_model_title(model)} - {_spec_title(weight_spec)} - "
-                f"{_portfolio_run_title(portfolio_run)}"
-            )
-            next_row = _write_table_block(
-                ws=ws,
-                table=table,
-                start_row=next_row,
-                title=title,
-                subtitle=subtitle,
-            )
-            next_row += 2
-
-        for row_idx in range(1, next_row):
-            ws.row_dimensions[row_idx].height = 20
-        ws.freeze_panes = "A6"
-
-    if skipped:
-        ws = wb.create_sheet("Skipped")
-        ws["A1"] = "Skipped combinations"
-        ws["A1"].font = Font(bold=True)
-        ws["A2"] = "These combinations did not have complete 21e table3 outputs."
-        for row_idx, message in enumerate(skipped, start=4):
-            ws.cell(row=row_idx, column=1, value=message)
-        ws.column_dimensions["A"].width = 120
-
-    wb.save(output_path)
-
-
-def write_table12_excel(
-    table: dict[str, float],
-    output_path: Path,
-    model: str,
-    weight_spec: str,
-    portfolio_run: str,
-    aum_millions: int | str,
-) -> None:
-    """Write a formatted single-AUM Table 12 workbook."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Table 12"
-    ws.sheet_view.showGridLines = False
-    _set_table12_widths(ws)
-
-    title = f"Table 12: 2x3 Q5-Q1 Decomposition ({_aum_title(aum_millions)})"
-    subtitle = (
-        f"{_model_title(model)} - {_spec_title(weight_spec)} - "
-        f"{_portfolio_run_title(portfolio_run)}"
-    )
-    next_row = _write_table12_block(
-        ws=ws,
-        table=table,
-        start_row=1,
-        title=title,
-        subtitle=subtitle,
-    )
-    for row_idx in range(1, next_row):
-        ws.row_dimensions[row_idx].height = 20
-
-    wb.save(output_path)
-
-
-def write_table12_model_workbook(
-    model: str,
-    tables_by_spec: dict[str, list[tuple[int, dict[str, float]]]],
-    output_path: Path,
-    portfolio_run: str,
-    skipped: Sequence[str] | None = None,
-) -> None:
-    """Write one model workbook with one Table 12 2x3-decomposition sheet per spec."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    wb = Workbook()
-    default_ws = wb.active
-
-    for idx, (weight_spec, spec_tables) in enumerate(tables_by_spec.items()):
-        ws = default_ws if idx == 0 else wb.create_sheet()
-        ws.title = _safe_spec_sheet_title(weight_spec)
-        ws.sheet_view.showGridLines = False
-        _set_table12_widths(ws)
-
-        ws.merge_cells("A1:D1")
-        ws["A1"] = (
-            f"2x3 Q5-Q1 Decomposition - {_model_title(model)} - "
-            f"{_spec_title(weight_spec)}"
-        )
-        ws["A1"].font = Font(bold=True, size=14)
-        ws["A1"].alignment = Alignment(horizontal="center")
-
-        ws.merge_cells("A2:D2")
-        ws["A2"] = (
-            f"Portfolio run: {_portfolio_run_title(portfolio_run)}. "
-            "Each block reports one AUM case."
-        )
-        ws["A2"].font = Font(size=9, color="555555")
-        ws["A2"].alignment = Alignment(horizontal="center", wrap_text=True)
-
-        next_row = 4
-        for aum_millions, table in spec_tables:
-            title = f"2x3 Q5-Q1 Decomposition ({_aum_title(aum_millions)})"
-            next_row = _write_table12_block(
-                ws=ws,
-                table=table,
-                start_row=next_row,
-                title=title,
-            )
-            next_row += 1
-
-        for row_idx in range(1, next_row):
-            ws.row_dimensions[row_idx].height = 20
-        ws.freeze_panes = "A3"
-
-    if skipped:
-        ws = wb.create_sheet("Skipped")
-        ws["A1"] = "Skipped combinations"
-        ws["A1"].font = Font(bold=True)
-        ws["A2"] = "These combinations did not have complete 21e 2x3 outputs."
-        for row_idx, message in enumerate(skipped, start=4):
-            ws.cell(row=row_idx, column=1, value=message)
-        ws.column_dimensions["A"].width = 120
-
-    wb.save(output_path)
-
-
 def write_table14_excel(
     tables_by_quantile: dict[int, dict[str, float]],
     output_path: Path,
@@ -1297,6 +775,7 @@ def write_table14_excel(
     weight_spec: str,
     portfolio_run: str,
     aum_millions: int | str,
+    stock_universe: str = "full_sample",
 ) -> None:
     """Write one single-spec Table 14 workbook with Q1-Q5 2x3 blocks."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1318,6 +797,7 @@ def write_table14_excel(
     ws.merge_cells("A2:D2")
     ws["A2"] = (
         f"Portfolio run: {_portfolio_run_title(portfolio_run)}. "
+        f"Stock universe: {_stock_universe_title(stock_universe)}. "
         f"AUM case: {_aum_title(aum_millions)}."
     )
     ws["A2"].font = Font(size=9, color="555555")
@@ -1346,6 +826,7 @@ def write_table14_model_workbook(
     tables_by_spec: dict[str, list[tuple[int | str, dict[int, dict[str, float]]]]],
     output_path: Path,
     portfolio_run: str,
+    stock_universe: str = "full_sample",
     skipped: Sequence[str] | None = None,
 ) -> None:
     """Write one model workbook with Q1-Q5 Table-12-style blocks per spec."""
@@ -1371,6 +852,7 @@ def write_table14_model_workbook(
         ws.merge_cells("A2:D2")
         ws["A2"] = (
             f"Portfolio run: {_portfolio_run_title(portfolio_run)}. "
+            f"Stock universe: {_stock_universe_title(stock_universe)}. "
             "Each AUM block reports separate Q1-Q5 2x3 decompositions."
         )
         ws["A2"].font = Font(size=9, color="555555")
@@ -1505,6 +987,7 @@ def write_table13_excel(
     weight_spec: str,
     portfolio_run: str,
     aum_millions: int | str,
+    stock_universe: str = "full_sample",
 ) -> None:
     """Write a formatted single-AUM Table 13 workbook."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1521,7 +1004,8 @@ def write_table13_excel(
     )
     subtitle = (
         f"{_model_title(model)} - {_spec_title(weight_spec)} - "
-        f"{_portfolio_run_title(portfolio_run)}"
+        f"{_portfolio_run_title(portfolio_run)} - "
+        f"{_stock_universe_title(stock_universe)}"
     )
     next_row = _write_table13_block(
         ws=ws,
@@ -1542,6 +1026,7 @@ def write_table13_model_workbook(
     tables_by_spec: dict[str, list[tuple[int | str, pd.DataFrame]]],
     output_path: Path,
     portfolio_run: str,
+    stock_universe: str = "full_sample",
     skipped: Sequence[str] | None = None,
 ) -> None:
     """Write one model workbook with one prediction-quantile sheet per spec."""
@@ -1567,6 +1052,7 @@ def write_table13_model_workbook(
         ws.merge_cells("A2:K2")
         ws["A2"] = (
             f"Portfolio run: {_portfolio_run_title(portfolio_run)}. "
+            f"Stock universe: {_stock_universe_title(stock_universe)}. "
             "Each block reports one AUM case."
         )
         ws["A2"].font = Font(size=9, color="555555")
@@ -1612,7 +1098,8 @@ def _default_output_path(
     weight_specs: Sequence[str],
     portfolio_run: str,
     aums: Sequence[int | str],
-    liquidity_breakpoints: str = "config",
+    stock_universe: str = "full_sample",
+    stock_universe_selection: Sequence[str] | None = None,
 ) -> Path:
     spec_part = _selection_label(
         weight_specs,
@@ -1621,14 +1108,22 @@ def _default_output_path(
         "specs",
     )
     aum_part = _selection_label(aums, DEFAULT_AUMS, "all_aums", "aums")
-    breakpoint_part = (
-        f"_{liquidity_breakpoints}_breakpoints"
-        if table_name == "table11"
-        else ""
+    stock_selection = (
+        list(stock_universe_selection)
+        if stock_universe_selection is not None
+        else [stock_universe]
     )
+    if stock_selection == ["full_sample"]:
+        stock_part = ""
+    elif len(stock_selection) > 1:
+        stock_part = f"_{stock_universe}_stocks"
+    else:
+        stock_part = (
+            f"_{_stock_universe_filename_part(stock_selection, ['full_sample', 'nyse'])}"
+        )
     safe_name = (
         f"{table_name}_{model}_{spec_part}_{portfolio_run}_"
-        f"{aum_part}{breakpoint_part}.xlsx"
+        f"{aum_part}{stock_part}.xlsx"
     )
     return output_dir / safe_name
 
@@ -1642,7 +1137,8 @@ def _resolve_model_output_path(
     portfolio_run: str,
     aums: Sequence[int | str],
     n_workbooks: int,
-    liquidity_breakpoints: str = "config",
+    stock_universe: str = "full_sample",
+    stock_universe_selection: Sequence[str] | None = None,
 ) -> Path:
     if not output_arg:
         return _default_output_path(
@@ -1652,7 +1148,8 @@ def _resolve_model_output_path(
             weight_specs=weight_specs,
             portfolio_run=portfolio_run,
             aums=aums,
-            liquidity_breakpoints=liquidity_breakpoints,
+            stock_universe=stock_universe,
+            stock_universe_selection=stock_universe_selection,
         )
 
     requested = Path(output_arg)
@@ -1667,7 +1164,8 @@ def _resolve_model_output_path(
         weight_specs=weight_specs,
         portfolio_run=portfolio_run,
         aums=aums,
-        liquidity_breakpoints=liquidity_breakpoints,
+        stock_universe=stock_universe,
+        stock_universe_selection=stock_universe_selection,
     )
 
 
@@ -1681,12 +1179,19 @@ def main() -> None:
     weight_specs = _parse_weight_specs(args.weight_spec)
     portfolio_runs = _parse_portfolio_runs(args.portfolio_run)
     aums = _parse_aums(args.aum)
+    stock_universes = resolve_stock_universes(args.stock_universe)
 
     single_table = (
-        len(models) == len(weight_specs) == len(portfolio_runs) == len(aums) == 1
+        len(models)
+        == len(weight_specs)
+        == len(portfolio_runs)
+        == len(aums)
+        == len(stock_universes)
+        == 1
     )
     if single_table:
         portfolio_run = portfolio_runs[0]
+        stock_universe = stock_universes[0]
         if args.output:
             output_path = Path(args.output)
         else:
@@ -1697,49 +1202,17 @@ def main() -> None:
                 weight_specs=weight_specs,
                 portfolio_run=portfolio_run,
                 aums=aums,
-                liquidity_breakpoints=args.liquidity_breakpoints,
+                stock_universe=stock_universe,
+                stock_universe_selection=stock_universes,
             )
-        if args.table == "table11":
-            table = load_within_quintile_table(
-                analysis_dir=analysis_dir,
-                model=models[0],
-                weight_spec=weight_specs[0],
-                portfolio_run=portfolio_run,
-                aum_millions=aums[0],
-                liquidity_breakpoints=args.liquidity_breakpoints,
-            )
-            write_table11_excel(
-                table=table,
-                output_path=output_path,
-                model=models[0],
-                weight_spec=weight_specs[0],
-                portfolio_run=portfolio_run,
-                aum_millions=aums[0],
-                liquidity_breakpoints=args.liquidity_breakpoints,
-            )
-        elif args.table == "table12":
-            table = load_two_by_three_table(
-                analysis_dir=analysis_dir,
-                model=models[0],
-                weight_spec=weight_specs[0],
-                portfolio_run=portfolio_run,
-                aum_millions=aums[0],
-            )
-            write_table12_excel(
-                table=table,
-                output_path=output_path,
-                model=models[0],
-                weight_spec=weight_specs[0],
-                portfolio_run=portfolio_run,
-                aum_millions=aums[0],
-            )
-        elif args.table == "table13":
+        if args.table == "table13":
             table = load_prediction_quantile_table(
                 analysis_dir=analysis_dir,
                 model=models[0],
                 weight_spec=weight_specs[0],
                 portfolio_run=portfolio_run,
                 aum_millions=aums[0],
+                stock_universe=stock_universe,
             )
             write_table13_excel(
                 table=table,
@@ -1748,6 +1221,7 @@ def main() -> None:
                 weight_spec=weight_specs[0],
                 portfolio_run=portfolio_run,
                 aum_millions=aums[0],
+                stock_universe=stock_universe,
             )
         else:
             table = load_prediction_quantile_decomposition_tables(
@@ -1756,6 +1230,7 @@ def main() -> None:
                 weight_spec=weight_specs[0],
                 portfolio_run=portfolio_run,
                 aum_millions=aums[0],
+                stock_universe=stock_universe,
             )
             write_table14_excel(
                 tables_by_quantile=table,
@@ -1764,6 +1239,7 @@ def main() -> None:
                 weight_spec=weight_specs[0],
                 portfolio_run=portfolio_run,
                 aum_millions=aums[0],
+                stock_universe=stock_universe,
             )
         print(output_path)
         return
@@ -1772,96 +1248,71 @@ def main() -> None:
     skipped_runs: list[str] = []
     for model in models:
         for portfolio_run in portfolio_runs:
-            if args.table == "table11":
-                tables_by_spec, skipped = _load_model_spec_tables(
-                    analysis_dir=analysis_dir,
-                    model=model,
-                    weight_specs=weight_specs,
-                    portfolio_run=portfolio_run,
-                    aums=aums,
-                    skip_missing=args.skip_missing,
-                    liquidity_breakpoints=args.liquidity_breakpoints,
-                )
-            elif args.table == "table12":
-                tables_by_spec, skipped = _load_model_spec_decomp_tables(
-                    analysis_dir=analysis_dir,
-                    model=model,
-                    weight_specs=weight_specs,
-                    portfolio_run=portfolio_run,
-                    aums=aums,
-                    skip_missing=args.skip_missing,
-                )
-            elif args.table == "table13":
-                tables_by_spec, skipped = _load_model_spec_quantile_tables(
-                    analysis_dir=analysis_dir,
-                    model=model,
-                    weight_specs=weight_specs,
-                    portfolio_run=portfolio_run,
-                    aums=aums,
-                    skip_missing=args.skip_missing,
-                )
-            else:
-                tables_by_spec, skipped = _load_model_spec_quantile_decomp_tables(
-                    analysis_dir=analysis_dir,
-                    model=model,
-                    weight_specs=weight_specs,
-                    portfolio_run=portfolio_run,
-                    aums=aums,
-                    skip_missing=args.skip_missing,
-                )
-            if not tables_by_spec:
-                if args.skip_missing:
-                    skipped_runs.append(f"{model}/{portfolio_run}")
-                    continue
-                raise FileNotFoundError(
-                    f"No matching 21e outputs were available for {model}/{portfolio_run}."
-                )
+            for stock_universe in stock_universes:
+                if args.table == "table13":
+                    tables_by_spec, skipped = _load_model_spec_quantile_tables(
+                        analysis_dir=analysis_dir,
+                        model=model,
+                        weight_specs=weight_specs,
+                        portfolio_run=portfolio_run,
+                        aums=aums,
+                        skip_missing=args.skip_missing,
+                        stock_universe=stock_universe,
+                    )
+                else:
+                    tables_by_spec, skipped = _load_model_spec_quantile_decomp_tables(
+                        analysis_dir=analysis_dir,
+                        model=model,
+                        weight_specs=weight_specs,
+                        portfolio_run=portfolio_run,
+                        aums=aums,
+                        skip_missing=args.skip_missing,
+                        stock_universe=stock_universe,
+                    )
+                if not tables_by_spec:
+                    if args.skip_missing:
+                        skipped_runs.append(f"{model}/{portfolio_run}/{stock_universe}")
+                        continue
+                    raise FileNotFoundError(
+                        "No matching 21e outputs were available for "
+                        f"{model}/{portfolio_run}/{stock_universe}."
+                    )
 
-            output_path = _resolve_model_output_path(
-                output_arg=args.output,
-                default_dir=output_dir,
-                table_name=args.table,
-                model=model,
-                weight_specs=weight_specs,
-                portfolio_run=portfolio_run,
-                aums=aums,
-                n_workbooks=len(models) * len(portfolio_runs),
-                liquidity_breakpoints=args.liquidity_breakpoints,
-            )
-            if args.table == "table11":
-                write_table11_model_workbook(
+                output_path = _resolve_model_output_path(
+                    output_arg=args.output,
+                    default_dir=output_dir,
+                    table_name=args.table,
                     model=model,
-                    tables_by_spec=tables_by_spec,
-                    output_path=output_path,
+                    weight_specs=weight_specs,
                     portfolio_run=portfolio_run,
-                    liquidity_breakpoints=args.liquidity_breakpoints,
-                    skipped=skipped,
+                    aums=aums,
+                    n_workbooks=(
+                        len(models) * len(portfolio_runs) * len(stock_universes)
+                    ),
+                    stock_universe=stock_universe,
+                    stock_universe_selection=(
+                        stock_universes if len(stock_universes) > 1 else None
+                    ),
                 )
-            elif args.table == "table12":
-                write_table12_model_workbook(
-                    model=model,
-                    tables_by_spec=tables_by_spec,
-                    output_path=output_path,
-                    portfolio_run=portfolio_run,
-                    skipped=skipped,
-                )
-            elif args.table == "table13":
-                write_table13_model_workbook(
-                    model=model,
-                    tables_by_spec=tables_by_spec,
-                    output_path=output_path,
-                    portfolio_run=portfolio_run,
-                    skipped=skipped,
-                )
-            else:
-                write_table14_model_workbook(
-                    model=model,
-                    tables_by_spec=tables_by_spec,
-                    output_path=output_path,
-                    portfolio_run=portfolio_run,
-                    skipped=skipped,
-                )
-            output_paths.append(output_path)
+                if args.table == "table13":
+                    write_table13_model_workbook(
+                        model=model,
+                        tables_by_spec=tables_by_spec,
+                        output_path=output_path,
+                        portfolio_run=portfolio_run,
+                        stock_universe=stock_universe,
+                        skipped=skipped,
+                    )
+                else:
+                    write_table14_model_workbook(
+                        model=model,
+                        tables_by_spec=tables_by_spec,
+                        output_path=output_path,
+                        portfolio_run=portfolio_run,
+                        stock_universe=stock_universe,
+                        skipped=skipped,
+                    )
+                output_paths.append(output_path)
 
     if not output_paths:
         skipped = ", ".join(skipped_runs)

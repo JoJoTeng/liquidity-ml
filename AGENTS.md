@@ -195,6 +195,12 @@ inside each prediction quantile, or `--portfolio-weighting both` to write
 equal-weight outputs under `prediction_quantile/` and value-weight outputs
 under `prediction_quantile_value_weight/`.
 
+Use `--stock-universe nyse` to construct portfolios only from NYSE stocks
+without retraining models. NYSE-only outputs are written under
+`{portfolio_run}/stock_universe/nyse/`. Use `--stock-universe both` to write
+separate full-sample and NYSE folders without overwriting the legacy
+full-sample outputs.
+
 `21e` writes `two_by_three_{AUM}.csv` and
 `two_by_three_timeseries_{AUM}.xlsx` when `tc_target` predictions are available.
 It also writes `prediction_quantile_timeseries_{AUM}.csv/xlsx`. The 2x3
@@ -249,6 +255,7 @@ The restricted-universe motivation scripts `05` and `06` support two modes:
   Portfolio holding weights are controlled with
   `--portfolio-weighting equal|value|both`; `22_prepare_portfolio_excel_tables.py`
   selects the output folder with `--portfolio-run prediction_quantile|prediction_quantile_value_weight|both`.
+  Stock-universe filtering is controlled with `--stock-universe full_sample|nyse|both`.
   It does not recompute portfolios; it reads the CSV outputs created by `21e`.
 
 ## Testing And Verification
