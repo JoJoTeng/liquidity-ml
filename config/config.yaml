@@ -199,13 +199,13 @@ models:
     reg_lambda: 0.1
     search_space:
       max_depth: [ 2, 3, 4 ]
-      learning_rate: [ 0.001, 0.005, 0.01, 0.03, 0.05 ]
-      n_estimators: [ 300, 500, 1000, 2000 ]
-      min_child_weight: [ 5, 10, 50, 100 ]
+      learning_rate: [ 0.001, 0.01, 0.03, 0.05 ]
+      n_estimators: [ 300, 500, 1000 ]
+      min_child_weight: [ 5, 50, 100 ]
       colsample_bytree: [ 0.2, 0.3, 0.5 ]
       subsample: [ 0.6, 0.8, 1.0 ]
-      reg_lambda: [ 0.01, 0.1, 1.0 ]
-    n_random_search: 150 # random search over 6480 possible XGBoost combinations
+      reg_lambda: [ 0.1, 1.0 ]
+    n_random_search: 150 # random search over 1944 selected XGBoost combinations
 
   neural_network:
     hidden_layers: [ 32, 16, 8 ] # GKX (2020) NN3 — best architecture
