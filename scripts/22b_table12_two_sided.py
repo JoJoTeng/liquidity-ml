@@ -23,20 +23,20 @@ on each leg, matching script 22's quantile path, so net Sharpes are comparable
 to the single-score Table 12; ``half`` splits AUM/2 across the two legs (the
 native long-short default).
 
-Outputs (under ``outputs/formalanalysis/tables/`` by default), nothing existing
-is overwritten. ``--stock-universe`` matches script 22: ``full_sample`` keeps
-the legacy filenames, ``nyse`` appends ``_nyse_stocks``, and ``both`` writes
-separate ``_full_sample_stocks`` and ``_nyse_stocks`` workbooks.
+Outputs are written under
+``outputs/formalanalysis/tables/{model}/{stock_universe}/`` by default, so
+``--stock-universe both`` writes separate ``full_sample`` and ``nyse``
+directories.
 
-  - ``table12_two_sided_{portfolio_weighting}_{model}.xlsx``
+  - ``table12_two_sided_{portfolio_weighting}.xlsx``
     -- one workbook per model/portfolio-weighting, one sheet per weight spec,
     one block per AUM, in the Table 12 layout. If ``--leg-capital half`` is
     used, ``halfleg`` is inserted after ``two_sided``.
-  - ``table13_legs_two_sided_{portfolio_weighting}_{model}.xlsx`` -- formatted
+  - ``table13_legs_two_sided_{portfolio_weighting}.xlsx`` -- formatted
     Table-13-style per-leg breakdown: for every cell (1A-2C) the Long leg,
     Short leg, and Long-Short, each with gross/net return, gross/net SR, TC,
     turnover, and avg stock count.
-  - ``table14_legdecomp_two_sided_{portfolio_weighting}_{model}.xlsx`` -- formatted
+  - ``table14_legdecomp_two_sided_{portfolio_weighting}.xlsx`` -- formatted
     Table-14 analog: a 2x3 net-Sharpe decomposition (six cells plus
     training/portfolio/TC-target effects) computed within each of the Long leg,
     Short leg, and Long-Short.
@@ -154,7 +154,10 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Output directory. Default outputs/formalanalysis/tables/.",
+        help=(
+            "Output root directory. Default "
+            "outputs/formalanalysis/tables/{model}/{stock_universe}/."
+        ),
     )
     return parser.parse_args()
 
@@ -211,21 +214,16 @@ def _filter_panel_for_stock_universe(
     return panel.loc[panel["exchcd"] == 1].copy()
 
 
-def _stock_universe_filename_suffix(
-    stock_universe: str,
-    selected_stock_universes: list[str],
-) -> str:
-    """Return the filename suffix needed to avoid stock-universe overwrites."""
-    if selected_stock_universes == ["full_sample"]:
-        return ""
-    return f"_{stock_universe}_stocks"
-
-
 def _leg_capital_filename_part(leg_capital: str) -> str:
     """Return optional filename token for non-default leg-capital settings."""
     if leg_capital == "full":
         return ""
     return f"{leg_capital}leg_"
+
+
+def _table_output_dir(output_dir: Path, model: str, stock_universe: str) -> Path:
+    """Return the organized report-table directory for one model and universe."""
+    return output_dir / model / stock_universe
 
 
 def _stock_universe_title(mod22, stock_universe: str) -> str:
@@ -827,11 +825,11 @@ def main() -> None:
             panel["yyyymm"].nunique(),
         )
         tc_context = prepare_transaction_cost_context(panel, config)
-        stock_suffix = _stock_universe_filename_suffix(stock_universe, stock_universes)
         leg_token = _leg_capital_filename_part(leg_capital)
 
         for weighting in portfolio_weightings:
             for model in models:
+                model_out_dir = _table_output_dir(out_dir, model, stock_universe)
                 # Standard cells (1A/1B/1C) use the model's shared standard
                 # predictions, so build + net them once per model/universe and
                 # reuse them across every weight spec.
@@ -971,10 +969,9 @@ def main() -> None:
                     continue
 
                 output_path = (
-                    out_dir
+                    model_out_dir
                     / (
-                        f"table12_two_sided_{leg_token}{weighting}_"
-                        f"{model}{stock_suffix}.xlsx"
+                        f"table12_two_sided_{leg_token}{weighting}.xlsx"
                     )
                 )
                 _write_table12_workbook(
@@ -991,10 +988,9 @@ def main() -> None:
 
                 if model_leg_rows:
                     table13_path = (
-                        out_dir
+                        model_out_dir
                         / (
-                            f"table13_legs_two_sided_{leg_token}{weighting}_"
-                            f"{model}{stock_suffix}.xlsx"
+                            f"table13_legs_two_sided_{leg_token}{weighting}.xlsx"
                         )
                     )
                     _write_table13_legs_workbook(
@@ -1011,10 +1007,10 @@ def main() -> None:
 
                 if model_leg_decomp_rows:
                     table14_path = (
-                        out_dir
+                        model_out_dir
                         / (
                             f"table14_legdecomp_two_sided_{leg_token}"
-                            f"{weighting}_{model}{stock_suffix}.xlsx"
+                            f"{weighting}.xlsx"
                         )
                     )
                     _write_table14_legdecomp_workbook(

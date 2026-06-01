@@ -138,7 +138,10 @@ def parse_args():
     parser.add_argument(
         "--output",
         default=None,
-        help="Optional output .xlsx path. Default writes under outputs/formalanalysis/tables/.",
+        help=(
+            "Optional output .xlsx path or root directory. Default writes under "
+            "outputs/formalanalysis/tables/{model}/{stock_universe}/."
+        ),
     )
     return parser.parse_args()
 
@@ -248,17 +251,6 @@ def _stock_universe_title(stock_universe: str) -> str:
         "nyse": "NYSE stock universe",
     }
     return labels.get(stock_universe, stock_universe.replace("_", " ").title())
-
-
-def _stock_universe_filename_part(
-    selected: Sequence[str],
-    all_available: Sequence[str],
-) -> str:
-    if list(selected) == list(all_available):
-        return "both_stock_universes"
-    if len(selected) == 1:
-        return f"{selected[0]}_stocks"
-    return f"{len(selected)}_stock_universes"
 
 
 def _portfolio_output_dir(
@@ -1091,6 +1083,11 @@ def write_table13_model_workbook(
     wb.save(output_path)
 
 
+def _table_output_dir(output_dir: Path, model: str, stock_universe: str) -> Path:
+    """Return the organized report-table directory for one model and universe."""
+    return output_dir / model / stock_universe
+
+
 def _default_output_path(
     output_dir: Path,
     table_name: str,
@@ -1099,7 +1096,6 @@ def _default_output_path(
     portfolio_run: str,
     aums: Sequence[int | str],
     stock_universe: str = "full_sample",
-    stock_universe_selection: Sequence[str] | None = None,
 ) -> Path:
     spec_part = _selection_label(
         weight_specs,
@@ -1108,24 +1104,10 @@ def _default_output_path(
         "specs",
     )
     aum_part = _selection_label(aums, DEFAULT_AUMS, "all_aums", "aums")
-    stock_selection = (
-        list(stock_universe_selection)
-        if stock_universe_selection is not None
-        else [stock_universe]
-    )
-    if stock_selection == ["full_sample"]:
-        stock_part = ""
-    elif len(stock_selection) > 1:
-        stock_part = f"_{stock_universe}_stocks"
-    else:
-        stock_part = (
-            f"_{_stock_universe_filename_part(stock_selection, ['full_sample', 'nyse'])}"
-        )
     safe_name = (
-        f"{table_name}_{model}_{spec_part}_{portfolio_run}_"
-        f"{aum_part}{stock_part}.xlsx"
+        f"{table_name}_{spec_part}_{portfolio_run}_{aum_part}.xlsx"
     )
-    return output_dir / safe_name
+    return _table_output_dir(output_dir, model, stock_universe) / safe_name
 
 
 def _resolve_model_output_path(
@@ -1138,7 +1120,6 @@ def _resolve_model_output_path(
     aums: Sequence[int | str],
     n_workbooks: int,
     stock_universe: str = "full_sample",
-    stock_universe_selection: Sequence[str] | None = None,
 ) -> Path:
     if not output_arg:
         return _default_output_path(
@@ -1149,7 +1130,6 @@ def _resolve_model_output_path(
             portfolio_run=portfolio_run,
             aums=aums,
             stock_universe=stock_universe,
-            stock_universe_selection=stock_universe_selection,
         )
 
     requested = Path(output_arg)
@@ -1165,7 +1145,6 @@ def _resolve_model_output_path(
         portfolio_run=portfolio_run,
         aums=aums,
         stock_universe=stock_universe,
-        stock_universe_selection=stock_universe_selection,
     )
 
 
@@ -1203,7 +1182,6 @@ def main() -> None:
                 portfolio_run=portfolio_run,
                 aums=aums,
                 stock_universe=stock_universe,
-                stock_universe_selection=stock_universes,
             )
         if args.table == "table13":
             table = load_prediction_quantile_table(
@@ -1290,9 +1268,6 @@ def main() -> None:
                         len(models) * len(portfolio_runs) * len(stock_universes)
                     ),
                     stock_universe=stock_universe,
-                    stock_universe_selection=(
-                        stock_universes if len(stock_universes) > 1 else None
-                    ),
                 )
                 if args.table == "table13":
                     write_table13_model_workbook(

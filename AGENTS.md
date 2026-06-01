@@ -208,11 +208,12 @@ long-short cells are derived from Q5 minus Q1 after first computing standalone
 Q1-Q5 prediction-quantile portfolios. Each prediction quantile uses
 `AUM / portfolio.n_quantiles` for transaction-cost sizing.
 
-Formatted Excel report tables from `22_prepare_portfolio_excel_tables.py` write
-to:
+Formatted Excel report tables from `22_prepare_portfolio_excel_tables.py` and
+`22b_table12_two_sided.py` write to model- and stock-universe-specific
+directories:
 
 ```text
-outputs/formalanalysis/tables/
+outputs/formalanalysis/tables/{model}/{stock_universe}/
 ```
 
 The active formatted portfolio tables are:
