@@ -43,6 +43,7 @@ from src.analysis.motivation import (
     get_motivation_liquidity_key,
     rolling_model_predict_restricted,
 )
+from src.weighting.schemes import compute_weights
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
@@ -128,6 +129,42 @@ def main():
         action="store_true",
         help="Skip training and recompute tables/figures from saved predictions.",
     )
+    # Weighted-restriction (opt-in). When --weights is omitted, the script
+    # behaves identically to its prior unweighted contract.
+    parser.add_argument(
+        "--weights",
+        type=str,
+        default=None,
+        choices=["dolvol", "softmax_rank", "tc", "tc_rank"],
+        help=(
+            "Training-weight family for restricted models. Defaults to None "
+            "(unweighted; preserves the original analysis). When set, the "
+            "matching weighted M_w from outputs/formalanalysis/experiment/ is "
+            "used as the 'Mall' point in the restriction comparison."
+        ),
+    )
+    parser.add_argument(
+        "--softmax-lambda",
+        type=float,
+        default=None,
+        help="Override softmax_rank lambda when --weights=softmax_rank.",
+    )
+    parser.add_argument(
+        "--tc-rank-lambda",
+        type=float,
+        default=None,
+        help="Override tc_rank lambda when --weights=tc_rank.",
+    )
+    parser.add_argument(
+        "--weights-aum",
+        type=int,
+        default=None,
+        choices=[10, 100, 500, 1000],
+        help=(
+            "AUM in $M for --weights tc / tc_rank. Required when --weights is "
+            "tc or tc_rank."
+        ),
+    )
     args = parser.parse_args()
 
     liq = get_motivation_liquidity_config(args.liquidity)
@@ -139,14 +176,53 @@ def main():
         logger.error("--retune and --use-baseline-params are mutually exclusive")
         sys.exit(1)
 
-    # Mode subdirectory: baseline / retune
+    # Mode subdirectory: baseline / retune (+ optional weighted spec suffix)
     mode = "retune" if args.retune else "baseline"
 
+    # Build the weighted-spec label (only when --weights is set). When None,
+    # output and baseline paths remain exactly as before the refactor.
+    weight_label = None
+    weight_spec_dir = None
+    if args.weights is not None:
+        if args.weights == "softmax_rank":
+            lam = args.softmax_lambda
+            if lam is None:
+                lam = load_config()["weighting"].get("softmax_rank_lambda", 2.0)
+            weight_label = f"softmax_rank_lam{int(lam) if float(lam).is_integer() else lam}"
+            weight_spec_dir = weight_label
+        elif args.weights == "tc_rank":
+            lam = args.tc_rank_lambda
+            if lam is None:
+                lam = load_config()["weighting"].get("tc_rank_lambda", 3.0)
+            if args.weights_aum is None:
+                logger.error("--weights-aum is required when --weights=tc_rank")
+                sys.exit(1)
+            lam_label = int(lam) if float(lam).is_integer() else lam
+            weight_label = f"tc_rank_lam{lam_label}_{args.weights_aum}m"
+            weight_spec_dir = weight_label
+        elif args.weights == "tc":
+            if args.weights_aum is None:
+                logger.error("--weights-aum is required when --weights=tc")
+                sys.exit(1)
+            weight_label = f"tc_{args.weights_aum}m"
+            weight_spec_dir = weight_label
+        else:  # dolvol
+            weight_label = "dolvol"
+            weight_spec_dir = "dolvol"
+
     base_output = Path(get_output_dir())
-    output_dir = (
-        base_output / "motivation" / "step3_restriction"
-        / args.model / liquidity_key / args.normalization / mode
-    )
+    if weight_label is not None:
+        # Sibling subdir; original baseline/retune is untouched.
+        output_dir = (
+            base_output / "motivation" / "step3_restriction"
+            / args.model / liquidity_key / args.normalization
+            / f"{mode}_{weight_label}"
+        )
+    else:
+        output_dir = (
+            base_output / "motivation" / "step3_restriction"
+            / args.model / liquidity_key / args.normalization / mode
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     pooled_dir = base_output / "motivation" / "step3" / args.model / liquidity_key
 
@@ -178,12 +254,53 @@ def main():
         panel, liq["quintile_col"], ascending=liq["ascending"]
     )
 
+    # Optional sample weights (aligned to panel.index, mean=1.0 per yyyymm
+    # on the FULL universe). The core trainer renormalises within the
+    # filtered universe per month.
+    weights_series = None
+    if args.weights is not None:
+        # Apply CLI lambda overrides into a fresh config copy so we don't
+        # mutate the loaded dict in surprising ways elsewhere.
+        wcfg = dict(config)
+        wcfg["weighting"] = dict(config.get("weighting", {}))
+        if args.weights == "softmax_rank" and args.softmax_lambda is not None:
+            wcfg["weighting"]["softmax_rank_lambda"] = args.softmax_lambda
+        if args.weights == "tc_rank" and args.tc_rank_lambda is not None:
+            wcfg["weighting"]["tc_rank_lambda"] = args.tc_rank_lambda
+        aum_dollars = (
+            args.weights_aum * 1_000_000
+            if args.weights_aum is not None and args.weights in {"tc", "tc_rank"}
+            else None
+        )
+        weights_series = compute_weights(
+            panel, scheme=args.weights, config=wcfg, aum=aum_dollars,
+        )
+        logger.info(
+            "Training with sample weights: scheme=%s, label=%s, AUM=%s",
+            args.weights, weight_label,
+            f"${args.weights_aum}M" if args.weights_aum else "N/A",
+        )
+
     # Param strategy: baseline tuned params by default; --retune is robustness.
+    # When --weights is set, the baseline tuned params should come from the
+    # MATCHING weighted M_w in outputs/formalanalysis/experiment/{model}/
+    # {weight_spec}/tuned_params.csv (otherwise we'd be applying weights with
+    # hyperparams tuned for the unweighted model).
     baseline_tuned = None
     if not args.retune:
-        tp_path = pooled_dir / "tuned_params.csv"
+        if weight_spec_dir is not None:
+            tp_path = (
+                base_output / "formalanalysis" / "experiment" / args.model
+                / weight_spec_dir / "tuned_params.csv"
+            )
+        else:
+            tp_path = pooled_dir / "tuned_params.csv"
         if not tp_path.exists():
-            logger.error("tuned_params.csv not found at %s. Run scripts/04_motivation_step3_ml_diagnostics.py first.", tp_path)
+            logger.error(
+                "tuned_params.csv not found at %s. "
+                "Run the matching script 04 or 20 first.",
+                tp_path,
+            )
             sys.exit(1)
         baseline_tuned = load_tuned_params(tp_path)
         logger.info("Loaded %d baseline tuned param windows from %s", len(baseline_tuned), tp_path)
@@ -209,6 +326,7 @@ def main():
                 config=config,
                 baseline_tuned_params=baseline_tuned,
                 rerank_after_filter=rerank_after_filter,
+                weights=weights_series,
             )
             if len(preds) > 0:
                 preds.to_parquet(pred_path, index=False)
@@ -218,8 +336,18 @@ def main():
     logger.info("=" * 60)
     logger.info("Computing restriction curve...")
 
-    # Load baseline (Mall) predictions
-    models = {"Mall": pooled_dir / "predictions.parquet"}
+    # Load baseline (Mall) predictions.
+    # When --weights is set, the matching Mall is the formal weighted M_w
+    # (trained on the FULL universe with the same weights). Otherwise it's
+    # the M_std cache produced by script 04 in motivation/step3/.
+    if weight_spec_dir is not None:
+        mall_path = (
+            base_output / "formalanalysis" / "experiment" / args.model
+            / weight_spec_dir / "predictions.parquet"
+        )
+    else:
+        mall_path = pooled_dir / "predictions.parquet"
+    models = {"Mall": mall_path}
     for mq in [2, 3, 4, 5]:
         models[f"MQ{mq}+"] = output_dir / f"predictions_MQ{mq}+.parquet"
 
@@ -314,7 +442,7 @@ def main():
 
     with open(output_dir / "meta.json", "w") as f:
         param_source = "baseline_tuned" if baseline_tuned is not None else "retune_within_restriction"
-        json.dump({
+        meta = {
             "model": args.model,
             "liquidity": args.liquidity,
             "liquidity_key": liquidity_key,
@@ -324,7 +452,12 @@ def main():
             "n_features": len(features),
             "param_source": param_source,
             "pooled_baseline_dir": str(pooled_dir),
-        }, f, indent=2, default=str)
+            "weights_scheme": args.weights,
+            "weights_label": weight_label,
+            "weights_aum_millions": args.weights_aum,
+            "mall_predictions_source": str(models["Mall"]),
+        }
+        json.dump(meta, f, indent=2, default=str)
     logger.info("Step 3d complete. Outputs: %s", output_dir)
 
 if __name__ == "__main__":
