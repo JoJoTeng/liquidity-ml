@@ -1570,6 +1570,25 @@ def plot_divergence_vs_heterogeneity(
 # ═════════════════════════════════════════════════════════════
 
 
+def _renormalize_weights_by_month(
+    weights: pd.Series,
+    yyyymm: pd.Series,
+) -> pd.Series:
+    """Rescale ``weights`` so each ``yyyymm`` cross-section has mean 1.0.
+
+    Used after restricted-universe filtering: the input weights were normalised
+    to mean=1 on the full universe; after filtering, the surviving rows may no
+    longer average to 1 within a month. Replace NaNs with 1.0 first, then
+    divide by the per-month mean. Zero-mean months (very rare) fall back to 1.0
+    to avoid division by zero.
+    """
+    w = weights.copy()
+    w = w.fillna(1.0)
+    monthly_mean = w.groupby(yyyymm.values).transform("mean")
+    monthly_mean = monthly_mean.where(monthly_mean > 0, 1.0)
+    return w / monthly_mean
+
+
 def _rolling_model_filter_core(
     panel: pd.DataFrame,
     features: list[str],
@@ -1581,6 +1600,7 @@ def _rolling_model_filter_core(
     baseline_tuned_params: pd.DataFrame | None = None,
     rerank_after_filter: bool = True,
     label: str | None = None,
+    weights: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Shared rolling-window core for filtered-universe motivation models.
 
@@ -1597,6 +1617,13 @@ def _rolling_model_filter_core(
         If True, re-rank-normalize features after applying the restricted
         universe filter. If False, keep the already processed full-cross-section
         ranks from ``processed_panel.parquet``.
+    weights : pd.Series | None
+        Optional per-row sample weights aligned to ``panel.index``. When
+        provided, they are propagated through the restricted universe filter
+        and renormalised within each surviving month so that the per-cross-section
+        mean is 1.0 (matching the formal weighted-training convention). The
+        resulting array is passed to ``model.fit(sample_weight=...)``. When
+        ``None`` (default), the model fits unweighted exactly as before.
     """
     import time as _time
     from src.models import create_model
@@ -1667,9 +1694,31 @@ def _rolling_model_filter_core(
         if valid_train.sum() < 100 or valid_val.sum() < 10 or valid_test.sum() < 10:
             continue
 
+        # Carry weights through the same filter + valid-mask pipeline. When
+        # ``weights`` is None we leave w_train/w_val as None so the original
+        # unweighted code path is exercised byte-for-byte.
+        w_train_arr = None
+        w_val_arr = None
+        if weights is not None:
+            w_train_series = weights.reindex(train_df.index)
+            w_val_series = weights.reindex(val_df.index)
+            # Renormalise within each surviving month so per-cross-section
+            # mean is 1.0 in the filtered universe (matches the formal
+            # weighted-training convention of normalising per yyyymm).
+            w_train_series = _renormalize_weights_by_month(
+                w_train_series, train_df["yyyymm"]
+            )
+            w_val_series = _renormalize_weights_by_month(
+                w_val_series, val_df["yyyymm"]
+            )
+            w_train_arr = w_train_series.values
+
         X_train, y_train = X_train[valid_train], y_train[valid_train]
         X_val, y_val = X_val[valid_val], y_val[valid_val]
         X_test, y_test = X_test[valid_test], y_test[valid_test]
+        if w_train_arr is not None:
+            w_train_arr = w_train_arr[valid_train]
+            w_val_arr = w_val_series.values[valid_val]
 
         # Determine params. Baseline tuned files only record retune months, so
         # carry the most recent baseline parameter row forward between tuning
@@ -1694,7 +1743,9 @@ def _rolling_model_filter_core(
         elif months_since_retune >= retune_freq:
             tuning_model = create_model(model_name, seed=seed)
             best_params = tuning_model.tune_hyperparameters(
-                X_train, y_train, X_val, y_val
+                X_train, y_train, X_val, y_val,
+                sample_weight=w_train_arr,
+                sample_weight_val=w_val_arr if w_train_arr is not None else None,
             )
             months_since_retune = 0
             logger.info(
@@ -1702,7 +1753,7 @@ def _rolling_model_filter_core(
             )
 
         model = create_model(model_name, config=best_params, seed=seed)
-        model.fit(X_train, y_train)
+        model.fit(X_train, y_train, sample_weight=w_train_arr)
         y_pred = model.predict(X_test)
 
         test_valid = test_df[valid_test]
@@ -1752,6 +1803,7 @@ def rolling_model_predict_restricted(
     return_col: str = "excess_ret",
     baseline_tuned_params: pd.DataFrame | None = None,
     rerank_after_filter: bool = True,
+    weights: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Train a model on a restricted universe (drop illiquid quintiles).
 
@@ -1760,6 +1812,14 @@ def rolling_model_predict_restricted(
     baseline tuned params or retune inside the restricted universe.
 
     Quintile assignment uses the last month of the training window.
+
+    When ``weights`` is provided, the same series is propagated through the
+    restricted-universe filter and renormalised within each surviving month so
+    the per-cross-section mean is 1.0 in the filtered universe. The resulting
+    array is passed to ``model.fit(sample_weight=...)`` so the restricted
+    model is fit with the requested implementability weighting (e.g.,
+    softmax_rank or tc weights). When ``weights`` is None the function fits
+    unweighted exactly as before.
     """
     if config is None:
         config = load_config()
@@ -1788,6 +1848,7 @@ def rolling_model_predict_restricted(
         baseline_tuned_params=baseline_tuned_params,
         rerank_after_filter=rerank_after_filter,
         label=f"{model_name}_MQ{min_quintile}+",
+        weights=weights,
     )
 
 
