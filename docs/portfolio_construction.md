@@ -439,7 +439,7 @@ the long side indicates that liquidity-weighted training improves stock
 selection primarily among expected winners; concentration on the short side
 indicates the gains come from better identification of expected losers.
 
-The two decompositions in Sections 7.3 and 7.4 are complementary rather than
+The two decompositions in Sections 6.3 and 6.4 are complementary rather than
 redundant. Section 6.3 spans the *entire* prediction distribution at fixed
 five-quantile granularity and is diagnostic of where in that distribution
 training or sorting choices add value; Section 6.4 restricts attention to

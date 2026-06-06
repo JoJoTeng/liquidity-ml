@@ -90,13 +90,15 @@ market-cap robustness, and transaction-cost calculations.
 
 ## Weight Families
 
-Formal weighted training supports three families:
+Formal weighted training supports four families:
 
 - `dolvol`: `DolVol_it / mean_i(DolVol_it)`.
 - `softmax_rank`: `exp(lambda * rank_it)` normalized to mean one, with formal
   lambdas `2` and `3`.
 - `tc`: transaction-cost weights based on spread, daily-scaled volatility, ADV,
   and AUM.
+- `tc_rank`: softmax weights on the within-month percentile rank of `-TC_it`,
+  with formal lambda `3` and AUMs `10`, `100`, `500`, and `1000` million.
 
 All training weights are normalized to mean one within each month.
 
@@ -113,6 +115,10 @@ outputs/formalanalysis/experiment/{model}/tc_10m/
 outputs/formalanalysis/experiment/{model}/tc_100m/
 outputs/formalanalysis/experiment/{model}/tc_500m/
 outputs/formalanalysis/experiment/{model}/tc_1000m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_10m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_100m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_500m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_1000m/
 ```
 
 Each fitted directory stores:

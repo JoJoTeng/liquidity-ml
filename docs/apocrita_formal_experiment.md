@@ -45,23 +45,24 @@ The recommended `--from-processed` mode submits this dependency chain:
 | 20 | `scripts/20_formal_run_experiment.py` | Formal weighted model training |
 | 21a-21e | `scripts/21*_formal_*.py` | Local formal tables and figures after downloading outputs |
 
-In `--from-processed` mode, the generator creates **61 SLURM job scripts**:
+In `--from-processed` mode, the generator creates **73 SLURM job scripts**:
 
 - 4 shared prerequisite jobs: `02`, `03`, `07_download`, `07_regime`
-- 57 model-specific jobs: 19 jobs for each of `elastic_net`, `xgboost`, `neural_network`
+- 69 model-specific jobs: 23 jobs for each of `elastic_net`, `xgboost`, `neural_network`
 
-Full HPC mode creates **63 SLURM job scripts** because it also adds `00` and
+Full HPC mode creates **75 SLURM job scripts** because it also adds `00` and
 `01`.
 
-The formal experiment still has **21 model x weight specifications**:
+The formal experiment has **33 model x weight specifications**:
 
 | Dimension | Values |
 |---|---|
 | Models | `elastic_net`, `xgboost`, `neural_network` |
-| Weight families | `dolvol`, `softmax_rank`, `tc` |
+| Weight families | `dolvol`, `softmax_rank`, `tc`, `tc_rank` |
 | Softmax lambdas | `2`, `3` |
 | TC AUM scenarios | `$10M`, `$100M`, `$500M`, `$1B` |
-| Formal specs | `3 models x (1 dolvol + 2 softmax + 4 TC) = 21` |
+| TC-rank lambda | `3` |
+| Formal specs | `3 models x (1 dolvol + 2 softmax + 4 TC + 4 tc_rank) = 33` |
 
 Formal outputs are saved under:
 
@@ -74,6 +75,10 @@ outputs/formalanalysis/experiment/{model}/tc_10m/
 outputs/formalanalysis/experiment/{model}/tc_100m/
 outputs/formalanalysis/experiment/{model}/tc_500m/
 outputs/formalanalysis/experiment/{model}/tc_1000m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_10m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_100m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_500m/
+outputs/formalanalysis/experiment/{model}/tc_rank_lam3_1000m/
 ```
 
 Motivation Step 3 outputs are saved under:
@@ -316,7 +321,7 @@ ls jobs | wc -l
 Expected:
 
 ```text
-62
+73
 ```
 
 Submit the full dependency chain:
@@ -364,13 +369,13 @@ Check formal predictions:
 for MODEL in elastic_net xgboost neural_network; do
     echo "=== ${MODEL} ==="
     ls -lh outputs/formalanalysis/experiment/${MODEL}/standard/predictions.parquet
-    for WT in dolvol softmax_rank_lam2 softmax_rank_lam3 tc_10m tc_100m tc_500m tc_1000m; do
+    for WT in dolvol softmax_rank_lam2 softmax_rank_lam3 tc_10m tc_100m tc_500m tc_1000m tc_rank_lam3_10m tc_rank_lam3_100m tc_rank_lam3_500m tc_rank_lam3_1000m; do
         ls -lh outputs/formalanalysis/experiment/${MODEL}/${WT}/predictions.parquet
     done
 done
 ```
 
-Expected: 24 prediction files.
+Expected: 36 prediction files.
 
 Check motivation outputs:
 
@@ -506,13 +511,13 @@ Before submit:
 - [ ] `~/liquidml_env` exists
 - [ ] Processed panel, feature list, SignalDoc, and factor CSVs uploaded
 - [ ] `bash -n scripts/generate_hpc_jobs.sh` passes
-- [ ] `bash scripts/generate_hpc_jobs.sh --from-processed` creates 61 jobs
+- [ ] `bash scripts/generate_hpc_jobs.sh --from-processed` creates 73 jobs
 - [ ] `bash scripts/generate_hpc_jobs.sh --from-processed --submit` submitted the dependency chain
 
 After completion:
 
 - [ ] `squeue --me` is empty
-- [ ] 24 formal prediction files exist
+- [ ] 36 formal prediction files exist
 - [ ] Motivation Step 3, 3d, 3e outputs exist for all three models
 - [ ] After downloading HPC outputs locally, model/weight-spec folders exist under `outputs/formalanalysis/analysis/`
 - [ ] Logs do not contain real tracebacks/OOM/failed jobs

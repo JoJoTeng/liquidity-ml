@@ -60,10 +60,9 @@ python scripts/21b_formal_importance_reallocation.py
 python scripts/21c_formal_restriction_curve.py
 python scripts/21d_formal_error_differential.py
 python scripts/21e_formal_portfolio_decomposition.py
-python scripts/22_prepare_portfolio_excel_tables.py --table table11 --model all --weight-spec all --aum all --skip-missing
-python scripts/22_prepare_portfolio_excel_tables.py --table table12 --model all --weight-spec all --aum all --skip-missing
 python scripts/22_prepare_portfolio_excel_tables.py --table table13 --model all --weight-spec all --aum all --skip-missing
 python scripts/22_prepare_portfolio_excel_tables.py --table table14 --model all --weight-spec all --aum all --skip-missing
+python scripts/22b_table12_two_sided.py --model all --weight-spec all --aum all
 ```
 
 Run the formal `20` grid for each active model (`elastic_net`, `xgboost`,
@@ -218,10 +217,12 @@ outputs/formalanalysis/tables/{model}/{stock_universe}/
 
 The active formatted portfolio tables are:
 
-- `table11`: within-liquidity-quintile long-short performance.
-- `table12`: 2x3 Q5-Q1 long-short decomposition.
-- `table13`: standalone Q1-Q5 prediction-quantile portfolios.
-- `table14`: Table-12-style 2x3 decompositions for each standalone prediction quantile.
+- `table12`: 2x3 Q5-Q1 two-sided long-short decomposition (from
+  `22b_table12_two_sided.py`).
+- `table13`: standalone Q1-Q5 prediction-quantile portfolios (from
+  `22_prepare_portfolio_excel_tables.py --table table13`).
+- `table14`: Table-12-style 2x3 decompositions for each standalone prediction
+  quantile (from `22_prepare_portfolio_excel_tables.py --table table14`).
 
 ## Normalization Contract
 
