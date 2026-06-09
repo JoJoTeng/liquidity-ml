@@ -182,11 +182,15 @@ models:
 
   elastic_net:
     alpha: 0.001
-    l1_ratio: 0.5
+    l1_ratio: 0.01 # ridge-dominant (L2-heavy): keeps the L1 term alpha*l1_ratio
+    # small (<=1e-4 across the capped grid below) so coefficients are never all
+    # zeroed. l1_ratio=0.5 (and even 0.1) collapsed to a flat, cross-sectionally
+    # constant prediction whenever tuning picked a high alpha.
     max_iter: 10000
     search_space:
-      alpha: [ 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1 ]
-    n_random_search: 6 # full grid = 6, all evaluated
+      # 0.1 dropped: with l1_ratio=0.01 it gives L1=1e-3, which zeroes all coefs.
+      alpha: [ 0.000001, 0.00001, 0.0001, 0.001, 0.01 ]
+    n_random_search: 5 # full grid = 5, all evaluated
 
   xgboost:
     n_estimators: 1000
