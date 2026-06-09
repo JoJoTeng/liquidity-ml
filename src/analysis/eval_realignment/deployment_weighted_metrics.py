@@ -47,8 +47,6 @@ logger = logging.getLogger(__name__)
 QUINTILES = (1, 2, 3, 4, 5)
 # Pooled liquid (deployable) quintiles.
 LIQUID_QUINTILES = (4.0, 5.0)
-# Universes for which a cumulative-differential figure is emitted by default.
-FIGURE_UNIVERSES = ("full", "liquid_q4q5")
 
 
 def _universe_members() -> list[tuple[str, tuple[float, ...] | None]]:
@@ -259,15 +257,16 @@ def summarize_error_differential(diff_df: pd.DataFrame, config: dict) -> pd.Data
     return pd.DataFrame(rows)
 
 
-def plot_deployment_weighted_error_differential(
+def plot_quintile_error_differentials(
     diff_df: pd.DataFrame,
     out_path: Path,
     model: str,
-    universe: str,
 ) -> None:
-    """Plot the cumulative w-tilde-weighted MSE differential for one universe.
+    """Overlay the cumulative w-tilde-weighted MSE differential by quintile.
 
-    ``diff_df`` must already be filtered to a single universe.
+    ``diff_df`` is the stacked frame from
+    ``compute_deployment_weighted_error_differential``; one line per quintile
+    (Q1-Q5) is drawn on a shared month axis (illiquid -> liquid colour ramp).
     """
     import matplotlib
 
@@ -277,27 +276,39 @@ def plot_deployment_weighted_error_differential(
     from src.analysis.motivation import _set_academic_style
 
     _set_academic_style()
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(
-        range(len(diff_df)),
-        diff_df["cumulative_wmse_diff"],
-        color="steelblue",
-        lw=1.5,
-    )
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    months = sorted(diff_df["yyyymm"].unique())
+    pos = {m: i for i, m in enumerate(months)}
+    cmap = plt.get_cmap("viridis")
+    plotted = False
+    for i, q in enumerate(QUINTILES):
+        sub = diff_df[diff_df["universe"] == f"Q{q}"]
+        if sub.empty:
+            continue
+        ax.plot(
+            sub["yyyymm"].map(pos).to_numpy(),
+            sub["cumulative_wmse_diff"].to_numpy(),
+            label=f"Q{q}",
+            color=cmap(i / (len(QUINTILES) - 1)),
+            lw=1.3,
+        )
+        plotted = True
+    if not plotted:
+        plt.close(fig)
+        return
+
     ax.axhline(0, color="black", ls="--", lw=0.5)
     ax.set_ylabel(r"Cumulative $\tilde{w}$MSE($M_{std}$) $-$ $\tilde{w}$MSE($M_w$)")
     ax.set_title(
-        f"Deployment-weighted squared-error differential ({model}, {universe})"
+        f"Deployment-weighted squared-error differential by liquidity quintile ({model})"
     )
+    ax.legend(title="Liquidity quintile", ncol=5, fontsize=8)
 
-    n_obs = len(diff_df)
-    tick_every = max(n_obs // 10, 1)
-    ax.set_xticks(range(0, n_obs, tick_every))
-    ax.set_xticklabels(
-        diff_df["yyyymm"].astype(str).iloc[::tick_every],
-        rotation=45,
-        fontsize=8,
-    )
+    tick_every = max(len(months) // 10, 1)
+    ticks = range(0, len(months), tick_every)
+    ax.set_xticks(list(ticks))
+    ax.set_xticklabels([str(months[i]) for i in ticks], rotation=45, fontsize=8)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

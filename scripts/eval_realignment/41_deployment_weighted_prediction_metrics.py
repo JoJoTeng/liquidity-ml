@@ -5,12 +5,17 @@
 Realigned evaluation track. For each formal experiment spec, reports the
 deployment-weighted prediction metrics the note's section 4.1 prescribes, scoring
 the standard and weighted predictions under the SAME w-tilde (the spec's own
-training weight family), on the full cross-section and the Q4-Q5 liquid subset:
+training weight family), per liquidity quintile (Q1-Q5), the pooled Q4-Q5 liquid
+subset, and the full cross-section:
 
-  * deployment_weighted_r2.csv                 -- w-tilde-weighted OOS R^2 (Eq. 2)
-  * deployment_weighted_error_diff_full.csv    -- monthly w-tilde-weighted MSE diff
-  * deployment_weighted_error_diff_liquid_q4q5.csv
-  * deployment_weighted_error_diff_stats.csv   -- Newey-West summary per universe
+  * deployment_weighted_r2.csv                -- w-tilde-weighted OOS R^2 (Eq. 2),
+                                                 one row per universe
+  * deployment_weighted_error_diff.csv        -- monthly w-tilde-weighted MSE
+                                                 differential, stacked by universe
+  * deployment_weighted_error_diff_stats.csv  -- Newey-West summary per universe
+
+A figure (deployment_weighted_error_diff_quintiles.png) overlays the cumulative
+differential by liquidity quintile (Q1-Q5) unless --no-figures is set.
 
 Predictions are READ from outputs/formalanalysis/experiment/...; outputs are
 written under outputs/eval_realignment/analysis/{model}/{weight_spec}/, with
@@ -37,10 +42,9 @@ os.environ.setdefault("XDG_CACHE_HOME", str(_runtime_cache / "xdg"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.analysis.eval_realignment.deployment_weighted_metrics import (  # noqa: E402
-    FIGURE_UNIVERSES,
     compute_deployment_weighted_error_differential,
     compute_deployment_weighted_r2,
-    plot_deployment_weighted_error_differential,
+    plot_quintile_error_differentials,
     summarize_error_differential,
 )
 from src.analysis.eval_realignment.script_utils import (  # noqa: E402
@@ -144,15 +148,11 @@ def main():
             )
 
             if not args.no_figures:
-                for universe in FIGURE_UNIVERSES:
-                    u_diff = diff[diff["universe"] == universe]
-                    if not u_diff.empty:
-                        plot_deployment_weighted_error_differential(
-                            u_diff,
-                            out_dir / f"deployment_weighted_error_diff_{universe}.png",
-                            spec["model"],
-                            universe,
-                        )
+                plot_quintile_error_differentials(
+                    diff,
+                    out_dir / "deployment_weighted_error_diff_quintiles.png",
+                    spec["model"],
+                )
 
     logger.info("Done")
 
