@@ -105,8 +105,8 @@ into a portfolio-level loss by loading on the part of the universe the method di
 | Drift compounds gross vs excess returns | §5.3 | `src/portfolio/construction.py:806` `_drift_positions` | **yes (correct)** | compounds gross `ret` — matches note's preference |
 | OOS R² — zero benchmark (pooled, unweighted) | §4.1 | `src/analysis/motivation.py:2001` `compute_quintile_oos_r2` | **yes** | `1−Σ(r−r̂)²/Σr²`, unweighted |
 | DolVol/utility-weighted OOS R² (Eq. 2) | §4.1 | `src/analysis/motivation.py:2129` `compute_utility_weighted_r2` | **yes** | matches Eq. 2 exactly; wired via `src/analysis/formal/liquidity_sorted_r2.py` |
-| §4.1 monthly error differential, liquid universe, DolVol-weighted | §4.1 | `src/analysis/formal/error_differential.py:15` | **partial** | Q4–Q5 MSE differential exists but **unweighted** |
-| §4.2 signal-weighted capacity portfolio | §4.2 | — | **no** | absent; all construction is quantile-based (see §5 for planned construction) |
+| §4.1 monthly error differential, liquid universe, DolVol-weighted | §4.1 | `src/analysis/eval_realignment/deployment_weighted_metrics.py` (script 41) | **yes (built)** | w̃-weighted per-quintile differential implemented in the eval_realignment track; the formalanalysis `error_differential.py:15` remains unweighted. See `docs/eval_realignment_pipeline.md` §2 |
+| §4.2 signal-weighted capacity portfolio | §4.2 | `src/analysis/eval_realignment/capacity_portfolio.py` (script 42) | **yes (built)** | implemented in the eval_realignment track; see `docs/eval_realignment_pipeline.md` §3 |
 | §4.3 capacity-weighted long-only book | §4.3 | `src/portfolio/construction.py:449` `build_prediction_quantile_timeseries` | **partial** | long-only quantile (Q5) book exists, but equal/ME weighted, not capacity-weighted, no liquid screen |
 | §4.4 liquid-universe sorts, DolVol-weighted legs | §4.4 | `src/portfolio/construction.py:135` `_selected_leg_weights` | **no** | legs only equal/ME; no DolVol legs; no liquid-universe restriction |
 | §4.5 implementable-utility / Jensen MV optimizer + CE | §4.5 | — | **no** | absent; only Sharpe + factor alpha |
@@ -119,7 +119,7 @@ into a portfolio-level loss by loading on the part of the universe the method di
 2. **5%-per-name cap (§5.1) — absent.** No per-stock weight cap; intentional today.
 3. **DolVol-weighted portfolio legs (§3, §4.4) — absent.** `PORTFOLIO_WEIGHTINGS`
    is `{"equal","value"}` only — the literal §3 consistency violation.
-4. **Signal-weighted capacity portfolio (§4.2) — absent.**
+4. **Signal-weighted capacity portfolio (§4.2) — now implemented** in the eval_realignment track (script 42); see `docs/eval_realignment_pipeline.md` §3. (Was absent at audit time.)
 5. **Implementable-utility / Jensen optimizer + certainty-equivalent (§4.5) — absent.**
 6. **DolVol-weighted liquid-universe error differential (§4.1) — only unweighted exists.**
 7. **§5.3 off-by-one — NOT borne out.** The note's allegation is *conditional*
@@ -140,9 +140,12 @@ resolved with the project owner — not chosen unilaterally.**
 
 ## 5. Planned construction — Signal-weighted capacity portfolio (§4.2)
 
-> **Status:** planned (not yet implemented). This is the note's *preferred
-> economic test* (§4.2), recorded here as the design target; construction to be
-> built later.
+> **Status:** IMPLEMENTED in the eval_realignment track —
+> `scripts/eval_realignment/42_signal_weighted_capacity_portfolio.py` and
+> `src/analysis/eval_realignment/capacity_portfolio.py`. The as-built methodology
+> and outputs are documented in `docs/eval_realignment_pipeline.md` §3 (the
+> unified signed-book, unit-gross `Σ|θ|=1` convention was adopted). The design
+> notes below are retained for context.
 
 **Idea.** Replace the quantile long–short with a continuous book that holds each
 stock in proportion to its *capacity* and its *centered signal*:
