@@ -338,7 +338,74 @@ months, and reproduces the formalanalysis deliverable formats
   (the $2\times2$ decomposition with Ledoit–Wolf $p$-values), and Panel C
   (breakeven-gate diagnostics, replacing the old tc-target panel).
 
-## 5. Output layout
+## 5. Capacity-weighted long-only book
+
+The note's §4.3 calls a long-only capacity-weighted portfolio from the liquid
+universe "the most defensible implementable object": it drops the illiquid short
+leg — the least realistic component of any long–short backtest, since borrow
+costs and locate constraints are not modeled — so every remaining position is
+one a real fund could hold at the stated AUM.
+
+### 5.1 Construction
+
+Each month the **liquid universe** $L_t$ is the top 60% of the cross-section by
+dollar volume (the note §5.1's screen), applied before any selection. With
+$b_t$ the 80th percentile of $\hat{r}$ within $L_t$, the **Q5 target** is
+$\{i \in L_t : \hat{r}_{i,t} \ge b_t\}$, held at the specification's own
+capacity weights,
+
+$$
+\theta_{i,t} \;=\; \frac{\tilde{w}_{i,t}}{\sum_{j \in \mathrm{members}_t} \tilde{w}_{j,t}},
+\qquad \sum_i \theta_{i,t} = 1,\;\; \theta_{i,t} \ge 0,
+\tag{9}
+$$
+
+re-trued monthly. Weighting the leg by $\tilde{w}$ (rather than equally or by
+market equity) restores the note's §3 consistency principle inside the leg.
+Gross returns, drift, and realized net-of-cost returns reuse the §3 machinery
+unchanged (the cost model $(6)$ charges the re-truing trades automatically);
+degenerate months follow the §4 skip convention.
+
+### 5.2 Cost-aware execution: membership hysteresis
+
+A quantile book's turnover is **membership churn at the selection boundary** —
+names whose predictions remain large but cross $b_t$ by small amounts — so the
+§4 breakeven gate does not transfer (an $|\alpha| \ge \frac{1}{2}\text{Spread}$
+test passes exactly the high-alpha boundary trades that need damping). The
+correct parameter-free device is a **cost-scaled hysteresis band**: replacing a
+held name $i$ with the marginal entrant earns $b_t - \hat{r}_{i,t}$ per month
+and costs $\tfrac{1}{2}\text{Spread}_i + \tfrac{1}{2}\text{Spread}_{\text{entrant}}$,
+so a held name that has left the Q5 target is retained while
+
+$$
+\hat{r}_{i,t} \;\ge\; b_t - \bigl(\tfrac{1}{2}\text{Spread}_{i,t} + \bar{c}_{m,t}\bigr),
+\tag{10}
+$$
+
+with $\bar{c}_{m,t}$ the median half-spread over the month's Q5 target (the
+entrant's toll). Entries are ungated; leaving the screen or the prediction
+universe forces the sale; members are re-trued to $(9)$. As spreads $\to 0$
+the buffer vanishes and the hysteresis book coincides with the plain book.
+The threshold is again the actual trading cost in return units — no tuning
+parameter.
+
+### 5.3 Implementation
+
+Script `scripts/eval_realignment/45_longonly_capacity_q5.py`
+(`src/analysis/eval_realignment/longonly_capacity.py`) builds the four cells
+1A/1B/2A/2B = training (standard/weighted) $\times$ book (plain/hysteresis) and
+writes, per spec: `longonly_q5_metrics_{aum}.csv` (the §3.4–3.5 metric schema),
+`longonly_q5_monthly_{aum}.csv` (stacked monthly series, all four cells),
+`longonly_two_by_two_{aum}.csv` and `longonly_two_by_two_timeseries_{aum}.xlsx`
+(the §4.4 old-format deliverables — factor alphas per cell provide the
+beta-adjusted view a long-only Sharpe requires), `longonly_hysteresis_diag.csv`
+(per-month membership/buffer diagnostics, AUM-independent), and
+`longonly_net_cumret_{aum}.png`; plus the per-model formatted workbook
+`outputs/eval_realignment/tables/{model}/longonly_two_by_two_tables.xlsx`
+(Panel C = hysteresis diagnostics). In the long-only $2\times2$,
+"portfolio effect" denotes the hysteresis effect $\mathrm{SR}(1B)-\mathrm{SR}(1A)$.
+
+## 6. Output layout
 
 ```text
 outputs/eval_realignment/analysis/{model}/{weight_spec}/
@@ -351,6 +418,12 @@ outputs/eval_realignment/analysis/{model}/{weight_spec}/
 ├── capacity_breakeven_net_cumret_{PropTC,100M,500M,1B}.png
 ├── two_by_two_{PropTC,100M,500M,1B}.csv                      # script 44
 ├── two_by_two_timeseries_{PropTC,100M,500M,1B}.xlsx
+├── longonly_q5_metrics_{PropTC,100M,500M,1B}.csv             # script 45
+├── longonly_q5_monthly_{PropTC,100M,500M,1B}.csv
+├── longonly_two_by_two_{PropTC,100M,500M,1B}.csv
+├── longonly_two_by_two_timeseries_{PropTC,100M,500M,1B}.xlsx
+├── longonly_hysteresis_diag.csv
+├── longonly_net_cumret_{PropTC,100M,500M,1B}.png
 └── liquidity_breakpoints/{nyse,full_sample}/                 # script 41
     ├── deployment_weighted_r2.csv
     ├── deployment_weighted_error_diff.csv
@@ -358,13 +431,15 @@ outputs/eval_realignment/analysis/{model}/{weight_spec}/
     └── deployment_weighted_error_diff_quintiles.png
 
 outputs/eval_realignment/tables/{model}/
-└── capacity_two_by_two_tables.xlsx                           # script 44
+├── capacity_two_by_two_tables.xlsx                           # script 44
+└── longonly_two_by_two_tables.xlsx                           # script 45
 ```
 
-Scripts `41`–`44` write disjoint paths and never overwrite each other's output;
-script `44` reads the monthly series of `42` and `43` and must run after them.
+Scripts `41`–`45` write disjoint paths and never overwrite each other's output;
+script `44` reads the monthly series of `42` and `43` and must run after them
+(script `45` is self-contained).
 
-## 6. Scope and relation to the formalanalysis pipeline
+## 7. Scope and relation to the formalanalysis pipeline
 
 This track is restricted to the standard-versus-weighted comparison (the $2\times2$
 training axis); the transaction-cost-target column (cell C of the
@@ -376,10 +451,13 @@ returns of $(6)$, and the execution-stage breakeven gate of §4 — which gates 
 liquidity sort. Predictions are read from
 `outputs/formalanalysis/experiment/{model}/{weight_spec}/predictions.parquet`; the
 track adds no training and modifies no formalanalysis code, configuration, or
-output. The remaining note variations — the capacity-weighted long-only book
-(§4.3), liquid-universe dollar-volume-weighted sorts (§4.4), and the
-implementable-utility / mean–variance metric (§4.5, Jensen et al., 2024) — together
-with factor-model alphas on the capacity book, are deferred.
+output. The capacity-weighted long-only book (note §4.3) is implemented in §5
+(script `45`), with the note §5.1 top-60% dollar-volume screen and
+$\tilde{w}$-weighted legs. The remaining note variations — liquid-universe
+dollar-volume-weighted *long–short* sorts (§4.4) and the full
+implementable-utility / mean–variance optimizer (§4.5, Jensen et al., 2024) —
+are deferred; factor-model alphas on the capacity and long-only books are
+reported per cell in the §4.4/§5.3 deliverables.
 
 ## References
 
