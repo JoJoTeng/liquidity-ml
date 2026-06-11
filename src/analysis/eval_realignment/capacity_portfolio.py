@@ -341,14 +341,23 @@ def plot_capacity_net_cumret(
     from src.analysis.motivation import _set_academic_style
 
     _set_academic_style()
+    # Shared calendar axis: both lines are placed at their true months (union of
+    # the two series), so books with different live months stay time-aligned
+    # instead of the shorter line ending at a mislabeled date.
+    months = sorted(set(series_std.index) | set(series_wt.index))
+    month_pos = {m: i for i, m in enumerate(months)}
+
     fig, ax = plt.subplots(figsize=(10, 4))
     for series, label, color in [
         (series_std, "Standard training", "#4C72B0"),
         (series_wt, "Weighted training", "#DD8452"),
     ]:
         ret = series["ret_net"].dropna()
+        if ret.empty:
+            continue
         cum = (1.0 + ret).cumprod() - 1.0
-        ax.plot(range(len(cum)), cum.to_numpy(), label=label, color=color, lw=1.4)
+        x = [month_pos[m] for m in cum.index]
+        ax.plot(x, cum.to_numpy(), label=label, color=color, lw=1.4)
 
     ax.axhline(0, color="black", ls="--", lw=0.5)
     ax.set_ylabel("Cumulative net return")
@@ -357,12 +366,10 @@ def plot_capacity_net_cumret(
     )
     ax.legend()
 
-    ref = series_wt if len(series_wt) >= len(series_std) else series_std
-    months = ref.index.astype(str).tolist()
     tick_every = max(len(months) // 10, 1)
     ticks = range(0, len(months), tick_every)
     ax.set_xticks(list(ticks))
-    ax.set_xticklabels([months[i] for i in ticks], rotation=45, fontsize=8)
+    ax.set_xticklabels([str(months[i]) for i in ticks], rotation=45, fontsize=8)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
