@@ -221,30 +221,159 @@ AUM it writes, under `outputs/eval_realignment/analysis/{model}/{weight_spec}/`:
 `capacity_portfolio_monthly_{aum}.csv` (stacked monthly gross/net series), and
 `capacity_portfolio_net_cumret_{aum}.png`.
 
-## 4. Output layout
+## 4. Breakeven-gated capacity portfolio
+
+The capacity book of §3 rebalances fully to its target every month, so it trades on
+transient signal noise and, at institutional AUM, the cost drag of $(6)$ can absorb
+the entire gross premium. This section adds a *parameter-free execution layer* that
+gates each name's **trade** — not its signal — by the stock's own breakeven.
+
+### 4.1 The breakeven gate
+
+A trade adds value only if the edge it captures exceeds the cost of capturing it.
+Both sides are observable in the same units (monthly returns): the deployment alpha
+$\alpha_{i,t} = \hat{r}_{i,t} - \bar{r}^{\,w}_t$ — the centered signal the
+dollar-neutral book harvests, from $(3)$ — and the one-way proportional cost
+$\tfrac{1}{2}\text{Spread}_{i,t}$, the cost that $(6)$ charges per unit traded. At
+each rebalance the executed position is
+
+$$
+\theta^{\mathrm{exec}}_{i,t}
+  \;=\;
+  \begin{cases}
+    \theta_{i,t}, & |\alpha_{i,t}| \;\ge\; \tfrac{1}{2}\,\text{Spread}_{i,t},\\[2pt]
+    \theta^{\mathrm{drift}}_{i,t}, & \text{otherwise},
+  \end{cases}
+\tag{8}
+$$
+
+i.e. a name trades *fully* to its §3 target when its alpha clears its own cost and
+otherwise holds the drifted position (a name with no existing position is simply
+not opened). Under proportional costs the one-period trade-or-not decision is
+bang-bang — trading toward the target is optimal precisely when
+$|\alpha| \ge \tfrac{1}{2}\text{Spread}$ — so $(8)$ is the closed-form myopic
+optimum rather than a heuristic, and it contains no tuning parameter: the threshold
+*is* the cost. The gate is independent of $A$; market impact remains in the realized
+net-return accounting of $(6)$.
+
+Names that leave the prediction universe are closed (the closing trade is charged
+in $(6)$), and the gated book is rescaled to half-unit long and short legs.
+Unlike the full-rebalance book — whose raw holdings sum to zero by construction,
+so the single normalization factor of $(5)$ automatically yields $\pm 0.5$ legs —
+the *gated* raw book is generally not dollar-neutral (held drifts and forced
+closes break the sum), so the two legs are rescaled **independently** to $+0.5$
+and $-0.5$. This preserves within-leg relative weights and re-imposes both
+$\sum_i \theta_i = 0$ and $\sum_i |\theta_i| = 1$, leaving the two books on the
+same scale; in the all-pass limit the per-leg rescale coincides with $(5)$.
+Degenerate months carry the previous executed book into the next month's drift.
+By construction the gate nests §3: as $\text{Spread} \to 0$ every name passes and
+the gated book coincides with the full-rebalance book.
+
+### 4.2 Diagnostics and caveats
+
+Per month we report the count pass fraction and the gross-weighted pass fraction
+$\sum_i |\theta_{i,t}|\,\mathbf{1}\{|\alpha_{i,t}| \ge \tfrac{1}{2}\text{Spread}_{i,t}\}$
+(the share of target gross exposure that clears its breakeven), together with the
+median $|\alpha|$ and median half-spread. Empirically the threshold bites in the
+interior of the alpha distribution and the gross-weighted pass fraction exceeds the
+count fraction — the gate trims the low-conviction tail while keeping the names that
+carry the book.
+
+Three caveats are accepted by design. First, the test is *myopic*: the cost is paid
+once while the alpha accrues over the holding period, so a name with
+$|\alpha| < \tfrac{1}{2}\text{Spread}$ could still break even over
+$H^* = \tfrac{1}{2}\text{Spread}/|\alpha|$ months; amortizing would require a
+signal-persistence parameter, which the design deliberately avoids — the gate is
+therefore conservative. Second, the rule is bang-bang, so names near the threshold
+alternate between full trades and inaction. Third, the gate binds asymmetrically
+across the training comparison: flatter predictions clear the cost threshold less
+often, so part of the gated standard-versus-weighted difference reflects *whose
+alpha clears costs* — itself an economically meaningful margin, made transparent by
+the per-book diagnostics.
+
+### 4.3 Implementation
+
+Script `scripts/eval_realignment/43_breakeven_capacity_portfolio.py` builds the
+full-rebalance (§3) and breakeven-gated books from both prediction sets
+(`src/analysis/eval_realignment/breakeven_capacity.py`; the §3 primitives are reused
+unchanged). CLI: `--model`, `--weights`, `--weight-spec`, `--aum`, `--no-figures`.
+Per spec it writes, under `outputs/eval_realignment/analysis/{model}/{weight_spec}/`:
+`capacity_breakeven_metrics_{aum}.csv` (book $\times$ standard/weighted/difference,
+same metric schema as §3.4–3.5), `capacity_breakeven_monthly_{aum}.csv` (gated-book
+monthly series), `capacity_breakeven_gate_diag.csv` (per-month pass fractions,
+AUM-independent), and `capacity_breakeven_net_cumret_{aum}.png`.
+
+### 4.4 Two-by-two deliverables (script 44)
+
+The full-rebalance book of §3 and the breakeven-gated book of §4 form a
+$2\times2$ design analogous to the formalanalysis decomposition, with the
+tc-target column out of scope:
+
+|  | $A$ = full rebalance (§3) | $B$ = breakeven gate (§4) |
+|---|---|---|
+| **1 = standard training** | 1A | 1B |
+| **2 = weighted training** | 2A | 2B |
+
+Script `scripts/eval_realignment/44_capacity_two_by_two_tables.py` is a
+presentation layer that reads the monthly series written by scripts 42 and 43
+(no retraining, no book reconstruction), aligns the four cells on their common
+months, and reproduces the formalanalysis deliverable formats
+(`src/analysis/eval_realignment/two_by_two_tables.py`):
+
+- `two_by_two_{aum}.csv` — the long `metric, value` format of
+  `two_by_three_{AUM}.csv`, with per-cell return/Sharpe/cost/turnover rows and
+  the effect decomposition on net annualized Sharpe ratios: the *training
+  effect* $\mathrm{SR}(2A)-\mathrm{SR}(1A)$, the *portfolio effect*
+  $\mathrm{SR}(1B)-\mathrm{SR}(1A)$ (here the breakeven-gate effect), the
+  *total effect* $\mathrm{SR}(2B)-\mathrm{SR}(1A)$, and the *interaction*
+  (total $-$ training $-$ portfolio), each with Ledoit–Wolf bootstrap
+  $p$-values; factor alphas (CAPM, FF3, FF5, FF5+Mom) are reported per cell.
+  Metric names are kept verbatim from the formalanalysis format.
+- `two_by_two_timeseries_{aum}.xlsx` — one sheet per cell (1A/1B/2A/2B) with
+  the book-level monthly series (gross/net return, transaction cost, turnover,
+  leg counts).
+- `outputs/eval_realignment/tables/{model}/capacity_two_by_two_tables.xlsx` —
+  the Table-12-style formatted workbook (one sheet per weight specification,
+  AUM blocks stacked): Panel A (net and gross Sharpe ratios per cell), Panel B
+  (the $2\times2$ decomposition with Ledoit–Wolf $p$-values), and Panel C
+  (breakeven-gate diagnostics, replacing the old tc-target panel).
+
+## 5. Output layout
 
 ```text
 outputs/eval_realignment/analysis/{model}/{weight_spec}/
 ├── capacity_portfolio_metrics_{PropTC,100M,500M,1B}.csv      # script 42
 ├── capacity_portfolio_monthly_{PropTC,100M,500M,1B}.csv
 ├── capacity_portfolio_net_cumret_{PropTC,100M,500M,1B}.png
+├── capacity_breakeven_metrics_{PropTC,100M,500M,1B}.csv      # script 43
+├── capacity_breakeven_monthly_{PropTC,100M,500M,1B}.csv
+├── capacity_breakeven_gate_diag.csv
+├── capacity_breakeven_net_cumret_{PropTC,100M,500M,1B}.png
+├── two_by_two_{PropTC,100M,500M,1B}.csv                      # script 44
+├── two_by_two_timeseries_{PropTC,100M,500M,1B}.xlsx
 └── liquidity_breakpoints/{nyse,full_sample}/                 # script 41
     ├── deployment_weighted_r2.csv
     ├── deployment_weighted_error_diff.csv
     ├── deployment_weighted_error_diff_stats.csv
     └── deployment_weighted_error_diff_quintiles.png
+
+outputs/eval_realignment/tables/{model}/
+└── capacity_two_by_two_tables.xlsx                           # script 44
 ```
 
-Scripts `41` and `42` write disjoint paths and never overwrite each other's output.
+Scripts `41`–`44` write disjoint paths and never overwrite each other's output;
+script `44` reads the monthly series of `42` and `43` and must run after them.
 
-## 5. Scope and relation to the formalanalysis pipeline
+## 6. Scope and relation to the formalanalysis pipeline
 
 This track is restricted to the standard-versus-weighted comparison (the $2\times2$
 training axis); the transaction-cost-target column (cell C of the
 portfolio-construction appendix) is out of scope, and there is no portfolio-stage
-cost sort — the device the note (§5.2) moves away from. Cost-awareness enters only
-through $\tilde{w}$ (for the transaction-cost families) and the realized net-of-cost
-returns of $(6)$. Predictions are read from
+cost sort — the device the note (§5.2) moves away from. Cost-awareness enters
+through $\tilde{w}$ (for the transaction-cost families), the realized net-of-cost
+returns of $(6)$, and the execution-stage breakeven gate of §4 — which gates the
+*trade* rather than the signal rank, and therefore cannot degenerate into a
+liquidity sort. Predictions are read from
 `outputs/formalanalysis/experiment/{model}/{weight_spec}/predictions.parquet`; the
 track adds no training and modifies no formalanalysis code, configuration, or
 output. The remaining note variations — the capacity-weighted long-only book

@@ -4,10 +4,13 @@
 
 This project tests whether liquidity-aware machine-learning training improves
 asset-pricing predictions and portfolio performance. The current pipeline has
-two branches:
+three branches:
 
 - Motivation analyses in scripts `02` through `07`.
 - Formal model training and analysis in scripts `20` and `21`.
+- Evaluation realignment in `scripts/eval_realignment/41`–`44`, which
+  re-evaluates the formal predictions against the deployment-weighted training
+  objective (see `docs/eval_realignment_pipeline.md`).
 
 The main training data is `data/processed_panel.parquet`, produced by running
 `scripts/00_fetch_data.py` and `scripts/01_process_data.py`.
@@ -36,6 +39,22 @@ python scripts/21c_formal_restriction_curve.py
 python scripts/21d_formal_error_differential.py
 python scripts/21e_formal_portfolio_decomposition.py
 ```
+
+The eval_realignment track reads the formal prediction cache (no retraining)
+and writes under `outputs/eval_realignment/`. Run it after `20` has produced
+predictions for the model/spec; `44` reads the monthly series of `42` and `43`
+and must run last:
+
+```bash
+python scripts/eval_realignment/41_deployment_weighted_prediction_metrics.py --model xgboost --weight-spec dolvol --liquidity-breakpoints both
+python scripts/eval_realignment/42_signal_weighted_capacity_portfolio.py --model xgboost --weight-spec dolvol
+python scripts/eval_realignment/43_breakeven_capacity_portfolio.py --model xgboost --weight-spec dolvol
+python scripts/eval_realignment/44_capacity_two_by_two_tables.py --model xgboost --weight-spec dolvol
+```
+
+Omit `--weight-spec` to cover every fitted spec of a model; `--aum all` is the
+default grid. Full conventions, equations, and output layout are in
+`docs/eval_realignment_pipeline.md`.
 
 For Apocrita, generate SLURM jobs instead of running Python directly on the
 login node:

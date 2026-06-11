@@ -107,9 +107,11 @@ into a portfolio-level loss by loading on the part of the universe the method di
 | DolVol/utility-weighted OOS R² (Eq. 2) | §4.1 | `src/analysis/motivation.py:2129` `compute_utility_weighted_r2` | **yes** | matches Eq. 2 exactly; wired via `src/analysis/formal/liquidity_sorted_r2.py` |
 | §4.1 monthly error differential, liquid universe, DolVol-weighted | §4.1 | `src/analysis/eval_realignment/deployment_weighted_metrics.py` (script 41) | **yes (built)** | w̃-weighted per-quintile differential implemented in the eval_realignment track; the formalanalysis `error_differential.py:15` remains unweighted. See `docs/eval_realignment_pipeline.md` §2 |
 | §4.2 signal-weighted capacity portfolio | §4.2 | `src/analysis/eval_realignment/capacity_portfolio.py` (script 42) | **yes (built)** | implemented in the eval_realignment track; see `docs/eval_realignment_pipeline.md` §3 |
+| §5.2 cost-aware device, redesigned: per-stock breakeven no-trade gate | §5.2 | `src/analysis/eval_realignment/breakeven_capacity.py` (script 43) | **yes (built)** | gates the *trade* (not the signal rank) by \|α\|≥½Spread, in return units — cannot degenerate into a liquidity sort; see `docs/eval_realignment_pipeline.md` §4 |
+| 2×2 decomposition deliverables (old `two_by_three` formats) | §3–§4 | `src/analysis/eval_realignment/two_by_two_tables.py` (script 44) | **yes (built)** | training × cost-device cells 1A/1B/2A/2B; long CSV + per-cell timeseries XLSX + Table-12-style workbook; see `docs/eval_realignment_pipeline.md` §4.4 |
 | §4.3 capacity-weighted long-only book | §4.3 | `src/portfolio/construction.py:449` `build_prediction_quantile_timeseries` | **partial** | long-only quantile (Q5) book exists, but equal/ME weighted, not capacity-weighted, no liquid screen |
 | §4.4 liquid-universe sorts, DolVol-weighted legs | §4.4 | `src/portfolio/construction.py:135` `_selected_leg_weights` | **no** | legs only equal/ME; no DolVol legs; no liquid-universe restriction |
-| §4.5 implementable-utility / Jensen MV optimizer + CE | §4.5 | — | **no** | absent; only Sharpe + factor alpha |
+| §4.5 implementable-utility / Jensen MV optimizer + CE | §4.5 | `src/analysis/eval_realignment/capacity_portfolio.py` `certainty_equivalent` | **partial** | the certainty-equivalent (γ∈{1,5,10}) is now reported on the capacity books (scripts 42/43); the MV-with-costs optimizer remains absent |
 | §6 inference (NW t-stats, LW bootstrap) | §6 | `src/evaluation/statistics.py` | **yes (infra)** | NW + Ledoit–Wolf bootstrap exist, not yet wired into portfolio tables (see `docs/formal_analysis_future_plan.md` tasks 1–3) |
 
 ## 3. Flags — note items not found / divergent
@@ -119,8 +121,8 @@ into a portfolio-level loss by loading on the part of the universe the method di
 2. **5%-per-name cap (§5.1) — absent.** No per-stock weight cap; intentional today.
 3. **DolVol-weighted portfolio legs (§3, §4.4) — absent.** `PORTFOLIO_WEIGHTINGS`
    is `{"equal","value"}` only — the literal §3 consistency violation.
-4. **Signal-weighted capacity portfolio (§4.2) — now implemented** in the eval_realignment track (script 42); see `docs/eval_realignment_pipeline.md` §3. (Was absent at audit time.)
-5. **Implementable-utility / Jensen optimizer + certainty-equivalent (§4.5) — absent.**
+4. **Signal-weighted capacity portfolio (§4.2) — now implemented** in the eval_realignment track (script 42), extended by the breakeven-gated execution layer (script 43) and the old-format 2×2 deliverables (script 44); see `docs/eval_realignment_pipeline.md` §3–§4. (Was absent at audit time.)
+5. **Implementable-utility / Jensen optimizer (§4.5) — optimizer absent.** The certainty-equivalent is now reported on the capacity books (scripts 42/43).
 6. **DolVol-weighted liquid-universe error differential (§4.1) — only unweighted exists.**
 7. **§5.3 off-by-one — NOT borne out.** The note's allegation is *conditional*
    ("if the code mirrors the write-up"); the code does not — `_drift_positions`
