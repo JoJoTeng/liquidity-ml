@@ -288,11 +288,17 @@ def write_two_by_two_block(
     start_row: int,
     title: str,
     subtitle: str | None = None,
+    column_headers: tuple[str, str] = ("Full rebalance", "Breakeven gate"),
+    panel_c_title: str = "Panel C: Breakeven-Gate Diagnostics",
+    panel_c_rows: list[tuple[str, float]] | None = None,
 ) -> int:
-    """Table-12-style block: Panel A (Sharpe), B (2x2 decomposition), C (gate diag).
+    """Table-12-style block: Panel A (Sharpe), B (2x2 decomposition), C (diagnostics).
 
-    Mirrors the 22 formatter with a 3-column layout: metric label, full-rebalance
-    column, breakeven-gate column. Returns the next available row.
+    Mirrors the 22 formatter with a 3-column layout: metric label plus the two
+    cost-device columns. Defaults reproduce the script-44 breakeven block; callers
+    with a different B device (e.g. the script-45 hysteresis book) override
+    ``column_headers`` / ``panel_c_title`` / ``panel_c_rows``. Returns the next
+    available row.
     """
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
@@ -315,7 +321,7 @@ def write_two_by_two_block(
         subtitle_cell.alignment = Alignment(horizontal="center")
         header_row += 1
 
-    for col_idx, value in enumerate(["", "Full rebalance", "Breakeven gate"], start=1):
+    for col_idx, value in enumerate(["", *column_headers], start=1):
         cell = ws.cell(row=header_row, column=col_idx, value=value)
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
@@ -372,11 +378,11 @@ def write_two_by_two_block(
 
     panel_c_row = row_idx
     ws.merge_cells(start_row=panel_c_row, start_column=1, end_row=panel_c_row, end_column=n_cols)
-    cell = ws.cell(row=panel_c_row, column=1, value="Panel C: Breakeven-Gate Diagnostics")
+    cell = ws.cell(row=panel_c_row, column=1, value=panel_c_title)
     cell.font = Font(bold=True, italic=True)
     cell.border = Border(top=medium)
 
-    diag_rows = [
+    diag_rows = panel_c_rows if panel_c_rows is not None else [
         ("Mean pass fraction (standard)", gate_diag.get("standard_pass_frac", np.nan)),
         ("Mean gross pass fraction (standard)", gate_diag.get("standard_gross_pass_frac", np.nan)),
         ("Mean pass fraction (weighted)", gate_diag.get("weighted_pass_frac", np.nan)),
