@@ -111,7 +111,7 @@ into a portfolio-level loss by loading on the part of the universe the method di
 | 2×2 decomposition deliverables (old `two_by_three` formats) | §3–§4 | `src/analysis/eval_realignment/two_by_two_tables.py` (script 44) | **yes (built)** | training × cost-device cells 1A/1B/2A/2B; long CSV + per-cell timeseries XLSX + Table-12-style workbook; see `docs/eval_realignment_pipeline.md` §4.4 |
 | §4.3 capacity-weighted long-only book | §4.3 | `src/portfolio/construction.py:449` `build_prediction_quantile_timeseries` | **partial** | long-only quantile (Q5) book exists, but equal/ME weighted, not capacity-weighted, no liquid screen |
 | §4.4 liquid-universe sorts, DolVol-weighted legs | §4.4 | `src/portfolio/construction.py:135` `_selected_leg_weights` | **no** | legs only equal/ME; no DolVol legs; no liquid-universe restriction |
-| §4.5 implementable-utility / Jensen MV optimizer + CE | §4.5 | `src/analysis/eval_realignment/capacity_portfolio.py` `certainty_equivalent` | **partial** | the certainty-equivalent (γ∈{1,5,10}) is now reported on the capacity books (scripts 42/43); the MV-with-costs optimizer remains absent |
+| §4.5 implementable-utility / Jensen MV optimizer + CE | §4.5 | `src/analysis/eval_realignment/implementable_mv.py` (script 46) | **yes (built, Static tier)** | JKMP (2024) Static-ML closed form on the liquid top-1000 universe (Ledoit-Wolf Σ, Kyle-λ quadratic cost vs cost-blind Markowitz baseline), net CE(γ) at the book's own γ; Multiperiod/Portfolio-ML tiers deferred; see `docs/eval_realignment_pipeline.md` §6 |
 | §6 inference (NW t-stats, LW bootstrap) | §6 | `src/evaluation/statistics.py` | **yes (infra)** | NW + Ledoit–Wolf bootstrap exist, not yet wired into portfolio tables (see `docs/formal_analysis_future_plan.md` tasks 1–3) |
 
 ## 3. Flags — note items not found / divergent
@@ -122,7 +122,7 @@ into a portfolio-level loss by loading on the part of the universe the method di
 3. **DolVol-weighted portfolio legs (§3, §4.4) — absent.** `PORTFOLIO_WEIGHTINGS`
    is `{"equal","value"}` only — the literal §3 consistency violation.
 4. **Signal-weighted capacity portfolio (§4.2) — now implemented** in the eval_realignment track (script 42), extended by the breakeven-gated execution layer (script 43) and the old-format 2×2 deliverables (script 44); see `docs/eval_realignment_pipeline.md` §3–§4. (Was absent at audit time.)
-5. **Implementable-utility / Jensen optimizer (§4.5) — optimizer absent.** The certainty-equivalent is now reported on the capacity books (scripts 42/43).
+5. **Implementable-utility / Jensen optimizer (§4.5) — now implemented at the Static tier** (script 46: closed-form mean-variance with quadratic trading costs vs a cost-blind Markowitz baseline, net CE(γ)); the Multiperiod and end-to-end Portfolio-ML tiers remain deferred.
 6. **DolVol-weighted liquid-universe error differential (§4.1) — only unweighted exists.**
 7. **§5.3 off-by-one — NOT borne out.** The note's allegation is *conditional*
    ("if the code mirrors the write-up"); the code does not — `_drift_positions`

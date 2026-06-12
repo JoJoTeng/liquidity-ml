@@ -8,7 +8,7 @@ three branches:
 
 - Motivation analyses in scripts `02` through `07`.
 - Formal model training and analysis in scripts `20` and `21`.
-- Evaluation realignment in `scripts/eval_realignment/41`–`44`, which
+- Evaluation realignment in `scripts/eval_realignment/41`–`46`, which
   re-evaluates the formal predictions against the deployment-weighted training
   objective (see `docs/eval_realignment_pipeline.md`).
 
@@ -51,6 +51,7 @@ python scripts/eval_realignment/42_signal_weighted_capacity_portfolio.py --model
 python scripts/eval_realignment/43_breakeven_capacity_portfolio.py --model xgboost --weight-spec dolvol
 python scripts/eval_realignment/44_capacity_two_by_two_tables.py --model xgboost --weight-spec dolvol
 python scripts/eval_realignment/45_longonly_capacity_q5.py --model xgboost --weight-spec dolvol
+python scripts/eval_realignment/46_implementable_mv_frontier.py --model xgboost --weight-spec dolvol
 ```
 
 Omit `--weight-spec` to cover every fitted spec of a model; `--aum all` is the

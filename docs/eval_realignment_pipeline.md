@@ -405,7 +405,129 @@ beta-adjusted view a long-only Sharpe requires), `longonly_hysteresis_diag.csv`
 (Panel C = hysteresis diagnostics). In the long-only $2\times2$,
 "portfolio effect" denotes the hysteresis effect $\mathrm{SR}(1B)-\mathrm{SR}(1A)$.
 
-## 6. Output layout
+## 6. Implementable mean–variance frontier
+
+The note's §4.5 proposes feeding the predictions into an implementable
+mean–variance optimizer (Jensen, Kelly, Malamud, and Pedersen, 2024) and
+reporting the net certainty-equivalent — a utility rather than an ad hoc
+Sharpe. Of their three tiers, the one matched to our inputs (one-month-ahead
+predictions only) is the *static* allocator: a one-period mean–variance
+problem with a quadratic trading-cost penalty and the book inherited from the
+previous month,
+
+$$
+\max_{\theta}\;\; \theta'\hat{\mu}_t
+  \;-\; \frac{\gamma}{2}\,\theta'\Sigma_t\,\theta
+  \;-\; \frac{1}{2}\,(\theta - \theta^{\mathrm{drift}}_{t-1})'\,\Lambda\,
+        (\theta - \theta^{\mathrm{drift}}_{t-1}),
+\tag{11}
+$$
+
+with the closed-form solution
+
+$$
+\theta_t \;=\; (\gamma\Sigma_t + \Lambda)^{-1}
+               \bigl(\hat{\mu}_t + \Lambda\,\theta^{\mathrm{drift}}_{t-1}\bigr).
+\tag{12}
+$$
+
+Here $\theta$ is in *wealth fractions* (JKMP's $\omega$): its scale is a choice
+variable, so the book is not gross-normalized — net and gross exposure are
+outputs, reported as leverage diagnostics — and the drift does not renormalize:
+$\theta^{\mathrm{drift}} = \theta \odot (1+r) / (1 + \theta'r)$.
+
+### 6.1 Inputs
+
+- **Universe**: the within-month **top-60% of the cross-section by dollar
+  volume** — identical to the §5 long-only screen and the note §5.1 — so the
+  optimizer and the long-only book are evaluated on the same deployable set
+  (JKMP analogously restrict to the top half of the market by capitalization).
+  All four cells of the comparison share the same universe each month. A
+  Ledoit–Wolf alternative (`--cov lw`, capped at the largest 1,000 names with
+  36 months of history, since the unstructured estimate degrades with $N$)
+  is retained as a robustness mode.
+- **Covariance** $\Sigma_t$ — a monthly adaptation of JKMP's Barra-style
+  characteristic-factor model,
+
+$$
+\Sigma_t \;=\; X_t\,\Omega^F_t\,X_t' \;+\; D_t ,
+\tag{13}
+$$
+
+  where $X_t$ ($N\times K$, $K=9$) holds an intercept and eight broad
+  characteristic-theme exposures (Value, Momentum, Profitability, Investment,
+  Quality, Risk, Liquidity, Other — the feature-category clusters of
+  `config/feature_categories.json`, the in-house analogue of JKMP's thirteen
+  themes): a stock's theme exposure is the mean of its available
+  rank-normalized features in the theme, z-scored cross-sectionally each
+  month. Factor returns $f_s$ are monthly cross-sectional OLS coefficients of
+  the (forward-shifted) excess return on $X_s$; they realize at $s{+}1$, so a
+  rebalance at $t$ uses only $\{f_s : s \le t-1\}$. $\Omega^F_t$ is an EWMA of
+  the factor returns with the monthly translation of JKMP's half-lives —
+  variances 6 months, correlations 18 months (their 126/378 trading days) —
+  recombined as $\mathrm{diag}(\sigma)\,C\,\mathrm{diag}(\sigma)$; $D_t$ is a
+  per-name EWMA of squared residuals (half-life 6 months, floored), with
+  names under 12 residual months assigned the cross-sectional median
+  idiosyncratic variance (the analogue of JKMP's 12-month validity rule).
+  $\Sigma_t$ is never formed densely: solves of $(12)$ use the **Woodbury
+  identity** with a $K$-dimensional inner system, $O(NK^2)$ per month, which
+  is what makes the top-60% universe tractable. Fidelity gaps versus the
+  paper, by design: no industry factors (the panel carries no industry codes)
+  and monthly rather than daily estimation.
+- **Cost matrix** $\Lambda$ (diagonal): the quadratic (Kyle-lambda) form
+  implied by linear price impact at the Frazzini calibration,
+  $\Lambda_{ii} = 2\lambda\,\sigma_{i}\,A/\mathrm{ADV}_{i}$. The quadratic
+  shape is what makes the first-order condition linear — the closed form of
+  $(12)$; realized net returns are always charged with the *true* half-spread
+  plus square-root-impact accounting of $(6)$, so the approximation is policed
+  by the evaluation. The proportional-cost scenario is not run ($A=0$ makes
+  $\Lambda$ vanish and the two columns coincide).
+
+### 6.2 The comparison and reporting
+
+Columns: $A$ = cost-blind Markowitz ($\Lambda = 0$, memoryless — the failing
+baseline that answers whether the cost penalty is needed) versus $B$ =
+cost-aware static allocator; rows = standard versus weighted predictions
+through the identical allocator, $\Sigma$, and costs. The headline is the
+**net certainty-equivalent** $\mathrm{CE}(\gamma)$ of $(7)$ with each book
+built *and* evaluated at its own $\gamma \in \{10, 100, 500\}$ (reaching past
+JKMP's base case $\gamma=10$ because raw, unshrunk $\hat{\mu}$ through an
+unconstrained optimizer produces extreme leverage at low $\gamma$ — in
+mean–variance the book scales as $1/\gamma$, so the grid traces the frontier
+from aggressive to deployable sizes). Every book is reported in two **views**:
+`raw` (the literal optimizer output — the JKMP frontier object, with gross
+leverage reported as a diagnostic) and `unit_gross` (positions rescaled to
+$\sum_i|\theta_i| = 1$ before the net-of-cost evaluation — the track-comparable
+scale of §3–§5; Sharpe is scale-invariant, the certainty-equivalent is not).
+The old-format $2\times2$ deliverables use the unit-gross view at the base
+case $\gamma=10$. The implementable-frontier figure plots net mean against net
+standard deviation (annualized) across $\gamma$ from the raw view, per book
+and training row.
+
+### 6.3 Implementation
+
+Script `scripts/eval_realignment/46_implementable_mv_frontier.py`
+(`src/analysis/eval_realignment/implementable_mv.py` and
+`src/analysis/eval_realignment/factor_covariance.py`) runs month-outer so each
+month's risk model and factorizations are shared across all books; the factor
+state ($\Omega^F$, $D$) is updated with month $t$'s factor return only *after*
+the month-$t$ solve, preserving the no-lookahead convention. Per spec it
+writes `implementable_mv_metrics_{aum}.csv` (book $\times$ row $\times$
+$\gamma$ $\times$ view with difference rows), `implementable_mv_monthly_{aum}.csv`
+(stacked series incl. leverage), the old-format `mv_two_by_two_{aum}.csv` and
+`mv_two_by_two_timeseries_{aum}.xlsx` (unit-gross view, $\gamma=10$),
+`implementable_mv_frontier_{aum}.png`, `implementable_mv_diag.csv`, and the
+per-model workbook `tables/{model}/implementable_mv_tables.xlsx` (Panel C =
+optimizer diagnostics). CLI: `--aum` (impact-bearing scenarios, $M),
+`--gamma`, `--cov {factor,lw}`, `--screen-pct` (factor mode), `--top-n`
+(LW mode), `--no-figures`. The Ledoit–Wolf robustness mode writes
+`*_lw`-suffixed files so it never overwrites the canonical factor outputs.
+In factor mode the universe matches §5's screen,
+so the §5/§6 exhibits share the deployable set; the full cross-section
+remains covered by script 41, and level comparisons against scripts 42–43
+still mix the device and the universe.
+
+## 7. Output layout
 
 ```text
 outputs/eval_realignment/analysis/{model}/{weight_spec}/
@@ -424,6 +546,12 @@ outputs/eval_realignment/analysis/{model}/{weight_spec}/
 ├── longonly_two_by_two_timeseries_{PropTC,100M,500M,1B}.xlsx
 ├── longonly_hysteresis_diag.csv
 ├── longonly_net_cumret_{PropTC,100M,500M,1B}.png
+├── implementable_mv_metrics_{100M,500M,1B}.csv               # script 46
+├── implementable_mv_monthly_{100M,500M,1B}.csv
+├── mv_two_by_two_{100M,500M,1B}.csv
+├── mv_two_by_two_timeseries_{100M,500M,1B}.xlsx
+├── implementable_mv_frontier_{100M,500M,1B}.png
+├── implementable_mv_diag.csv
 └── liquidity_breakpoints/{nyse,full_sample}/                 # script 41
     ├── deployment_weighted_r2.csv
     ├── deployment_weighted_error_diff.csv
@@ -432,14 +560,15 @@ outputs/eval_realignment/analysis/{model}/{weight_spec}/
 
 outputs/eval_realignment/tables/{model}/
 ├── capacity_two_by_two_tables.xlsx                           # script 44
-└── longonly_two_by_two_tables.xlsx                           # script 45
+├── longonly_two_by_two_tables.xlsx                           # script 45
+└── implementable_mv_tables.xlsx                              # script 46
 ```
 
-Scripts `41`–`45` write disjoint paths and never overwrite each other's output;
+Scripts `41`–`46` write disjoint paths and never overwrite each other's output;
 script `44` reads the monthly series of `42` and `43` and must run after them
-(script `45` is self-contained).
+(scripts `45` and `46` are self-contained).
 
-## 7. Scope and relation to the formalanalysis pipeline
+## 8. Scope and relation to the formalanalysis pipeline
 
 This track is restricted to the standard-versus-weighted comparison (the $2\times2$
 training axis); the transaction-cost-target column (cell C of the
@@ -462,6 +591,8 @@ reported per cell in the §4.4/§5.3 deliverables.
 ## References
 
 - Frazzini, A., R. Israel, and T. J. Moskowitz (2018). "Trading Costs." Working Paper.
+- Gârleanu, N., and L. H. Pedersen (2013). "Dynamic Trading with Predictable Returns and Transaction Costs." *Journal of Finance* 68(6).
 - Jensen, T. I., B. T. Kelly, S. Malamud, and L. H. Pedersen (2024). "Machine Learning and the Implementable Efficient Frontier." *Review of Financial Studies*.
+- Ledoit, O., and M. Wolf (2004). "A well-conditioned estimator for large-dimensional covariance matrices." *Journal of Multivariate Analysis* 88(2).
 - Ledoit, O., and M. Wolf (2008). "Robust performance hypothesis testing with the Sharpe ratio." *Journal of Empirical Finance* 15(5).
 - Shimodaira, H. (2000). "Improving predictive inference under covariate shift by weighting the log-likelihood function." *Journal of Statistical Planning and Inference* 90(2).
