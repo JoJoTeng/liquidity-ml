@@ -237,16 +237,18 @@ def capacity_net_returns(
     return out
 
 
-def capacity_metrics_for_predictions(
-    predictions: pd.DataFrame,
-    panel: pd.DataFrame,
-    config: dict,
-    spec: dict,
-    aum_scenario: int | float | str,
+def capacity_metrics_from_book(
+    gross_df: pd.DataFrame,
+    positions: dict[int, dict[int, float]],
     tc_context: dict[str, Any],
+    aum_scenario: int | float | str,
 ) -> tuple[dict | None, pd.DataFrame | None]:
-    """Build the capacity book for one prediction set and summarize @ one AUM."""
-    gross_df, positions = build_capacity_book(predictions, panel, config, spec)
+    """Net-of-cost metric row + monthly series for an ALREADY-BUILT capacity book.
+
+    Split out from ``capacity_metrics_for_predictions`` so a caller sweeping
+    several AUM scenarios can build the (AUM-independent) book once and re-cost
+    it cheaply per AUM.
+    """
     if gross_df.empty:
         return None, None
 
@@ -281,6 +283,19 @@ def capacity_metrics_for_predictions(
         ["ret_gross", "ret_net", "transaction_cost", "turnover", "n_long", "n_short"]
     ]
     return row, series
+
+
+def capacity_metrics_for_predictions(
+    predictions: pd.DataFrame,
+    panel: pd.DataFrame,
+    config: dict,
+    spec: dict,
+    aum_scenario: int | float | str,
+    tc_context: dict[str, Any],
+) -> tuple[dict | None, pd.DataFrame | None]:
+    """Build the capacity book for one prediction set and summarize @ one AUM."""
+    gross_df, positions = build_capacity_book(predictions, panel, config, spec)
+    return capacity_metrics_from_book(gross_df, positions, tc_context, aum_scenario)
 
 
 def compare_standard_vs_weighted(

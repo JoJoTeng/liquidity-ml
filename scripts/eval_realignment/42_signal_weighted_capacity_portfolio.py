@@ -41,7 +41,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import pandas as pd  # noqa: E402
 
 from src.analysis.eval_realignment.capacity_portfolio import (  # noqa: E402
-    capacity_metrics_for_predictions,
+    build_capacity_book,
+    capacity_metrics_from_book,
     compare_standard_vs_weighted,
     plot_capacity_net_cumret,
 )
@@ -147,13 +148,17 @@ def main():
         preds_standard, preds_weighted = load_predictions(spec)
         weight_label = formal_weight_label(spec, config)
 
+        # Positions are AUM-independent; build each book once, re-cost per AUM.
+        book_std = build_capacity_book(preds_standard, panel, config, spec)
+        book_wt = build_capacity_book(preds_weighted, panel, config, spec)
+
         for aum in aum_scenarios:
             label = aum_label(aum)
-            row_std, series_std = capacity_metrics_for_predictions(
-                preds_standard, panel, config, spec, aum, tc_context
+            row_std, series_std = capacity_metrics_from_book(
+                *book_std, tc_context, aum
             )
-            row_wt, series_wt = capacity_metrics_for_predictions(
-                preds_weighted, panel, config, spec, aum, tc_context
+            row_wt, series_wt = capacity_metrics_from_book(
+                *book_wt, tc_context, aum
             )
             if row_std is None or row_wt is None:
                 logger.warning(
