@@ -5,13 +5,13 @@
 > **Scope:** Deployment-weighted prediction metrics from script `41`
 > **Models:** `elastic_net`, `xgboost`, `neural_network`
 >
-> ⚠ **Staleness note (added 2026-06-11):** all `elastic_net` results in this
-> note were produced under the pre-`e901e31` configuration
-> (`l1_ratio = 0.5`, alpha grid up to `0.1`), in which the model collapses to
-> flat predictions in many months. After the ridge-dominant retrain
-> (`l1_ratio = 0.01`, capped grid) the `elastic_net` tables, rankings, and
-> best-spec recommendations below must be regenerated and re-read before being
-> relied upon. The `xgboost` and `neural_network` results are unaffected.
+> **Refresh note (2026-06-15):** the `elastic_net` results below were
+> regenerated against the ridge-dominant retrain (`l1_ratio = 0.01`, capped
+> alpha grid; commit `e901e31`), which removed the earlier flat-prediction
+> collapse (0 flat months across all specs). The qualitative hierarchy is
+> unchanged; if anything the TC-rank significance is slightly stronger. The
+> `xgboost` and `neural_network` results are unchanged (those models were not
+> retrained — verified identical to the original run).
 > **Specs compared:** `softmax_rank_lam2`, `softmax_rank_lam3`, and
 > `tc_rank_lam3_{10m,100m,500m,1000m}`
 > **Primary breakpoint universe:** `nyse`; `full_sample` checked as robustness.
@@ -128,12 +128,12 @@ parentheses. Positive numbers favor weighted training.
 
 | Model | Spec | Full delta | Full t | Q4-Q5 delta | Q4-Q5 t |
 |---|---|---:|---:|---:|---:|
-| ElasticNet | `softmax_rank_lam2` | 0.025 | 0.85 | 0.044 | 1.12 |
-| ElasticNet | `softmax_rank_lam3` | 0.044 | 0.95 | 0.073 | 1.13 |
-| ElasticNet | `tc_rank_lam3_10m` | 0.157 | 3.16 | 0.324 | 2.44 |
-| ElasticNet | `tc_rank_lam3_100m` | 0.180 | 3.68 | 0.365 | 2.80 |
-| ElasticNet | `tc_rank_lam3_500m` | 0.185 | 3.65 | 0.361 | 2.76 |
-| ElasticNet | `tc_rank_lam3_1000m` | 0.182 | 3.54 | 0.357 | 2.73 |
+| ElasticNet | `softmax_rank_lam2` | 0.019 | 0.86 | 0.074 | 1.86 |
+| ElasticNet | `softmax_rank_lam3` | 0.033 | 0.96 | 0.069 | 1.35 |
+| ElasticNet | `tc_rank_lam3_10m` | 0.176 | 4.07 | 0.399 | 3.53 |
+| ElasticNet | `tc_rank_lam3_100m` | 0.179 | 4.13 | 0.395 | 3.46 |
+| ElasticNet | `tc_rank_lam3_500m` | 0.180 | 4.06 | 0.387 | 3.37 |
+| ElasticNet | `tc_rank_lam3_1000m` | 0.179 | 3.95 | 0.380 | 3.31 |
 | XGBoost | `softmax_rank_lam2` | 0.037 | 0.46 | 0.024 | 0.39 |
 | XGBoost | `softmax_rank_lam3` | -0.073 | -0.29 | -0.045 | -0.08 |
 | XGBoost | `tc_rank_lam3_10m` | 0.031 | 0.47 | 0.081 | 0.61 |
@@ -151,12 +151,12 @@ parentheses. Positive numbers favor weighted training.
 
 | Model | Spec | Q1 delta | Q1 t | Q5 delta | Q5 t |
 |---|---|---:|---:|---:|---:|
-| ElasticNet | `softmax_rank_lam2` | -0.053 | -1.26 | 0.011 | 0.54 |
-| ElasticNet | `softmax_rank_lam3` | -0.106 | -1.40 | 0.024 | 0.61 |
-| ElasticNet | `tc_rank_lam3_10m` | -0.005 | -0.24 | 0.273 | 2.06 |
-| ElasticNet | `tc_rank_lam3_100m` | -0.007 | -0.29 | 0.314 | 2.40 |
-| ElasticNet | `tc_rank_lam3_500m` | -0.016 | -0.41 | 0.307 | 2.36 |
-| ElasticNet | `tc_rank_lam3_1000m` | -0.029 | -0.55 | 0.300 | 2.31 |
+| ElasticNet | `softmax_rank_lam2` | -0.092 | -1.99 | 0.049 | 1.24 |
+| ElasticNet | `softmax_rank_lam3` | -0.124 | -1.83 | 0.032 | 0.79 |
+| ElasticNet | `tc_rank_lam3_10m` | -0.008 | -0.31 | 0.351 | 2.94 |
+| ElasticNet | `tc_rank_lam3_100m` | -0.021 | -0.46 | 0.344 | 2.87 |
+| ElasticNet | `tc_rank_lam3_500m` | -0.034 | -0.62 | 0.333 | 2.78 |
+| ElasticNet | `tc_rank_lam3_1000m` | -0.042 | -0.71 | 0.325 | 2.71 |
 | XGBoost | `softmax_rank_lam2` | -0.064 | -0.35 | -0.035 | -0.01 |
 | XGBoost | `softmax_rank_lam3` | -0.231 | -1.10 | -0.112 | -0.46 |
 | XGBoost | `tc_rank_lam3_10m` | -0.068 | -0.50 | 0.111 | 0.56 |
@@ -176,15 +176,20 @@ parentheses. Positive numbers favor weighted training.
 
 ElasticNet benefits from all rank-based weighting specs, but TC-rank is much
 stronger than softmax-rank. The softmax specs are directionally positive in
-full and Q4-Q5, but weak. TC-rank produces consistent and statistically
-meaningful improvements, especially in Q5 and Q4-Q5.
+full and Q4-Q5, but weak (and softmax now carries a clearly negative Q1 effect,
+t ≈ -2). TC-rank produces consistent and statistically meaningful improvements,
+especially in Q5 and Q4-Q5. After the ridge-dominant retrain the picture is
+qualitatively unchanged — if anything the TC-rank significance is slightly
+stronger (full t ≈ 4.0-4.1, Q4-Q5 t ≈ 3.3-3.5) — and the strongest AUM within
+TC-rank shifts toward the lower end (10m-100m) in Q4-Q5 and Q5.
 
 Best ElasticNet specs:
 
 ```text
-Full:    tc_rank_lam3_500m / tc_rank_lam3_1000m / tc_rank_lam3_100m are similar.
-Q4-Q5:   tc_rank_lam3_100m is slightly strongest.
-Q5:      tc_rank_lam3_100m is strongest.
+Full:    the four tc_rank AUMs are near-identical (0.176-0.180 delta);
+         tc_rank_lam3_100m has the strongest t-stat (4.13).
+Q4-Q5:   tc_rank_lam3_10m is marginally strongest (0.399), 100m next (0.395).
+Q5:      tc_rank_lam3_10m is strongest (0.351), 100m next (0.344).
 ```
 
 ### XGBoost
