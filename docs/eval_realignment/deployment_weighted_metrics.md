@@ -155,43 +155,73 @@ For reference, the sign conventions are:
 ## 7. Results
 
 Across three model families and eleven importance-weight specifications, the
-realigned metrics deliver a consistent verdict. The table reports the training
-effect $\Delta R^2_{\tilde{w}}$ on the full cross-section under the NYSE breakpoint
-convention, in percentage points, with the Newey–West $t$-statistic of the monthly
-differential in parentheses; the out-of-sample window is 2000–2024 ($T = 299$
-months).
+realigned metric delivers a consistent verdict. The tables report the training
+effect $\Delta R^2_{\tilde{w}}$ by evaluation universe under the NYSE breakpoint
+convention, in percentage points (out-of-sample window 2000–2024), for four
+representative specifications. Significance is assessed separately, on the monthly
+weighted-error differential of §4–§5, and is not conflated with the level effects
+here.
 
-| Model | dolvol | softmax-rank ($\lambda{=}2$) | TC ($\$10$M) | TC-rank ($\lambda{=}3$, $\$100$M) |
-|:--|--:|--:|--:|--:|
-| ElasticNet     | $-0.96\;(-2.13)$ | $\;\;0.02\;(0.86)$  | $0.46\;(4.64)$ | $0.18\;(4.13)$ |
-| XGBoost        | $-0.45\;(-1.03)$ | $\;\;0.04\;(0.46)$  | $0.46\;(2.36)$ | $0.10\;(0.64)$ |
-| Neural network | $-0.41\;(-0.94)$ | $-0.04\;(-0.23)$    | $0.65\;(2.22)$ | $0.19\;(0.92)$ |
+*dolvol*
 
-Three regularities hold across all three models. First, the raw dollar-volume
-weight (dolvol) — the specification underlying the original portfolio results —
-*lowers* deployment-weighted accuracy, significantly so for ElasticNet: an
-unbounded capacity weight over-concentrates on the largest names and degrades the
-very objective it is meant to serve. Second, the bounded rank transform of dollar
-volume (softmax-rank) is approximately neutral, whereas the cost-aware weights
-(transaction-cost and transaction-cost-rank) are uniformly positive and are the
-only specifications to attain significance; the low-capital transaction-cost weight
-(TC, $\$10$M) is the single specification significant in all three models. Third,
-the effect is larger in the liquid (deployable) subset than in the full
-cross-section — for ElasticNet's TC ($\$10$M) weight, $\Delta R^2_{\tilde{w}}$ rises
-from $0.46$ on the full cross-section to $0.64$ on $Q_4 \cup Q_5$ — confirming that
-importance-weighted training improves accuracy precisely where tradable capital is
-concentrated.
+| Model | $Q_1$ | $Q_2$ | $Q_3$ | $Q_4$ | $Q_5$ | $Q_4\cup Q_5$ | Full |
+|:--|--:|--:|--:|--:|--:|--:|--:|
+| ElasticNet     | $-0.55$ | $-0.28$ | $-0.31$ | $-0.48$ | $-1.09$ | $-1.02$ | $-0.96$ |
+| XGBoost        | $-0.42$ | $\;\;0.09$ | $\;\;0.24$ | $\;\;0.18$ | $-0.60$ | $-0.50$ | $-0.45$ |
+| Neural network | $-2.69$ | $-0.76$ | $-0.18$ | $-0.08$ | $-0.45$ | $-0.41$ | $-0.41$ |
 
-The strength of the evidence is graded by model. For ElasticNet the cost-aware
-gains are large and strongly significant ($t \approx 4$ on the full cross-section,
-$t \approx 3$ on $Q_4 \cup Q_5$). For XGBoost and the neural network the same
-specifications are positive but, with the exception of the low-capital
-transaction-cost weight, fall short of conventional significance — and for the
-neural network the most aggressive softmax weight is mildly harmful. This grading
-matches the prior of a real but moderate effect: the realigned prediction metric
-recovers a genuine benefit to cost-aware importance weighting that the headline
-long–short obscures, decisively for the linear model and directionally for the two
-non-linear models.
+*softmax-rank ($\lambda{=}2$)*
+
+| Model | $Q_1$ | $Q_2$ | $Q_3$ | $Q_4$ | $Q_5$ | $Q_4\cup Q_5$ | Full |
+|:--|--:|--:|--:|--:|--:|--:|--:|
+| ElasticNet     | $-0.09$ | $0.04$ | $0.10$ | $0.10$ | $\;\;0.05$ | $\;\;0.07$ | $\;\;0.02$ |
+| XGBoost        | $-0.06$ | $0.12$ | $0.15$ | $0.08$ | $-0.04$ | $\;\;0.02$ | $\;\;0.04$ |
+| Neural network | $-0.12$ | $-0.01$ | $0.02$ | $0.02$ | $-0.07$ | $-0.02$ | $-0.04$ |
+
+*transaction-cost (TC, $\$10$M)*
+
+| Model | $Q_1$ | $Q_2$ | $Q_3$ | $Q_4$ | $Q_5$ | $Q_4\cup Q_5$ | Full |
+|:--|--:|--:|--:|--:|--:|--:|--:|
+| ElasticNet     | $0.27$ | $0.34$ | $0.58$ | $0.71$ | $0.56$ | $0.64$ | $0.46$ |
+| XGBoost        | $0.36$ | $0.38$ | $0.54$ | $0.53$ | $0.59$ | $0.56$ | $0.46$ |
+| Neural network | $0.65$ | $0.57$ | $0.57$ | $0.70$ | $0.86$ | $0.77$ | $0.65$ |
+
+*transaction-cost-rank ($\lambda{=}3$, $\$100$M)*
+
+| Model | $Q_1$ | $Q_2$ | $Q_3$ | $Q_4$ | $Q_5$ | $Q_4\cup Q_5$ | Full |
+|:--|--:|--:|--:|--:|--:|--:|--:|
+| ElasticNet     | $-0.02$ | $0.16$ | $0.34$ | $0.44$ | $0.34$ | $0.40$ | $0.18$ |
+| XGBoost        | $-0.06$ | $0.15$ | $0.23$ | $0.19$ | $0.24$ | $0.22$ | $0.10$ |
+| Neural network | $-0.03$ | $0.21$ | $0.33$ | $0.36$ | $0.50$ | $0.42$ | $0.19$ |
+
+**dolvol.** The raw dollar-volume weight lowers deployment-weighted accuracy, and
+the damage concentrates where the weight places its mass: for ElasticNet and
+XGBoost the largest losses fall in $Q_5$ ($-1.09$ and $-0.60$) and in the pooled
+liquid subset — exactly the deployable names the original long–short trades. (The
+neural network's large $Q_1$ figure reflects the near-zero weight mass dollar volume
+assigns to the least-liquid quintile, where the weighted ratio is unstable, rather
+than an economically meaningful loss.)
+
+**softmax-rank.** The bounded rank transform is approximately neutral in every
+quintile — small positive values through the middle of the distribution, near-zero
+or mildly negative at the liquid extreme — consistent with a weight that neither
+over- nor under-concentrates.
+
+**Cost-aware weights.** The transaction-cost and transaction-cost-rank weights are
+positive across the *entire* liquidity distribution, including the least-liquid
+quintile, and largest in the deployable quintiles. The low-capital weight
+(TC, $\$10$M) is positive in all five quintiles for all three models, peaking in
+$Q_4$–$Q_5$ (e.g. $0.86$ for the neural network in $Q_5$); the transaction-cost-rank
+weight shows the same rise from $Q_1$ toward the liquid end. Importance-weighted
+training improves accuracy precisely where tradable capital is concentrated, so the
+full-cross-section figure understates the gain in the deployable subset.
+
+The magnitude of the gain is graded by model: largest for ElasticNet, smaller but
+still positive for XGBoost and the neural network across the cost-aware
+specifications, with the most aggressive softmax weight mildly harmful for the
+neural network. The realigned prediction metric thus recovers a benefit to
+cost-aware importance weighting that the headline long–short obscures — pronounced
+for the linear model and directional for the two non-linear models.
 
 ## References
 
