@@ -287,6 +287,7 @@ def main():
                     column_headers=("Plain Q5", "Membership hysteresis"),
                     panel_c_title="Panel C: Hysteresis Diagnostics",
                     panel_c_rows=pc_rows,
+                    star_effects=True, include_panel_c=False,
                 )
         out_path = tables_dir / "longonly_two_by_two_tables.xlsx"
         wb.save(out_path)

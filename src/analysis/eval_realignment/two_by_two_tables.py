@@ -252,6 +252,7 @@ def build_table_values(
             training / total * 100.0 if abs(total) > 1e-10 else np.nan
         ),
         "lw_training_pval": decomp_net["lw_training"].get("p_value", np.nan),
+        "lw_portfolio_pval": decomp_net["lw_portfolio"].get("p_value", np.nan),
         "lw_total_pval": decomp_net["lw_total"].get("p_value", np.nan),
         "lw_h1_pval": decomp_net["lw_h3"].get("p_value", np.nan),
     }
@@ -291,6 +292,8 @@ def write_two_by_two_block(
     column_headers: tuple[str, str] = ("Full rebalance", "Breakeven gate"),
     panel_c_title: str = "Panel C: Breakeven-Gate Diagnostics",
     panel_c_rows: list[tuple[str, float]] | None = None,
+    star_effects: bool = False,
+    include_panel_c: bool = True,
 ) -> int:
     """Table-12-style block: Panel A (Sharpe), B (2x2 decomposition), C (diagnostics).
 
@@ -353,52 +356,79 @@ def write_two_by_two_block(
 
     panel_b_row = row_idx
     ws.merge_cells(start_row=panel_b_row, start_column=1, end_row=panel_b_row, end_column=n_cols)
-    cell = ws.cell(row=panel_b_row, column=1, value="Panel B: 2x2 Decomposition")
+    panel_b_title = "Panel B: 2x2 Decomposition" + (
+        "  (* = LW p < 0.05)" if star_effects else ""
+    )
+    cell = ws.cell(row=panel_b_row, column=1, value=panel_b_title)
     cell.font = Font(bold=True, italic=True)
     cell.border = Border(top=medium)
 
-    decomp_rows = [
-        ("Training effect (2A - 1A)", table["training_effect"], "0.000"),
-        ("Portfolio effect (1B - 1A)", table["portfolio_effect"], "0.000"),
-        ("Total effect (2B - 1A)", table["total_effect"], "0.000"),
-        ("Interaction", table["interaction"], "0.000"),
-        ("Training share (%)", table["training_share_pct"], "0.0"),
-        ("LW p-val (training, net)", table["lw_training_pval"], "0.000"),
-        ("LW p-val (total, net)", table["lw_total_pval"], "0.000"),
-        ("LW p-val (H1, net)", table["lw_h1_pval"], "0.000"),
-    ]
+    if star_effects:
+        # Effect point estimates carrying a significance star (LW bootstrap
+        # p < 0.05); the separate numeric p-value rows are omitted.
+        def _starred(value, pval, fmt="{:.3f}"):
+            if value is None or pd.isna(value):
+                return ""
+            text = fmt.format(float(value))
+            if pd.notna(pval) and float(pval) < 0.05:
+                text += "*"
+            return text
+
+        decomp_rows = [
+            ("Training effect (2A - 1A)",
+             _starred(table["training_effect"], table.get("lw_training_pval")), None),
+            ("Portfolio effect (1B - 1A)",
+             _starred(table["portfolio_effect"], table.get("lw_portfolio_pval")), None),
+            ("Total effect (2B - 1A)",
+             _starred(table["total_effect"], table.get("lw_total_pval")), None),
+            ("Interaction", _starred(table["interaction"], None), None),
+            ("Training share (%)", _starred(table["training_share_pct"], None, "{:.1f}"), None),
+        ]
+    else:
+        decomp_rows = [
+            ("Training effect (2A - 1A)", table["training_effect"], "0.000"),
+            ("Portfolio effect (1B - 1A)", table["portfolio_effect"], "0.000"),
+            ("Total effect (2B - 1A)", table["total_effect"], "0.000"),
+            ("Interaction", table["interaction"], "0.000"),
+            ("Training share (%)", table["training_share_pct"], "0.0"),
+            ("LW p-val (training, net)", table["lw_training_pval"], "0.000"),
+            ("LW p-val (total, net)", table["lw_total_pval"], "0.000"),
+            ("LW p-val (H1, net)", table["lw_h1_pval"], "0.000"),
+        ]
     row_idx = panel_b_row + 1
     for label, value, fmt in decomp_rows:
         ws.cell(row=row_idx, column=1, value=label)
         ws.merge_cells(start_row=row_idx, start_column=2, end_row=row_idx, end_column=n_cols)
         value_cell = ws.cell(row=row_idx, column=2, value=value)
-        value_cell.number_format = fmt
+        if fmt is not None:
+            value_cell.number_format = fmt
         value_cell.alignment = Alignment(horizontal="center")
         row_idx += 1
 
-    panel_c_row = row_idx
-    ws.merge_cells(start_row=panel_c_row, start_column=1, end_row=panel_c_row, end_column=n_cols)
-    cell = ws.cell(row=panel_c_row, column=1, value=panel_c_title)
-    cell.font = Font(bold=True, italic=True)
-    cell.border = Border(top=medium)
+    if include_panel_c:
+        panel_c_row = row_idx
+        ws.merge_cells(start_row=panel_c_row, start_column=1, end_row=panel_c_row, end_column=n_cols)
+        cell = ws.cell(row=panel_c_row, column=1, value=panel_c_title)
+        cell.font = Font(bold=True, italic=True)
+        cell.border = Border(top=medium)
 
-    diag_rows = panel_c_rows if panel_c_rows is not None else [
-        ("Mean pass fraction (standard)", gate_diag.get("standard_pass_frac", np.nan)),
-        ("Mean gross pass fraction (standard)", gate_diag.get("standard_gross_pass_frac", np.nan)),
-        ("Mean pass fraction (weighted)", gate_diag.get("weighted_pass_frac", np.nan)),
-        ("Mean gross pass fraction (weighted)", gate_diag.get("weighted_gross_pass_frac", np.nan)),
-        ("Median |alpha| (standard)", gate_diag.get("standard_median_abs_alpha", np.nan)),
-        ("Median |alpha| (weighted)", gate_diag.get("weighted_median_abs_alpha", np.nan)),
-        ("Median half-spread", gate_diag.get("standard_median_half_spread", np.nan)),
-    ]
-    row_idx = panel_c_row + 1
-    for label, value in diag_rows:
-        ws.cell(row=row_idx, column=1, value=label)
-        ws.merge_cells(start_row=row_idx, start_column=2, end_row=row_idx, end_column=n_cols)
-        value_cell = ws.cell(row=row_idx, column=2, value=value)
-        value_cell.number_format = "0.0000"
-        value_cell.alignment = Alignment(horizontal="center")
-        row_idx += 1
+        diag_rows = panel_c_rows if panel_c_rows is not None else [
+            ("Mean pass fraction (standard)", gate_diag.get("standard_pass_frac", np.nan)),
+            ("Mean gross pass fraction (standard)", gate_diag.get("standard_gross_pass_frac", np.nan)),
+            ("Mean pass fraction (weighted)", gate_diag.get("weighted_pass_frac", np.nan)),
+            ("Mean gross pass fraction (weighted)", gate_diag.get("weighted_gross_pass_frac", np.nan)),
+            ("Median |alpha| (standard)", gate_diag.get("standard_median_abs_alpha", np.nan)),
+            ("Median |alpha| (weighted)", gate_diag.get("weighted_median_abs_alpha", np.nan)),
+            ("Median half-spread", gate_diag.get("standard_median_half_spread", np.nan)),
+        ]
+        row_idx = panel_c_row + 1
+        for label, value in diag_rows:
+            ws.cell(row=row_idx, column=1, value=label)
+            ws.merge_cells(start_row=row_idx, start_column=2, end_row=row_idx, end_column=n_cols)
+            value_cell = ws.cell(row=row_idx, column=2, value=value)
+            value_cell.number_format = "0.0000"
+            value_cell.alignment = Alignment(horizontal="center")
+            row_idx += 1
 
     bottom_row = row_idx
     for col_idx in range(1, n_cols + 1):

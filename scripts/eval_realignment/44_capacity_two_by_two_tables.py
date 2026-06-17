@@ -134,7 +134,10 @@ def main():
             set_two_by_two_widths(ws)
             row = 1
             for title, subtitle, table, gate_diag in spec_blocks:
-                row = write_two_by_two_block(ws, table, gate_diag, row, title, subtitle)
+                row = write_two_by_two_block(
+                    ws, table, gate_diag, row, title, subtitle,
+                    star_effects=True, include_panel_c=False,
+                )
         out_path = tables_dir / "capacity_two_by_two_tables.xlsx"
         wb.save(out_path)
         logger.info("Saved %s", out_path)
