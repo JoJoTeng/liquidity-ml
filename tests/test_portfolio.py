@@ -173,12 +173,77 @@ class TestBuildLongShort:
         assert sum(result["positions_short"].values()) == pytest.approx(1.0)
 
     def test_value_weighting_requires_market_cap_column(self, single_month, predictions):
-        with pytest.raises(KeyError, match="Value-weight column"):
+        with pytest.raises(KeyError, match="weight column"):
             build_long_short_portfolio(
                 single_month.drop(columns=["liq_me_raw"]),
                 predictions,
                 portfolio_weighting="value",
             )
+
+    def test_dolvol_weighted_leg_weights(self):
+        n = 10
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.arange(n, dtype=float) / 100.0,
+            "liq_me_raw": np.ones(n),
+            "liq_dvol_21d": [1, 1, 1, 1, 1, 1, 1, 1, 2, 6],
+        })
+        predictions = pd.Series(np.arange(n), index=df.index)
+        result = build_long_short_portfolio(
+            df, predictions, portfolio_weighting="dolvol",
+        )
+        # Q5 (top 2 predictions) weighted by dollar volume 2 and 6 -> 0.25 / 0.75.
+        assert result["positions_long"][10009] == pytest.approx(0.25)
+        assert result["positions_long"][10010] == pytest.approx(0.75)
+        assert sum(result["positions_long"].values()) == pytest.approx(1.0)
+
+    def test_dolvol_weighting_differs_from_value(self):
+        n = 10
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.arange(n, dtype=float) / 100.0,
+            "liq_me_raw": [1, 1, 1, 1, 1, 1, 1, 1, 6, 2],
+            "liq_dvol_21d": [1, 1, 1, 1, 1, 1, 1, 1, 2, 6],
+        })
+        predictions = pd.Series(np.arange(n), index=df.index)
+        val = build_long_short_portfolio(df, predictions, portfolio_weighting="value")
+        dvol = build_long_short_portfolio(df, predictions, portfolio_weighting="dolvol")
+        assert val["positions_long"][10010] != pytest.approx(
+            dvol["positions_long"][10010]
+        )
+
+    def test_dolvol_weighting_requires_dolvol_column(self, single_month, predictions):
+        with pytest.raises(KeyError, match="liq_dvol_21d"):
+            build_long_short_portfolio(
+                single_month.drop(columns=["liq_dvol_21d"]),
+                predictions,
+                portfolio_weighting="dolvol",
+            )
+
+    def test_liquidity_screen_forms_quintiles_within_top_60(
+        self, single_month, predictions
+    ):
+        """Top-60% DolVol screen: quintiles are formed on the screened universe,
+        so the bottom 40% by dollar volume never enter a leg."""
+        unscreened = build_long_short_portfolio(single_month, predictions)
+        screened = build_long_short_portfolio(
+            single_month, predictions,
+            liquidity_screen_pct=0.40, liquidity_screen_col="liq_dvol_21d",
+        )
+        assert (unscreened["n_long"] + unscreened["n_short"]) == 200
+        screened_total = screened["n_long"] + screened["n_short"]
+        assert 110 <= screened_total <= 130  # ~2 quintiles of the top-60% (~300)
+        screened_out = set(
+            single_month.loc[
+                single_month["liq_dvol_21d"].rank(pct=True) < 0.40, "permno"
+            ]
+        )
+        legs = screened["permnos_long"] | screened["permnos_short"]
+        assert legs.isdisjoint(screened_out)
 
     def test_no_liquidity_filter(self, single_month, predictions):
         """All stocks should be included (no filtering)."""

@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 _cfg = load_config()
 PORTFOLIO_MODES = {"long_short"}
-PORTFOLIO_WEIGHTINGS = {"equal", "value"}
+PORTFOLIO_WEIGHTINGS = {"equal", "value", "dolvol"}
 PROPORTIONAL_TC_ALIASES = {"proportional", "proportional_tc", "prop_tc", "spread_only"}
 
 
@@ -136,8 +136,13 @@ def _selected_leg_weights(
     leg_df: pd.DataFrame,
     portfolio_weighting: str,
     value_weight_col: str,
+    dolvol_col: str = "liq_dvol_21d",
 ) -> pd.Series:
-    """Return selected-leg weights that sum to one."""
+    """Return selected-leg weights that sum to one.
+
+    ``equal`` gives equal-dollar weights; ``value`` weights by ``value_weight_col``
+    (market cap by default); ``dolvol`` weights by ``dolvol_col`` (dollar volume).
+    """
     portfolio_weighting = _validate_portfolio_weighting(portfolio_weighting)
     if len(leg_df) == 0:
         return pd.Series(dtype=float)
@@ -145,10 +150,11 @@ def _selected_leg_weights(
     if portfolio_weighting == "equal":
         return pd.Series(1.0 / len(leg_df), index=leg_df.index)
 
-    if value_weight_col not in leg_df.columns:
-        raise KeyError(f"Value-weight column {value_weight_col!r} not found")
+    weight_col = dolvol_col if portfolio_weighting == "dolvol" else value_weight_col
+    if weight_col not in leg_df.columns:
+        raise KeyError(f"Selected-leg weight column {weight_col!r} not found")
 
-    raw = pd.to_numeric(leg_df[value_weight_col], errors="coerce")
+    raw = pd.to_numeric(leg_df[weight_col], errors="coerce")
     raw = raw.where(np.isfinite(raw) & (raw > 0.0))
     total = raw.sum(skipna=True)
     if not np.isfinite(total) or total <= 0.0:
@@ -172,6 +178,8 @@ def build_long_short_portfolio(
     portfolio_mode: str = "long_short",
     portfolio_weighting: str = "equal",
     value_weight_col: str = "liq_me_raw",
+    liquidity_screen_pct: float | None = None,
+    liquidity_screen_col: str = "liq_dvol_21d",
 ) -> dict[str, Any]:
     """Build a long-short quantile portfolio for one cross-section.
 
@@ -237,6 +245,15 @@ def build_long_short_portfolio(
         raise ValueError("short_quantile must be between 1 and n_quantiles")
     if long_quantile == short_quantile:
         raise ValueError("long_quantile and short_quantile must differ")
+
+    # -- Liquidity screen (applied before quantile assignment) ------
+    if liquidity_screen_pct is not None:
+        if liquidity_screen_col not in work.columns:
+            raise KeyError(
+                f"Liquidity screen column {liquidity_screen_col!r} not found"
+            )
+        keep = work[liquidity_screen_col].rank(pct=True) >= liquidity_screen_pct
+        work = work[keep]
 
     if len(work) < n_quantiles * 2:
         return _empty_result()
@@ -326,6 +343,8 @@ def build_portfolio_timeseries(
     portfolio_mode: str = "long_short",
     portfolio_weighting: str = "equal",
     value_weight_col: str = "liq_me_raw",
+    liquidity_screen_pct: float | None = None,
+    liquidity_screen_col: str = "liq_dvol_21d",
 ) -> tuple[pd.DataFrame, dict]:
     """Build monthly long-short portfolios over the full test period.
 
@@ -426,6 +445,8 @@ def build_portfolio_timeseries(
             portfolio_mode=portfolio_mode,
             portfolio_weighting=portfolio_weighting,
             value_weight_col=value_weight_col,
+            liquidity_screen_pct=liquidity_screen_pct,
+            liquidity_screen_col=liquidity_screen_col,
         )
 
         result["yyyymm"] = yyyymm
@@ -455,6 +476,8 @@ def build_prediction_quantile_timeseries(
     tc_context: dict[str, Any] | None = None,
     portfolio_weighting: str = "equal",
     value_weight_col: str = "liq_me_raw",
+    liquidity_screen_pct: float | None = None,
+    liquidity_screen_col: str = "liq_dvol_21d",
     proportional_tc_only: bool = False,
 ) -> pd.DataFrame:
     """Build monthly prediction-quantile portfolios and net returns.
@@ -510,6 +533,18 @@ def build_prediction_quantile_timeseries(
             continue
 
         month_panel = month_panel.copy()
+        if liquidity_screen_pct is not None:
+            if liquidity_screen_col not in month_panel.columns:
+                raise KeyError(
+                    f"Liquidity screen column {liquidity_screen_col!r} not found"
+                )
+            keep = (
+                month_panel[liquidity_screen_col].rank(pct=True)
+                >= liquidity_screen_pct
+            )
+            month_panel = month_panel[keep]
+            if len(month_panel) < n_q * 2:
+                continue
         month_panel["_prediction_quantile"] = _assign_quantiles(
             month_panel["_quantile_score"],
             n_q,

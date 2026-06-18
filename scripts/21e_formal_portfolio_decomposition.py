@@ -86,12 +86,23 @@ def parse_args():
     )
     parser.add_argument(
         "--portfolio-weighting",
-        choices=["equal", "value", "both"],
-        default="equal",
+        choices=["equal", "value", "dolvol", "both"],
+        default=None,
         help=(
-            "Selected-stock weights inside each long/short leg. "
-            "Default equal preserves existing outputs; value uses liq_me_raw; "
-            "both writes equal and value-weighted output folders."
+            "Selected-stock weights inside each long/short leg. Default (None) "
+            "reads config.portfolio.weighting (dolvol on this branch); equal uses "
+            "1/N, value uses liq_me_raw, dolvol uses liq_dvol_21d; both writes the "
+            "equal and value folders."
+        ),
+    )
+    parser.add_argument(
+        "--liquidity-screen-pct",
+        type=float,
+        default=None,
+        help=(
+            "Within-month dollar-volume percentile cutoff applied before the "
+            "quantile sort (e.g. 0.40 keeps the top 60%%). Default (None) reads "
+            "config.portfolio.liquidity_screen_pct; pass 0 to disable the screen."
         ),
     )
     return parser.parse_args()
@@ -107,6 +118,13 @@ def main():
     panel = load_processed_panel()
 
     aum_scenarios = parse_aum_millions(args.aum, config)
+    portfolio_cfg = config["portfolio"]
+    if args.portfolio_weighting is None:
+        args.portfolio_weighting = portfolio_cfg.get("weighting", "equal")
+    if args.liquidity_screen_pct is None:
+        args.liquidity_screen_pct = float(
+            portfolio_cfg.get("liquidity_screen_pct", 0.0) or 0.0
+        )
     portfolio_weightings = _portfolio_weightings(args.portfolio_weighting)
     stock_universes = resolve_stock_universes(args.stock_universe)
     use_stock_namespace = namespace_stock_universe(args.stock_universe)
@@ -152,13 +170,21 @@ def _portfolio_weightings(choice: str) -> list[str]:
     return [choice]
 
 
-def _portfolio_run_name(portfolio_weighting: str) -> str:
-    """Return the output folder for one portfolio run."""
-    if portfolio_weighting == "equal":
-        return "prediction_quantile"
-    if portfolio_weighting == "value":
-        return "prediction_quantile_value_weight"
-    raise ValueError(f"Unknown portfolio weighting: {portfolio_weighting!r}")
+def _portfolio_run_name(
+    portfolio_weighting: str, liquidity_screen_pct: float | None = None
+) -> str:
+    """Return the output folder for one portfolio run (weighting + optional screen)."""
+    base = {
+        "equal": "prediction_quantile",
+        "value": "prediction_quantile_value_weight",
+        "dolvol": "prediction_quantile_dolvol_weight",
+    }.get(portfolio_weighting)
+    if base is None:
+        raise ValueError(f"Unknown portfolio weighting: {portfolio_weighting!r}")
+    if liquidity_screen_pct:  # > 0 -> screened (top-(1-pct)) universe
+        keep_pct = round((1.0 - float(liquidity_screen_pct)) * 100)
+        base = f"{base}_liq{keep_pct}"
+    return base
 
 
 def _filter_panel_for_stock_universe(
@@ -198,7 +224,7 @@ def _run_spec_portfolio_weighting(
 ) -> None:
     """Write 21e outputs for one experiment spec and one portfolio weighting."""
     spec_label = spec["spec_label"]
-    portfolio_run = _portfolio_run_name(portfolio_weighting)
+    portfolio_run = _portfolio_run_name(portfolio_weighting, args.liquidity_screen_pct)
     logger.info(
         "--- stock universe: %s; portfolio weighting: %s -> %s ---",
         stock_universe,
@@ -236,6 +262,8 @@ def _run_spec_portfolio_weighting(
             portfolio_mode=INTERNAL_PORTFOLIO_MODE,
             portfolio_weighting=portfolio_weighting,
             portfolio_design=portfolio_run,
+            liquidity_screen_pct=(args.liquidity_screen_pct or None),
+            liquidity_screen_col=config["portfolio"].get("dolvol_col", "liq_dvol_21d"),
             proportional_tc_only=proportional_tc_only,
         )
         rows_2x3 = format_two_by_three_decomposition_rows(result_2x3)

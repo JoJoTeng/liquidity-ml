@@ -134,11 +134,22 @@ def parse_args():
     )
     parser.add_argument(
         "--portfolio-weighting",
-        default="equal",
-        choices=["equal", "value", "both"],
+        default=None,
+        choices=["equal", "value", "dolvol", "both"],
         help=(
-            "Selected-leg weighting within each leg. Use 'both' to write "
-            "separate equal and value-weighted workbooks. Default equal."
+            "Selected-leg weighting within each leg. Default (None) reads "
+            "config.portfolio.weighting (dolvol on this branch); 'both' writes "
+            "separate equal and value workbooks."
+        ),
+    )
+    parser.add_argument(
+        "--liquidity-screen-pct",
+        type=float,
+        default=None,
+        help=(
+            "Within-month dollar-volume percentile cutoff applied before the "
+            "quantile sort (0.40 keeps the top 60%%). Default (None) reads "
+            "config.portfolio.liquidity_screen_pct; pass 0 to disable."
         ),
     )
     add_stock_universe_option(parser)
@@ -256,7 +267,10 @@ def _weighted_prediction_paths(
     }
 
 
-def _build_cell_gross(panel, preds, tc_penalised, tc_target_score, build_aum, config, weighting):
+def _build_cell_gross(
+    panel, preds, tc_penalised, tc_target_score, build_aum, config, weighting,
+    liquidity_screen_pct=None, liquidity_screen_col="liq_dvol_21d",
+):
     """Build one cell's gross long-short time series + positions (AUM-independent).
 
     The TC-aware sort uses half-spread only, so gross returns and positions do
@@ -271,6 +285,8 @@ def _build_cell_gross(panel, preds, tc_penalised, tc_target_score, build_aum, co
         config=config,
         portfolio_mode="long_short",
         portfolio_weighting=weighting,
+        liquidity_screen_pct=liquidity_screen_pct,
+        liquidity_screen_col=liquidity_screen_col,
     )
     return ret_df, pos_hist
 
@@ -776,6 +792,15 @@ def main() -> None:
     models = _resolve_models(args.model)
     weight_specs = _resolve_specs(args.weight_spec)
     aums = _resolve_aums(args.aum)
+    portfolio_cfg = config["portfolio"]
+    if args.portfolio_weighting is None:
+        args.portfolio_weighting = portfolio_cfg.get("weighting", "equal")
+    if args.liquidity_screen_pct is None:
+        args.liquidity_screen_pct = float(
+            portfolio_cfg.get("liquidity_screen_pct", 0.0) or 0.0
+        )
+    liquidity_screen_pct = args.liquidity_screen_pct or None
+    liquidity_screen_col = portfolio_cfg.get("dolvol_col", "liq_dvol_21d")
     portfolio_weightings = _resolve_portfolio_weightings(args.portfolio_weighting)
     stock_universes = resolve_stock_universes(args.stock_universe)
     leg_capital = args.leg_capital
@@ -828,6 +853,11 @@ def main() -> None:
         leg_token = _leg_capital_filename_part(leg_capital)
 
         for weighting in portfolio_weightings:
+            weight_token = weighting + (
+                f"_liq{round((1.0 - liquidity_screen_pct) * 100)}"
+                if liquidity_screen_pct
+                else ""
+            )
             for model in models:
                 model_out_dir = _table_output_dir(out_dir, model, stock_universe)
                 # Standard cells (1A/1B/1C) use the model's shared standard
@@ -860,6 +890,8 @@ def main() -> None:
                         build_aum,
                         config,
                         weighting,
+                        liquidity_screen_pct=liquidity_screen_pct,
+                        liquidity_screen_col=liquidity_screen_col,
                     )
                 std_nets_by_aum = {}
                 for aum_case in aums:
@@ -907,6 +939,8 @@ def main() -> None:
                             build_aum,
                             config,
                             weighting,
+                            liquidity_screen_pct=liquidity_screen_pct,
+                            liquidity_screen_col=liquidity_screen_col,
                         )
 
                     spec_tables: list[tuple[int | str, dict]] = []
@@ -971,7 +1005,7 @@ def main() -> None:
                 output_path = (
                     model_out_dir
                     / (
-                        f"table12_two_sided_{leg_token}{weighting}.xlsx"
+                        f"table12_two_sided_{leg_token}{weight_token}.xlsx"
                     )
                 )
                 _write_table12_workbook(
@@ -990,7 +1024,7 @@ def main() -> None:
                     table13_path = (
                         model_out_dir
                         / (
-                            f"table13_legs_two_sided_{leg_token}{weighting}.xlsx"
+                            f"table13_legs_two_sided_{leg_token}{weight_token}.xlsx"
                         )
                     )
                     _write_table13_legs_workbook(
@@ -1010,7 +1044,7 @@ def main() -> None:
                         model_out_dir
                         / (
                             f"table14_legdecomp_two_sided_{leg_token}"
-                            f"{weighting}.xlsx"
+                            f"{weight_token}.xlsx"
                         )
                     )
                     _write_table14_legdecomp_workbook(

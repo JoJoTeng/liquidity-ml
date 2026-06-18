@@ -34,6 +34,8 @@ def compute_two_by_three_decomposition(
     portfolio_mode: str = "long_short",
     portfolio_weighting: str = "equal",
     portfolio_design: str = "prediction_quantile",
+    liquidity_screen_pct: float | None = None,
+    liquidity_screen_col: str = "liq_dvol_21d",
     proportional_tc_only: bool = False,
 ) -> dict:
     """Build the 2x3 training-vs-portfolio-vs-target decomposition.
@@ -77,6 +79,8 @@ def compute_two_by_three_decomposition(
             config=config,
             tc_context=tc_context,
             portfolio_weighting=portfolio_weighting,
+            liquidity_screen_pct=liquidity_screen_pct,
+            liquidity_screen_col=liquidity_screen_col,
             proportional_tc_only=proportional_tc_only,
         )
         quantile_timeseries[cell_name] = q_df
@@ -171,6 +175,8 @@ def compute_two_by_three_decomposition(
         "portfolio_mode": portfolio_mode,
         "portfolio_weighting": portfolio_weighting,
         "portfolio_design": portfolio_design,
+        "liquidity_screen_pct": liquidity_screen_pct,
+        "liquidity_screen_col": liquidity_screen_col,
     }
 
 

@@ -265,8 +265,15 @@ portfolio:
   long_quantile: 5
   short_quantile: 1
   rebalance_frequency: "monthly"
-  # No liquidity filter - TC-penalised sort (Column 2) replaces it.
-  # No position cap - equal-dollar within each selected quintile leg.
+  # Branch default (eval-realignment): construct the long-short on the liquid
+  # universe with dollar-volume-weighted legs. The old equal-weight, full-universe
+  # behavior is reachable via 21e flags (--portfolio-weighting equal
+  # --liquidity-screen-pct 0).
+  weighting: "dolvol"             # equal | value | dolvol (dolvol = value-weight by dollar volume)
+  value_weight_col: "liq_me_raw"  # column for "value" weighting (market cap)
+  dolvol_col: "liq_dvol_21d"      # column for "dolvol" weighting and the liquidity screen
+  liquidity_screen_pct: 0.40      # keep within-month dvol percentile >= 0.40 (top 60%); 0 disables
+  # No position cap - capacity-weighted within each selected quintile leg.
 
   # ----------------------------------------------------------
   # Transaction Cost Model

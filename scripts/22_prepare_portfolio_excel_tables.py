@@ -66,6 +66,8 @@ WEIGHT_SPEC_CHOICES = [
 PORTFOLIO_RUN_CHOICES = [
     "prediction_quantile",
     "prediction_quantile_value_weight",
+    "prediction_quantile_dolvol_weight",
+    "prediction_quantile_dolvol_weight_liq60",
 ]
 
 
@@ -103,7 +105,7 @@ def parse_args():
     )
     parser.add_argument(
         "--portfolio-run",
-        default="prediction_quantile",
+        default="prediction_quantile_dolvol_weight_liq60",
         choices=[*PORTFOLIO_RUN_CHOICES, "both"],
         help="Portfolio output folder produced by 21e, or 'both'.",
     )
@@ -241,6 +243,10 @@ def _portfolio_run_title(portfolio_run: str) -> str:
     labels = {
         "prediction_quantile": "Equal-weighted prediction quantiles",
         "prediction_quantile_value_weight": "Value-weighted prediction quantiles",
+        "prediction_quantile_dolvol_weight": "Dollar-volume-weighted prediction quantiles",
+        "prediction_quantile_dolvol_weight_liq60": (
+            "Dollar-volume-weighted prediction quantiles, top-60% liquid universe"
+        ),
     }
     return labels.get(portfolio_run, portfolio_run.replace("_", "-"))
 
