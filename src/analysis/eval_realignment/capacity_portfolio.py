@@ -61,24 +61,56 @@ def certainty_equivalent(returns, gamma: float) -> float:
     return float(np.mean(r) - 0.5 * gamma * np.var(r, ddof=1))
 
 
+def _capacity_weight(
+    panel: pd.DataFrame, config: dict, spec: dict, capacity_weighting: str
+) -> pd.Series:
+    """Capacity weight w aligned to ``panel`` rows for the book.
+
+    The unit-gross step Σ|theta| = 1 makes the book scale-invariant in w, so no
+    per-month normalization is applied (any positive rescaling of w gives the
+    identical book). Choices:
+
+    * ``signal``: the spec's deployment weight w̃ (``compute_formal_utility_weights``)
+      — the note's section 4.2 capacity portfolio.
+    * ``equal``: 1 for every name — the naive 1/N benchmark (book ∝ centered signal).
+    * ``value``: market cap (``config.portfolio.value_weight_col``) — the standard
+      value-weighted benchmark.
+    """
+    if capacity_weighting == "signal":
+        return compute_formal_utility_weights(panel, config, spec)
+    if capacity_weighting == "equal":
+        return pd.Series(1.0, index=panel.index)
+    if capacity_weighting == "value":
+        col = config.get("portfolio", {}).get("value_weight_col", "liq_me_raw")
+        if col not in panel.columns:
+            raise KeyError(
+                f"value capacity weighting needs column {col!r}, not in panel"
+            )
+        return panel[col]
+    raise ValueError(f"Unknown capacity_weighting: {capacity_weighting!r}")
+
+
 def build_capacity_book(
     predictions: pd.DataFrame,
     panel: pd.DataFrame,
     config: dict,
     spec: dict,
     min_names: int = 2,
+    capacity_weighting: str = "signal",
 ) -> tuple[pd.DataFrame, dict[int, dict[int, float]]]:
     """Build the dollar-neutral, unit-gross capacity book from one prediction set.
 
-    Per month t: theta_raw = w̃·(r̂ − rbar_w) (Σ theta_raw = 0 by construction),
-    normalized to Σ|theta| = 1. Returns (gross_df, positions) where gross_df has
+    Per month t: theta_raw = w·(r̂ − rbar_w) (Σ theta_raw = 0 by construction),
+    normalized to Σ|theta| = 1, where the capacity weight w is selected by
+    ``capacity_weighting`` (signal=w̃, equal=1, value=market cap; see
+    ``_capacity_weight``). Returns (gross_df, positions) where gross_df has
     [yyyymm, ret_gross, n_long, n_short] and positions maps yyyymm -> {permno: theta}.
     Degenerate months (flat signal, or fewer than ``min_names`` names on a side) are
     skipped.
     """
     target = config["data"]["target_col"]
     sub = panel[["permno", "yyyymm", target]].copy()
-    sub["w_tilde"] = compute_formal_utility_weights(panel, config, spec)
+    sub["w_tilde"] = _capacity_weight(panel, config, spec, capacity_weighting)
 
     merged = (
         predictions[["permno", "yyyymm", "prediction"]]

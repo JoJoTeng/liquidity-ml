@@ -127,6 +127,20 @@ A stock is held long when its predicted return exceeds the capacity-weighted
 average and short when it falls below, with size scaling in $\tilde{w}$. There is no
 quantile cut, no equal-weighting of microcaps, and no portfolio-stage cost sort.
 
+**Capacity-weighting benchmarks.** The weight $\tilde{w}$ in $(3)$ is the spec's
+deployment weight — the *signal* capacity book. Two benchmarks replace it with a
+deployment choice that ignores $\tilde{w}$, to isolate the value of weighting by
+tradeable capacity: *equal* ($w_{i,t}=1$, so $\theta_{i,t}\propto \hat{r}_{i,t}-\bar{r}_t$
+— the naive book that trusts the signal everywhere) and *value*
+($w_{i,t}=\mathrm{ME}_{i,t}$, market capitalization — the standard asset-pricing
+convention and a coarse liquidity proxy). All three run through the identical
+centering $(3)$, dollar-neutralization $(4)$, and unit-gross normalization $(5)$;
+because $(5)$ fixes gross exposure, the book is invariant to any positive rescaling
+of $w$, so no mean-one normalization of the capacity weight is applied. Comparing
+*signal* against *equal* and *value* — each at both training rows — separates the
+**deployment**-stage capacity-weighting effect from the **training**-stage effect of
+$\tilde{w}$ (standard versus weighted).
+
 ### 3.2 Dollar-neutrality and leverage normalization
 
 Centering on $\bar{r}^{\,w}_t$ makes the book dollar-neutral by construction:
@@ -215,11 +229,15 @@ the book over the **full cross-section** (no quintile/breakpoint split) and reus
 the realized-cost primitives (`prepare_transaction_cost_context` and the Frazzini
 formula); only the unified signed-book net-return loop and the
 certainty-equivalent are new (`src/analysis/eval_realignment/capacity_portfolio.py`).
-CLI: `--model`, `--weights`, `--weight-spec`, `--aum`, `--no-figures`. Per spec and
-AUM it writes, under `outputs/eval_realignment/analysis/{model}/{weight_spec}/`:
-`capacity_portfolio_metrics_{aum}.csv` (rows: standard, weighted, difference),
-`capacity_portfolio_monthly_{aum}.csv` (stacked monthly gross/net series), and
-`capacity_portfolio_net_cumret_{aum}.png`.
+CLI: `--model`, `--weights`, `--weight-spec`, `--aum`, `--capacity-weighting`
+(`signal`/`equal`/`value`/`all`; default all three), `--no-figures`. Per spec, AUM,
+and capacity weighting it writes, under
+`outputs/eval_realignment/analysis/{model}/{weight_spec}/`:
+`capacity_portfolio[_equal|_value]_metrics_{aum}.csv` (rows: standard, weighted,
+difference), `capacity_portfolio[_equal|_value]_monthly_{aum}.csv` (stacked monthly
+gross/net series), and `capacity_portfolio[_equal|_value]_net_cumret_{aum}.png`. The
+`signal` weighting keeps the legacy infix-free filenames; `equal`/`value` add the
+infix shown.
 
 ## 4. Breakeven-gated capacity portfolio
 
@@ -409,9 +427,9 @@ beta-adjusted view a long-only Sharpe requires), `longonly_hysteresis_diag.csv`
 
 ```text
 outputs/eval_realignment/analysis/{model}/{weight_spec}/
-├── capacity_portfolio_metrics_{PropTC,100M,500M,1B}.csv      # script 42
-├── capacity_portfolio_monthly_{PropTC,100M,500M,1B}.csv
-├── capacity_portfolio_net_cumret_{PropTC,100M,500M,1B}.png
+├── capacity_portfolio[_equal|_value]_metrics_{PropTC,100M,500M,1B}.csv   # script 42
+├── capacity_portfolio[_equal|_value]_monthly_{PropTC,100M,500M,1B}.csv
+├── capacity_portfolio[_equal|_value]_net_cumret_{PropTC,100M,500M,1B}.png
 ├── capacity_breakeven_metrics_{PropTC,100M,500M,1B}.csv      # script 43
 ├── capacity_breakeven_monthly_{PropTC,100M,500M,1B}.csv
 ├── capacity_breakeven_gate_diag.csv

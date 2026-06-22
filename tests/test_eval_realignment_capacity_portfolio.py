@@ -233,3 +233,124 @@ def test_degenerate_month_skipped():
     gross_df, positions = build_capacity_book(preds, panel, CONFIG, DOLVOL_SPEC)
     assert gross_df.empty
     assert positions == {}
+
+
+# --- capacity-weighting benchmarks (equal / value) ---------------------------
+
+def test_equal_weighting_is_pure_signal():
+    """Equal capacity (w=1): theta ∝ (r_hat - mean r_hat), dollar-neutral unit-gross."""
+    panel = make_panel(
+        [
+            {"permno": 1, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 1.0},
+            {"permno": 2, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 50.0},
+            {"permno": 3, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 100.0},
+        ]
+    )
+    preds = make_preds(panel, [0.02, 0.0, -0.01])
+    rhat = np.array([0.02, 0.0, -0.01])
+    theta_raw = rhat - rhat.mean()  # w = 1
+    expected = theta_raw / np.abs(theta_raw).sum()
+
+    _, positions = build_capacity_book(
+        preds, panel, CONFIG, DOLVOL_SPEC, min_names=1, capacity_weighting="equal"
+    )
+    got = np.array([positions[200001][p] for p in (1, 2, 3)])
+    np.testing.assert_allclose(got, expected, atol=1e-12)
+    assert got.sum() == pytest.approx(0.0, abs=1e-12)
+    assert np.abs(got).sum() == pytest.approx(1.0, abs=1e-12)
+
+
+def test_value_weighting_uses_market_cap():
+    """Value capacity (w=ME): theta ∝ ME*(r_hat - rbar_ME)."""
+    panel = make_panel(
+        [
+            {"permno": 1, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 1.0, "liq_me_raw": 100.0},
+            {"permno": 2, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 2.0, "liq_me_raw": 10.0},
+            {"permno": 3, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 3.0, "liq_me_raw": 5.0},
+        ]
+    )
+    preds = make_preds(panel, [0.03, 0.01, -0.02])
+    me = np.array([100.0, 10.0, 5.0])
+    rhat = np.array([0.03, 0.01, -0.02])
+    rbar_me = (me * rhat).sum() / me.sum()
+    theta_raw = me * (rhat - rbar_me)
+    expected = theta_raw / np.abs(theta_raw).sum()
+
+    _, positions = build_capacity_book(
+        preds, panel, CONFIG, DOLVOL_SPEC, min_names=1, capacity_weighting="value"
+    )
+    got = np.array([positions[200001][p] for p in (1, 2, 3)])
+    np.testing.assert_allclose(got, expected, atol=1e-12)
+    assert got.sum() == pytest.approx(0.0, abs=1e-12)
+
+
+def test_value_weighting_scale_invariant():
+    """Rescaling the value weight (e.g. mean-1 normalization) leaves the book unchanged."""
+    base = [
+        {"permno": 1, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 1.0, "liq_me_raw": 100.0},
+        {"permno": 2, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 2.0, "liq_me_raw": 10.0},
+        {"permno": 3, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 3.0, "liq_me_raw": 5.0},
+    ]
+    mean_me = np.mean([r["liq_me_raw"] for r in base])
+    panel = make_panel(base)
+    panel_norm = make_panel(
+        [{**r, "liq_me_raw": r["liq_me_raw"] / mean_me} for r in base]  # mean-1 ME
+    )
+    preds = make_preds(panel, [0.03, 0.01, -0.02])
+    _, pos = build_capacity_book(
+        preds, panel, CONFIG, DOLVOL_SPEC, min_names=1, capacity_weighting="value"
+    )
+    _, pos_norm = build_capacity_book(
+        preds, panel_norm, CONFIG, DOLVOL_SPEC, min_names=1, capacity_weighting="value"
+    )
+    for p in (1, 2, 3):
+        assert pos[200001][p] == pytest.approx(pos_norm[200001][p], abs=1e-12)
+
+
+def test_capacity_weightings_differ():
+    """signal (DolVol), equal, value give distinct books when the w shapes differ."""
+    panel = make_panel(
+        [
+            {"permno": 1, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 1.0, "liq_me_raw": 100.0},
+            {"permno": 2, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 50.0, "liq_me_raw": 10.0},
+            {"permno": 3, "yyyymm": 200001, "excess_ret": 0.0, "dvol": 3.0, "liq_me_raw": 5.0},
+        ]
+    )
+    preds = make_preds(panel, [0.03, 0.01, -0.02])
+    books = {}
+    for w in ("signal", "equal", "value"):
+        _, pos = build_capacity_book(
+            preds, panel, CONFIG, DOLVOL_SPEC, min_names=1, capacity_weighting=w
+        )
+        books[w] = np.array([pos[200001][p] for p in (1, 2, 3)])
+    assert not np.allclose(books["signal"], books["equal"])
+    assert not np.allclose(books["signal"], books["value"])
+    assert not np.allclose(books["equal"], books["value"])
+
+
+def test_value_weighting_requires_me_column():
+    panel = make_panel(
+        [
+            {"permno": i + 1, "yyyymm": 200001, "excess_ret": 0.01 * (i - 1), "dvol": float(i + 1)}
+            for i in range(3)
+        ]
+    )  # no liq_me_raw
+    preds = make_preds(panel, [0.02, 0.0, -0.01])
+    with pytest.raises(KeyError, match="value capacity weighting needs column"):
+        build_capacity_book(
+            preds, panel, CONFIG, DOLVOL_SPEC, min_names=1, capacity_weighting="value"
+        )
+
+
+def test_unknown_capacity_weighting_raises():
+    panel = make_panel(
+        [
+            {"permno": i + 1, "yyyymm": 200001, "excess_ret": 0.01 * (i - 1), "dvol": float(i + 1)}
+            for i in range(3)
+        ]
+    )
+    preds = make_preds(panel, [0.02, 0.0, -0.01])
+    with pytest.raises(ValueError, match="Unknown capacity_weighting"):
+        build_capacity_book(
+            preds, panel, CONFIG, DOLVOL_SPEC, min_names=1, capacity_weighting="bogus"
+        )
