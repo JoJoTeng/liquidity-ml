@@ -65,6 +65,21 @@ The construction holds a stock long when its prediction is above the deployment-
 
 A month is admitted only when the total weight mass is positive, the signal is not degenerate ($\theta^{\mathrm{raw}}_t \not\equiv 0$), and each side holds at least two names. A month failing any of these is omitted from the series rather than recorded as a zero-return month, so that a degenerate cross-section does not enter the performance statistics as spurious low-variance data.
 
+**Capacity-weighting benchmarks.** The deployment weight $\tilde{w}_{i,t}$ in $\theta^{\mathrm{raw}}_{i,t}=\tilde{w}_{i,t}\bigl(\hat{r}_{i,t+1}-\bar{r}^{\,W}_t\bigr)$ is the object under test — the *signal* capacity book. Two benchmarks replace it with a generic capacity weight $w_{i,t}$ that ignores $\tilde{w}$, holding the forecasts and the rest of the construction fixed:
+
+$$
+w_{i,t}=
+\begin{cases}
+\tilde{w}_{i,t} & \text{signal: the deployment weight,}\\
+1 & \text{equal: the naive book, } \theta_{i,t}\propto \hat{r}_{i,t+1}-\bar{r}_t,\\
+\mathrm{ME}_{i,t} & \text{value: market capitalization,}
+\end{cases}
+$$
+
+where the centering mean $\bar{r}^{\,W}_t$, the dollar-neutralization, and the unit-gross normalization are all formed from the *same* $w$. Because the unit-gross step fixes $\sum_{i}|\theta_{i,t}|=1$, the book is **invariant to any positive rescaling of $w$**: replacing $w_{i,t}$ by $c\,w_{i,t}$ for $c>0$ leaves $\bar{r}^{\,W}_t$, every $\theta_{i,t}$, and every return unchanged, so no mean-one normalization of the capacity weight is applied — unlike the importance weights, whose per-month scale enters the training loss. The *equal* book (the continuous, dollar-neutral analogue of $1/N$ with $w=1$ — not the equal-weighted quintile long–short of the introduction) trusts the signal everywhere and so loads precisely the illiquid, high-forecast names that the capacity weight down-sizes; the *value* book weights by market capitalization, a coarser liquidity proxy than dollar volume.
+
+Both benchmarks are run through the identical pipeline at each training row. Comparing across capacity weights — *signal* against *equal* and *value* — isolates the **deployment-stage** value of weighting by tradeable capacity, while comparing across training rows — baseline against importance-weighted — isolates the **training-stage** effect of $\tilde{w}$, so the two liquidity levers are separated. The benchmark books are written under the same spec directory with an `_equal` / `_value` filename infix; the *signal* book keeps the unsuffixed names.
+
 ## 3. Holding drift and turnover
 
 Between rebalances the positions drift with realized returns: the book set at the previous rebalance, $\theta_{i,t-1}$, is not held fixed but grows over month $t$ with the raw return $r^{\mathrm{raw}}_{i,t}$ its holdings earn. The book carried into the rebalance at $t$ is therefore
