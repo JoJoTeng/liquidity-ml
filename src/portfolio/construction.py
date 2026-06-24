@@ -582,6 +582,62 @@ def build_portfolio_timeseries(
     return returns_df, positions_history
 
 
+def _apply_quantile_hysteresis(
+    month_panel: pd.DataFrame,
+    score_col: str,
+    quantile_col: str,
+    prev_quantile: dict[int, int],
+    tc_half_spread: pd.Series | None,
+    n_q: int,
+) -> pd.Series:
+    """Sticky per-quantile membership band (one quantile per stock).
+
+    Keep a held name in its prior quantile ``q`` unless its score has moved beyond
+    the round-trip cost of switching bins: a held member whose fresh bin differs
+    from ``q`` is retained in ``q`` if its score is within ``hs_i + cm_q`` of q's
+    edge toward the new bin (``cm_q`` = median half-spread of fresh bin q). Each
+    stock stays in exactly one quantile (no adjacent-bin double-counting); the band
+    vanishes as half-spreads -> 0. The per-quantile analogue of the long-short
+    membership hysteresis, used for the Table-14 'B' device.
+    """
+    q_fresh = month_panel[quantile_col]
+    score = month_panel[score_col]
+    if tc_half_spread is not None:
+        hs = tc_half_spread.reindex(month_panel.index).abs()
+        hs = hs.fillna(hs.median() if hs.notna().any() else 0.0)
+    else:
+        hs = pd.Series(0.0, index=month_panel.index)
+
+    lo: dict[int, float] = {}
+    hi: dict[int, float] = {}
+    cm: dict[int, float] = {}
+    for q in range(1, n_q + 1):
+        bin_q = month_panel[q_fresh == q]
+        if len(bin_q):
+            lo[q] = float(bin_q[score_col].min())
+            hi[q] = float(bin_q[score_col].max())
+            cm[q] = float(hs.reindex(bin_q.index).median())
+
+    out = q_fresh.copy()
+    permno = month_panel["permno"]
+    for idx in month_panel.index:
+        prev_q = prev_quantile.get(int(permno.loc[idx]))
+        if prev_q is None or prev_q not in lo:
+            continue
+        fq = int(q_fresh.loc[idx])
+        if fq == prev_q:
+            continue
+        s = float(score.loc[idx])
+        h = float(hs.loc[idx])
+        if fq < prev_q:  # drifted below prev_q's band
+            if s >= lo[prev_q] - (h + cm[prev_q]):
+                out.loc[idx] = prev_q
+        else:            # drifted above prev_q's band
+            if s <= hi[prev_q] + (h + cm[prev_q]):
+                out.loc[idx] = prev_q
+    return out
+
+
 def build_prediction_quantile_timeseries(
     panel: pd.DataFrame,
     predictions: pd.DataFrame | pd.Series,
@@ -594,6 +650,7 @@ def build_prediction_quantile_timeseries(
     liquidity_screen_pct: float | None = None,
     liquidity_screen_col: str = "liq_dvol_21d",
     proportional_tc_only: bool = False,
+    hysteresis: bool = False,
 ) -> pd.DataFrame:
     """Build monthly prediction-quantile portfolios and net returns.
 
@@ -638,10 +695,16 @@ def build_prediction_quantile_timeseries(
         )
     panel_pred["_quantile_score"] = score
 
+    hs_all = None
+    if hysteresis:
+        from src.weighting.schemes import compute_tc_for_sorting
+        hs_all = compute_tc_for_sorting(panel_pred, aum=0.0, config=config)
+
     records: list[dict[str, Any]] = []
     positions_by_quantile: dict[int, dict[int, dict[str, dict[int, float]]]] = {
         q: {} for q in range(1, n_q + 1)
     }
+    prev_quantile: dict[int, int] = {}
 
     for yyyymm, month_panel in panel_pred.groupby("yyyymm", sort=True):
         if len(month_panel) < n_q * 2:
@@ -664,6 +727,25 @@ def build_prediction_quantile_timeseries(
             month_panel["_quantile_score"],
             n_q,
         )
+        if hysteresis and prev_quantile:
+            hs_month = (
+                hs_all.loc[month_panel.index] if hs_all is not None else None
+            )
+            month_panel["_prediction_quantile"] = _apply_quantile_hysteresis(
+                month_panel,
+                score_col="_quantile_score",
+                quantile_col="_prediction_quantile",
+                prev_quantile=prev_quantile,
+                tc_half_spread=hs_month,
+                n_q=n_q,
+            )
+        if hysteresis:
+            prev_quantile = dict(
+                zip(
+                    month_panel["permno"].astype(int),
+                    month_panel["_prediction_quantile"].astype(int),
+                )
+            )
 
         for q in range(1, n_q + 1):
             q_df = month_panel[month_panel["_prediction_quantile"] == q].copy()

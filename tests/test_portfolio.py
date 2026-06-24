@@ -793,3 +793,21 @@ def test_hysteresis_excludes_tc_aware_sort():
             df, preds, hysteresis=True, tc_penalised=True,
             tc_per_stock=pd.Series(0.001, index=df.index),
         )
+
+
+def test_apply_quantile_hysteresis_sticky():
+    from src.portfolio.construction import _apply_quantile_hysteresis
+    mp = pd.DataFrame({
+        "permno": range(10001, 10011),
+        "_quantile_score": np.arange(10, dtype=float),
+    })
+    mp["_q"] = _assign_quantiles(mp["_quantile_score"], 5)  # Q4={score6,7}, Q5={8,9}
+    prev = {10008: 5}  # stock with score 7 (fresh Q4) was in Q5 last month
+    out_wide = _apply_quantile_hysteresis(
+        mp, "_quantile_score", "_q", prev, pd.Series(5.0, index=mp.index), 5
+    )
+    assert int(out_wide.loc[7]) == 5  # within band -> retained in Q5
+    out_zero = _apply_quantile_hysteresis(
+        mp, "_quantile_score", "_q", prev, pd.Series(0.0, index=mp.index), 5
+    )
+    assert int(out_zero.loc[7]) == 4  # band vanishes -> fresh Q4
