@@ -154,11 +154,20 @@ def main():
         preds_std, preds_wt = load_predictions(spec)
         weight_label = formal_weight_label(spec, config)
 
+        # F5: config-driven screen / top-quantile, shared with the formal top40
+        # universe via config.portfolio.liquidity_screen_pct (top-40% = 0.60 on
+        # this branch); the top quantile follows n_quantiles.
+        screen_pct = float(config["portfolio"].get("liquidity_screen_pct", 0.40) or 0.40)
+        n_q = int(config["portfolio"].get("n_quantiles", 5))
+        q5_quantile = (n_q - 1) / n_q
+
         # Books are AUM-independent; build the four cells once per spec.
         books: dict[str, dict[str, tuple]] = {}
         diag_frames = []
         for row_type, preds in [("standard", preds_std), ("weighted", preds_wt)]:
-            inputs = compute_longonly_inputs(preds, panel, config, spec)
+            inputs = compute_longonly_inputs(
+                preds, panel, config, spec, screen_pct=screen_pct
+            )
             if not inputs:
                 logger.warning("No liquid-universe inputs for %s (%s); skipping spec",
                                spec["spec_label"], row_type)
@@ -167,11 +176,13 @@ def main():
             plain = build_longonly_book(
                 preds, panel, config, spec, tc_context,
                 hysteresis=False, inputs=inputs,
+                screen_pct=screen_pct, quantile=q5_quantile,
             )
             diag_rows: list[dict] = []
             hyst = build_longonly_book(
                 preds, panel, config, spec, tc_context,
                 hysteresis=True, inputs=inputs, diag_out=diag_rows,
+                screen_pct=screen_pct, quantile=q5_quantile,
             )
             if plain[0].empty or hyst[0].empty:
                 logger.warning("Empty long-only book for %s (%s); skipping spec",
