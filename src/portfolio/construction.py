@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 _cfg = load_config()
 PORTFOLIO_MODES = {"long_short"}
-PORTFOLIO_WEIGHTINGS = {"equal", "value", "dolvol"}
+PORTFOLIO_WEIGHTINGS = {"equal", "value", "dolvol", "signal"}
 PROPORTIONAL_TC_ALIASES = {"proportional", "proportional_tc", "prop_tc", "spread_only"}
 
 
@@ -137,11 +137,14 @@ def _selected_leg_weights(
     portfolio_weighting: str,
     value_weight_col: str,
     dolvol_col: str = "liq_dvol_21d",
+    signal_weight_col: str = "w_tilde",
 ) -> pd.Series:
     """Return selected-leg weights that sum to one.
 
     ``equal`` gives equal-dollar weights; ``value`` weights by ``value_weight_col``
-    (market cap by default); ``dolvol`` weights by ``dolvol_col`` (dollar volume).
+    (market cap by default); ``dolvol`` weights by ``dolvol_col`` (dollar volume);
+    ``signal`` weights by ``signal_weight_col`` (the spec's deployment weight
+    w-tilde, which the formal layer merges onto the panel before construction).
     """
     portfolio_weighting = _validate_portfolio_weighting(portfolio_weighting)
     if len(leg_df) == 0:
@@ -150,7 +153,11 @@ def _selected_leg_weights(
     if portfolio_weighting == "equal":
         return pd.Series(1.0 / len(leg_df), index=leg_df.index)
 
-    weight_col = dolvol_col if portfolio_weighting == "dolvol" else value_weight_col
+    weight_col = {
+        "dolvol": dolvol_col,
+        "signal": signal_weight_col,
+        "value": value_weight_col,
+    }.get(portfolio_weighting, value_weight_col)
     if weight_col not in leg_df.columns:
         raise KeyError(f"Selected-leg weight column {weight_col!r} not found")
 
@@ -178,6 +185,7 @@ def build_long_short_portfolio(
     portfolio_mode: str = "long_short",
     portfolio_weighting: str = "equal",
     value_weight_col: str = "liq_me_raw",
+    signal_weight_col: str = "w_tilde",
     liquidity_screen_pct: float | None = None,
     liquidity_screen_col: str = "liq_dvol_21d",
 ) -> dict[str, Any]:
@@ -286,11 +294,13 @@ def build_long_short_portfolio(
         long_df,
         portfolio_weighting=portfolio_weighting,
         value_weight_col=value_weight_col,
+        signal_weight_col=signal_weight_col,
     )
     w_short = _selected_leg_weights(
         short_df,
         portfolio_weighting=portfolio_weighting,
         value_weight_col=value_weight_col,
+        signal_weight_col=signal_weight_col,
     )
 
     # -- Gross returns ------
@@ -343,6 +353,7 @@ def build_portfolio_timeseries(
     portfolio_mode: str = "long_short",
     portfolio_weighting: str = "equal",
     value_weight_col: str = "liq_me_raw",
+    signal_weight_col: str = "w_tilde",
     liquidity_screen_pct: float | None = None,
     liquidity_screen_col: str = "liq_dvol_21d",
 ) -> tuple[pd.DataFrame, dict]:
@@ -445,6 +456,7 @@ def build_portfolio_timeseries(
             portfolio_mode=portfolio_mode,
             portfolio_weighting=portfolio_weighting,
             value_weight_col=value_weight_col,
+            signal_weight_col=signal_weight_col,
             liquidity_screen_pct=liquidity_screen_pct,
             liquidity_screen_col=liquidity_screen_col,
         )

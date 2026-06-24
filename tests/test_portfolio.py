@@ -199,6 +199,32 @@ class TestBuildLongShort:
         assert result["positions_long"][10010] == pytest.approx(0.75)
         assert sum(result["positions_long"].values()) == pytest.approx(1.0)
 
+    def test_signal_weighted_leg_weights(self):
+        n = 10
+        df = pd.DataFrame({
+            "yyyymm": 202301,
+            "permno": range(10001, 10001 + n),
+            "ret": np.zeros(n),
+            "excess_ret": np.arange(n, dtype=float) / 100.0,
+            "liq_me_raw": np.ones(n),
+            "liq_dvol_21d": np.ones(n),
+            "w_tilde": [1, 1, 1, 1, 1, 1, 1, 1, 2, 6],
+        })
+        predictions = pd.Series(np.arange(n), index=df.index)
+        result = build_long_short_portfolio(
+            df, predictions, portfolio_weighting="signal",
+        )
+        # Q5 (top 2 predictions) weighted by w-tilde 2 and 6 -> 0.25 / 0.75.
+        assert result["positions_long"][10009] == pytest.approx(0.25)
+        assert result["positions_long"][10010] == pytest.approx(0.75)
+        assert sum(result["positions_long"].values()) == pytest.approx(1.0)
+
+    def test_signal_weighting_requires_w_tilde_column(self, single_month, predictions):
+        with pytest.raises(KeyError, match="w_tilde"):
+            build_long_short_portfolio(
+                single_month, predictions, portfolio_weighting="signal",
+            )
+
     def test_dolvol_weighting_differs_from_value(self):
         n = 10
         df = pd.DataFrame({
