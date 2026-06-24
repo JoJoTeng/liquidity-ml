@@ -184,6 +184,61 @@ def _selected_leg_weights(
 # -- Core: Build Single-Month Portfolio -------------------------------
 
 
+def _apply_hysteresis_bands(
+    work: pd.DataFrame,
+    long_df: pd.DataFrame,
+    short_df: pd.DataFrame,
+    signal_col: str,
+    prev_long: set[int],
+    prev_short: set[int],
+    tc_half_spread: pd.Series | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Retain held leg members inside a cost-scaled no-trade band (both legs).
+
+    Mirrors the long-only membership hysteresis of ``longonly_capacity`` for a
+    long-short book. A held long name (in ``prev_long``) that fell below the fresh
+    top-quantile cutoff ``b_hi`` is retained while its signal is within the round-
+    trip cost of replacing it: ``r_hat >= b_hi - (hs_i + cm_hi)``, where ``hs_i``
+    is the name's own half-spread and ``cm_hi`` the median half-spread of the
+    fresh long leg (the entrant toll). The short leg mirrors this at the bottom
+    cutoff ``b_lo`` with ``r_hat <= b_lo + (hs_i + cm_lo)``. The band is
+    parameter-free and vanishes as half-spreads -> 0 (it then coincides with the
+    plain book). Held names absent from ``work`` (left the universe/screen) are
+    not retained, i.e. force-sold.
+    """
+    if tc_half_spread is not None:
+        hs = tc_half_spread.reindex(work.index).abs()
+        hs = hs.fillna(hs.median() if hs.notna().any() else 0.0)
+    else:
+        hs = pd.Series(0.0, index=work.index)
+    sig = work[signal_col]
+    permno = work["permno"]
+
+    if len(long_df):
+        b_hi = float(long_df[signal_col].min())
+        cm_hi = float(hs.reindex(long_df.index).median())
+        held = work[permno.isin(prev_long) & ~work.index.isin(long_df.index)]
+        if len(held):
+            thr = b_hi - (hs.reindex(held.index) + cm_hi)
+            keep = held[sig.reindex(held.index) >= thr]
+            long_df = pd.concat([long_df, keep])
+
+    if len(short_df):
+        b_lo = float(short_df[signal_col].max())
+        cm_lo = float(hs.reindex(short_df.index).median())
+        held = work[
+            permno.isin(prev_short)
+            & ~work.index.isin(short_df.index)
+            & ~work.index.isin(long_df.index)  # never hold a name on both legs
+        ]
+        if len(held):
+            thr = b_lo + (hs.reindex(held.index) + cm_lo)
+            keep = held[sig.reindex(held.index) <= thr]
+            short_df = pd.concat([short_df, keep])
+
+    return long_df, short_df
+
+
 def build_long_short_portfolio(
     df: pd.DataFrame,
     predictions: pd.Series,
@@ -200,6 +255,10 @@ def build_long_short_portfolio(
     signal_weight_col: str = "w_tilde",
     liquidity_screen_pct: float | None = None,
     liquidity_screen_col: str = "liq_dvol_21d",
+    hysteresis: bool = False,
+    prev_long: set[int] | None = None,
+    prev_short: set[int] | None = None,
+    tc_half_spread: pd.Series | None = None,
 ) -> dict[str, Any]:
     """Build a long-short quantile portfolio for one cross-section.
 
@@ -237,6 +296,10 @@ def build_long_short_portfolio(
     portfolio_weighting = _validate_portfolio_weighting(portfolio_weighting)
     if tc_penalised and tc_target_score:
         raise ValueError("tc_penalised and tc_target_score are mutually exclusive")
+    if hysteresis and (tc_penalised or tc_target_score):
+        raise ValueError(
+            "hysteresis replaces the TC-aware sort; they are mutually exclusive"
+        )
     work = df.copy()
     if return_col not in work.columns:
         raise KeyError(f"Portfolio return column {return_col!r} not found")
@@ -297,6 +360,16 @@ def build_long_short_portfolio(
         work["_rank_quantile"] = _assign_quantiles(work["_signal"], n_quantiles)
         long_df = work[work["_rank_quantile"] == long_quantile]
         short_df = work[work["_rank_quantile"] == short_quantile]
+        if hysteresis and (prev_long or prev_short):
+            long_df, short_df = _apply_hysteresis_bands(
+                work,
+                long_df,
+                short_df,
+                signal_col="_signal",
+                prev_long=prev_long or set(),
+                prev_short=prev_short or set(),
+                tc_half_spread=tc_half_spread,
+            )
 
     if len(long_df) < 2 or len(short_df) < 2:
         return _empty_result()
@@ -368,6 +441,7 @@ def build_portfolio_timeseries(
     signal_weight_col: str = "w_tilde",
     liquidity_screen_pct: float | None = None,
     liquidity_screen_col: str = "liq_dvol_21d",
+    hysteresis: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     """Build monthly long-short portfolios over the full test period.
 
@@ -436,9 +510,18 @@ def build_portfolio_timeseries(
             config=config,
         )
 
+    # Half-spread for the hysteresis no-trade band (spread/2, same source as the
+    # TC sort; AUM-independent).
+    hs_all = None
+    if hysteresis:
+        from src.weighting.schemes import compute_tc_for_sorting
+        hs_all = compute_tc_for_sorting(panel_pred, aum=0.0, config=config)
+
     pred_months = sorted(panel_pred["yyyymm"].unique())
     records = []
     positions_history = {}
+    prev_long: set[int] = set()
+    prev_short: set[int] = set()
 
     for yyyymm in pred_months:
         mask = panel_pred["yyyymm"] == yyyymm
@@ -454,6 +537,7 @@ def build_portfolio_timeseries(
         tc_month = None
         if (tc_penalised or tc_target_score) and tc_for_sort is not None:
             tc_month = tc_for_sort.loc[month_panel.index]
+        hs_month = hs_all.loc[month_panel.index] if hs_all is not None else None
 
         result = build_long_short_portfolio(
             df=month_panel,
@@ -471,6 +555,10 @@ def build_portfolio_timeseries(
             signal_weight_col=signal_weight_col,
             liquidity_screen_pct=liquidity_screen_pct,
             liquidity_screen_col=liquidity_screen_col,
+            hysteresis=hysteresis,
+            prev_long=prev_long,
+            prev_short=prev_short,
+            tc_half_spread=hs_month,
         )
 
         result["yyyymm"] = yyyymm
@@ -479,6 +567,9 @@ def build_portfolio_timeseries(
             "long": result["positions_long"],
             "short": result["positions_short"],
         }
+        if hysteresis:
+            prev_long = result["permnos_long"]
+            prev_short = result["permnos_short"]
 
     if not records:
         logger.warning("No valid months for portfolio construction")

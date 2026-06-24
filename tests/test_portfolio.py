@@ -754,3 +754,42 @@ def test_leg_aum_gross_vs_full():
     assert _leg_aum(1_000.0, leg_capital="full") == pytest.approx(1_000.0)
     with pytest.raises(ValueError, match="leg_capital"):
         _leg_aum(1_000.0, leg_capital="bogus")
+
+
+def test_hysteresis_retains_held_name_within_band():
+    n = 10
+    df = pd.DataFrame({
+        "yyyymm": 202302,
+        "permno": range(10001, 10001 + n),
+        "ret": np.zeros(n),
+        "excess_ret": np.arange(n, dtype=float) / 100.0,
+    })
+    preds = pd.Series(np.arange(n, dtype=float), index=df.index)
+    prev_long = {10008}  # held long now just below the Q5 cutoff (pred 7 < 8)
+    # wide half-spread -> within band -> retained
+    res_wide = build_long_short_portfolio(
+        df, preds, hysteresis=True, prev_long=prev_long, prev_short=set(),
+        tc_half_spread=pd.Series(5.0, index=df.index),
+    )
+    assert 10008 in res_wide["positions_long"]
+    assert sum(res_wide["positions_long"].values()) == pytest.approx(1.0)
+    # zero half-spread -> band vanishes -> coincides with the plain book
+    res_zero = build_long_short_portfolio(
+        df, preds, hysteresis=True, prev_long=prev_long, prev_short=set(),
+        tc_half_spread=pd.Series(0.0, index=df.index),
+    )
+    assert 10008 not in res_zero["positions_long"]
+
+
+def test_hysteresis_excludes_tc_aware_sort():
+    n = 10
+    df = pd.DataFrame({
+        "yyyymm": 202302, "permno": range(10001, 10001 + n),
+        "ret": np.zeros(n), "excess_ret": np.arange(n, dtype=float) / 100.0,
+    })
+    preds = pd.Series(np.arange(n, dtype=float), index=df.index)
+    with pytest.raises(ValueError, match="hysteresis"):
+        build_long_short_portfolio(
+            df, preds, hysteresis=True, tc_penalised=True,
+            tc_per_stock=pd.Series(0.001, index=df.index),
+        )
