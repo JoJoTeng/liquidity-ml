@@ -23,80 +23,132 @@ from src.portfolio.construction import (
 logger = logging.getLogger(__name__)
 
 
-def compute_two_by_three_decomposition(
-    preds_standard: pd.DataFrame,
-    preds_weighted: pd.DataFrame,
-    preds_tc_target_standard: pd.DataFrame,
-    preds_tc_target_weighted: pd.DataFrame,
-    panel: pd.DataFrame,
-    aum: int | float,
-    config: dict,
+def _build_long_short_cell(
+    panel, preds, *, hysteresis, sizing_aum, tc_context, config,
+    portfolio_weighting, value_weight_col, signal_weight_col,
+    liquidity_screen_pct, liquidity_screen_col, leg_capital, proportional_tc_only,
+):
+    """One long-short cell as a TRUE dollar-neutral book (build_portfolio_timeseries).
+
+    A = plain prediction sort (hysteresis=False); B = symmetric membership
+    hysteresis. $A gross by default via ``leg_capital``. Returns the per-month
+    frame [yyyymm, ret_long, ret_short, ret_long_short, transaction_cost,
+    raw_trade_sum, turnover, ret_long_short_net, n_long, n_short].
+    """
+    returns_df, positions_history = build_portfolio_timeseries(
+        panel,
+        preds,
+        config=config,
+        portfolio_weighting=portfolio_weighting,
+        value_weight_col=value_weight_col,
+        signal_weight_col=signal_weight_col,
+        liquidity_screen_pct=liquidity_screen_pct,
+        liquidity_screen_col=liquidity_screen_col,
+        hysteresis=hysteresis,
+    )
+    if returns_df.empty:
+        return pd.DataFrame()
+    net = compute_net_returns(
+        returns_df,
+        positions_history,
+        panel,
+        aum=sizing_aum,
+        config=config,
+        tc_context=tc_context,
+        proportional_tc_only=proportional_tc_only,
+        leg_capital=leg_capital,
+    )
+    return net.sort_values("yyyymm").reset_index(drop=True)
+
+
+def compute_two_by_two_decomposition(
+    preds_standard,
+    preds_weighted,
+    preds_tc_target_standard=None,   # deprecated: tc-target 'C' column dropped
+    preds_tc_target_weighted=None,   # deprecated: retained for call-sig compat
+    panel=None,
+    aum=None,
+    config=None,
     portfolio_mode: str = "long_short",
     portfolio_weighting: str = "equal",
     portfolio_design: str = "prediction_quantile",
+    value_weight_col: str = "liq_me_raw",
+    signal_weight_col: str = "w_tilde",
     liquidity_screen_pct: float | None = None,
     liquidity_screen_col: str = "liq_dvol_21d",
+    leg_capital: str = "gross",
     proportional_tc_only: bool = False,
 ) -> dict:
-    """Build the 2x3 training-vs-portfolio-vs-target decomposition.
+    """Build the 2x2 training-vs-device decomposition for the formal long-short.
 
-    The first two columns reproduce the existing 2x2 design. The third column
-    treats the TC-adjusted target model's prediction as the ranking score, with
-    long candidates sorted on ``s`` and short candidates sorted on
-    ``s + 2 * tc``. Realized gross/net returns are still measured on the normal
-    return target through ``panel``.
+    Rows = training (1=standard, 2=weighted); columns = device (A = plain
+    prediction sort, B = cost-scaled membership hysteresis). The long-short cells
+    are a TRUE dollar-neutral long-short book (``build_portfolio_timeseries``;
+    ``$A`` gross by default via ``leg_capital``) with signal/equal/value legs. The
+    per-quantile timeseries (standalone Q1-Q5 + Table 14) is built separately with
+    A=plain quantiles and B=per-quantile sticky hysteresis. The tc-target 'C'
+    column is dropped; ``preds_tc_target_*`` are ignored (kept for call-signature
+    compatibility).
     """
-    portfolio_cfg = config["portfolio"]
-    n_q = int(portfolio_cfg["n_quantiles"])
-    long_q = int(portfolio_cfg.get("long_quantile", n_q))
-    short_q = int(portfolio_cfg.get("short_quantile", 1))
+    if panel is None or aum is None or config is None:
+        raise ValueError("panel, aum, and config are required")
     tc_label = "PropTC" if proportional_tc_only else f"${aum / 1e6:.0f}M"
     logger.info(
-        "Building 2x3 prediction-quantile portfolios: tc_scenario=%s, "
-        "derived=Q%d-Q%d, weighting=%s",
+        "Building 2x2 long-short (true book): tc_scenario=%s, weighting=%s",
         tc_label,
-        long_q,
-        short_q,
         portfolio_weighting,
     )
     tc_context = prepare_transaction_cost_context(panel, config)
+    sizing_aum = 0.0 if proportional_tc_only else float(aum)
 
     cells = {}
     quantile_timeseries = {}
-    for cell_name, preds, sort_mode in [
-        ("1A", preds_standard, "prediction"),
-        ("1B", preds_standard, "tc_net"),
-        ("1C", preds_tc_target_standard, "tc_target_score"),
-        ("2A", preds_weighted, "prediction"),
-        ("2B", preds_weighted, "tc_net"),
-        ("2C", preds_tc_target_weighted, "tc_target_score"),
+    for cell_name, preds, hysteresis in [
+        ("1A", preds_standard, False),
+        ("1B", preds_standard, True),
+        ("2A", preds_weighted, False),
+        ("2B", preds_weighted, True),
     ]:
-        q_df = build_prediction_quantile_timeseries(
+        cells[cell_name] = _build_long_short_cell(
             panel,
             preds,
-            sort_mode=sort_mode,
+            hysteresis=hysteresis,
+            sizing_aum=sizing_aum,
+            tc_context=tc_context,
+            config=config,
+            portfolio_weighting=portfolio_weighting,
+            value_weight_col=value_weight_col,
+            signal_weight_col=signal_weight_col,
+            liquidity_screen_pct=liquidity_screen_pct,
+            liquidity_screen_col=liquidity_screen_col,
+            leg_capital=leg_capital,
+            proportional_tc_only=proportional_tc_only,
+        )
+        quantile_timeseries[cell_name] = build_prediction_quantile_timeseries(
+            panel,
+            preds,
+            sort_mode="prediction",
             aum=aum,
             config=config,
             tc_context=tc_context,
             portfolio_weighting=portfolio_weighting,
+            value_weight_col=value_weight_col,
+            signal_weight_col=signal_weight_col,
             liquidity_screen_pct=liquidity_screen_pct,
             liquidity_screen_col=liquidity_screen_col,
             proportional_tc_only=proportional_tc_only,
-        )
-        quantile_timeseries[cell_name] = q_df
-        cells[cell_name] = _derive_long_short_from_quantile_timeseries(
-            q_df,
-            config=config,
+            hysteresis=hysteresis,
         )
 
     common_months = set(cells["1A"]["yyyymm"])
-    for cell_name in ["1B", "1C", "2A", "2B", "2C"]:
+    for cell_name in ["1B", "2A", "2B"]:
         common_months &= set(cells[cell_name]["yyyymm"])
     common_months = sorted(common_months)
 
-    aligned = {}
-    for cell_name, df in cells.items():
-        aligned[cell_name] = df[df["yyyymm"].isin(common_months)].sort_values("yyyymm")
+    aligned = {
+        cell_name: df[df["yyyymm"].isin(common_months)].sort_values("yyyymm")
+        for cell_name, df in cells.items()
+    }
 
     return_summary = {}
     for cell_name, df in aligned.items():
@@ -105,22 +157,10 @@ def compute_two_by_three_decomposition(
             "gross_return_annual": df["ret_long_short"].mean() * 12,
             "net_return_monthly": df["ret_long_short_net"].mean(),
             "net_return_annual": df["ret_long_short_net"].mean() * 12,
-            "gross_sr_monthly": sharpe_ratio(
-                df["ret_long_short"].values,
-                annualize=False,
-            ),
-            "net_sr_monthly": sharpe_ratio(
-                df["ret_long_short_net"].values,
-                annualize=False,
-            ),
-            "gross_sr_annual": sharpe_ratio(
-                df["ret_long_short"].values,
-                annualize=True,
-            ),
-            "net_sr_annual": sharpe_ratio(
-                df["ret_long_short_net"].values,
-                annualize=True,
-            ),
+            "gross_sr_monthly": sharpe_ratio(df["ret_long_short"].values, annualize=False),
+            "net_sr_monthly": sharpe_ratio(df["ret_long_short_net"].values, annualize=False),
+            "gross_sr_annual": sharpe_ratio(df["ret_long_short"].values, annualize=True),
+            "net_sr_annual": sharpe_ratio(df["ret_long_short_net"].values, annualize=True),
             "tc_mean_monthly": df["transaction_cost"].mean(),
             "tc_median_monthly": df["transaction_cost"].median(),
         }
@@ -133,7 +173,6 @@ def compute_two_by_three_decomposition(
         yyyymm=aligned["1A"]["yyyymm"].values,
         config=config,
     )
-
     decomp_gross = compute_effect_decomposition(
         returns_1a=aligned["1A"]["ret_long_short"].values,
         returns_1b=aligned["1B"]["ret_long_short"].values,
@@ -146,27 +185,15 @@ def compute_two_by_three_decomposition(
     turnover = {}
     raw_trade_sum = {}
     for cell_name, df in aligned.items():
-        turnover_values = (
-            df["turnover"].iloc[1:] if "turnover" in df else pd.Series(dtype=float)
-        )
-        raw_trade_values = (
-            df["raw_trade_sum"].iloc[1:]
-            if "raw_trade_sum" in df
-            else pd.Series(dtype=float)
-        )
-        turnover[cell_name] = (
-            turnover_values.mean() if len(turnover_values) else np.nan
-        )
-        raw_trade_sum[cell_name] = (
-            raw_trade_values.mean() if len(raw_trade_values) else np.nan
-        )
-
-    tc_target_effects = _compute_tc_target_score_effects(aligned)
+        tv = df["turnover"].iloc[1:] if "turnover" in df else pd.Series(dtype=float)
+        rv = df["raw_trade_sum"].iloc[1:] if "raw_trade_sum" in df else pd.Series(dtype=float)
+        turnover[cell_name] = tv.mean() if len(tv) else np.nan
+        raw_trade_sum[cell_name] = rv.mean() if len(rv) else np.nan
 
     return {
         "decomposition": decomp_net,
         "decomposition_gross": decomp_gross,
-        "tc_target_effects": tc_target_effects,
+        "tc_target_effects": {},
         "cells": aligned,
         "quantile_timeseries": quantile_timeseries,
         "return_summary": return_summary,
@@ -178,6 +205,11 @@ def compute_two_by_three_decomposition(
         "liquidity_screen_pct": liquidity_screen_pct,
         "liquidity_screen_col": liquidity_screen_col,
     }
+
+
+# Backward-compatible alias: the formal long-short is now a 2x2 (tc-target 'C'
+# column dropped); 21e/22b still import the historical name.
+compute_two_by_three_decomposition = compute_two_by_two_decomposition
 
 
 def _derive_long_short_from_quantile_timeseries(
@@ -237,14 +269,14 @@ def format_two_by_three_decomposition_rows(result: dict) -> list[dict]:
     ret_summary = result["return_summary"]
     decomp_net = result["decomposition"]
     decomp_gross = result["decomposition_gross"]
-    tc_target_effects = result["tc_target_effects"]
+    tc_target_effects = result.get("tc_target_effects", {})
     net_sr_annual = {
         cell: ret_summary[cell]["net_sr_annual"]
-        for cell in ["1A", "1B", "1C", "2A", "2B", "2C"]
+        for cell in ["1A", "1B", "2A", "2B"]
     }
     gross_sr_annual = {
         cell: ret_summary[cell]["gross_sr_annual"]
-        for cell in ["1A", "1B", "1C", "2A", "2B", "2C"]
+        for cell in ["1A", "1B", "2A", "2B"]
     }
     net_training_effect_annual = net_sr_annual["2A"] - net_sr_annual["1A"]
     net_portfolio_effect_annual = net_sr_annual["1B"] - net_sr_annual["1A"]
@@ -263,7 +295,7 @@ def format_two_by_three_decomposition_rows(result: dict) -> list[dict]:
         else np.nan
     )
 
-    for cell in ["1A", "1B", "1C", "2A", "2B", "2C"]:
+    for cell in ["1A", "1B", "2A", "2B"]:
         rows.extend(
             [
                 {
@@ -336,11 +368,15 @@ def format_two_by_three_decomposition_rows(result: dict) -> list[dict]:
                 "value": decomp_net["lw_training"].get("p_value", np.nan),
             },
             {
+                "metric": "LW p-val (portfolio, net)",
+                "value": decomp_net["lw_portfolio"].get("p_value", np.nan),
+            },
+            {
                 "metric": "LW p-val (total, net)",
                 "value": decomp_net["lw_total"].get("p_value", np.nan),
             },
             {
-                "metric": "LW p-val (H1, net)",
+                "metric": "LW p-val (H3, net)",
                 "value": decomp_net["lw_h3"].get("p_value", np.nan),
             },
             {
@@ -360,11 +396,15 @@ def format_two_by_three_decomposition_rows(result: dict) -> list[dict]:
                 "value": decomp_gross["lw_training"].get("p_value", np.nan),
             },
             {
+                "metric": "LW p-val (portfolio, gross)",
+                "value": decomp_gross["lw_portfolio"].get("p_value", np.nan),
+            },
+            {
                 "metric": "LW p-val (total, gross)",
                 "value": decomp_gross["lw_total"].get("p_value", np.nan),
             },
             {
-                "metric": "LW p-val (H1, gross)",
+                "metric": "LW p-val (H3, gross)",
                 "value": decomp_gross["lw_h3"].get("p_value", np.nan),
             },
         ]
@@ -396,7 +436,7 @@ def format_two_by_three_decomposition_rows(result: dict) -> list[dict]:
                 ]
             )
 
-    for cell in ["1A", "1B", "1C", "2A", "2B", "2C"]:
+    for cell in ["1A", "1B", "2A", "2B"]:
         rows.extend(
             [
                 {
@@ -421,11 +461,9 @@ def format_two_by_three_timeseries_rows(
     """Flatten monthly 2x3 portfolio returns and trading costs for CSV export."""
     cell_meta = {
         "1A": ("standard", "prediction"),
-        "1B": ("standard", "tc_net_score"),
-        "1C": ("standard_tc_target", "tc_target_score"),
+        "1B": ("standard", "hysteresis"),
         "2A": ("weighted", "prediction"),
-        "2B": ("weighted", "tc_net_score"),
-        "2C": ("weighted_tc_target", "tc_target_score"),
+        "2B": ("weighted", "hysteresis"),
     }
     frames = []
     portfolio_design = result.get("portfolio_design", "prediction_quantile")
@@ -493,11 +531,9 @@ def format_prediction_quantile_timeseries_rows(
     """Flatten monthly prediction-quantile returns and trading costs for export."""
     cell_meta = {
         "1A": ("standard", "prediction"),
-        "1B": ("standard", "tc_net_score"),
-        "1C": ("standard_tc_target", "tc_target_score"),
+        "1B": ("standard", "hysteresis"),
         "2A": ("weighted", "prediction"),
-        "2B": ("weighted", "tc_net_score"),
-        "2C": ("weighted_tc_target", "tc_target_score"),
+        "2B": ("weighted", "hysteresis"),
     }
     frames = []
     portfolio_design = result.get("portfolio_design", "prediction_quantile")

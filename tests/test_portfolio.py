@@ -583,7 +583,7 @@ class TestBuildPredictionQuantileTimeseries:
 
 
 class TestBucketFirstFormalDecomposition:
-    def test_two_by_three_exports_quantile_timeseries_and_derived_long_short(self):
+    def test_two_by_two_exports_quantile_timeseries_and_true_long_short(self):
         cfg = _portfolio_test_config()
         months = list(range(202001, 202013))
         rows = []
@@ -606,9 +606,7 @@ class TestBucketFirstFormalDecomposition:
         result = compute_two_by_three_decomposition(
             preds,
             preds,
-            preds,
-            preds,
-            panel,
+            panel=panel,
             aum=500_000_000,
             config=cfg,
             portfolio_weighting="equal",
@@ -619,9 +617,12 @@ class TestBucketFirstFormalDecomposition:
             label="500M",
         )
 
-        assert set(result["cells"]) == {"1A", "1B", "1C", "2A", "2B", "2C"}
-        assert len(quantile_rows) == 6 * 5 * len(months)
+        # drop-C: the formal decomposition is now a 2x2
+        assert set(result["cells"]) == {"1A", "1B", "2A", "2B"}
+        assert len(quantile_rows) == 4 * 5 * len(months)
 
+        # 1A = plain prediction-sort TRUE long-short; its gross matches Q5-Q1 of the
+        # standalone quantile books (same membership + equal-dollar legs)
         cell_1a = result["cells"]["1A"].iloc[0]
         q = result["quantile_timeseries"]["1A"]
         q_month = q[q["yyyymm"] == cell_1a["yyyymm"]]
@@ -630,9 +631,6 @@ class TestBucketFirstFormalDecomposition:
 
         assert cell_1a["ret_long_short"] == pytest.approx(
             q5["gross_return"] - q1["gross_return"]
-        )
-        assert cell_1a["transaction_cost"] == pytest.approx(
-            q5["transaction_cost"] + q1["transaction_cost"]
         )
         assert cell_1a["ret_long_short_net"] == pytest.approx(
             cell_1a["ret_long_short"] - cell_1a["transaction_cost"]

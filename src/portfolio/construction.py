@@ -647,6 +647,7 @@ def build_prediction_quantile_timeseries(
     tc_context: dict[str, Any] | None = None,
     portfolio_weighting: str = "equal",
     value_weight_col: str = "liq_me_raw",
+    signal_weight_col: str = "w_tilde",
     liquidity_screen_pct: float | None = None,
     liquidity_screen_col: str = "liq_dvol_21d",
     proportional_tc_only: bool = False,
@@ -756,6 +757,7 @@ def build_prediction_quantile_timeseries(
                 q_df,
                 portfolio_weighting=portfolio_weighting,
                 value_weight_col=value_weight_col,
+                signal_weight_col=signal_weight_col,
             )
             gross_return = float((weights * q_df[return_col]).sum())
             positions = dict(zip(q_df["permno"], weights))

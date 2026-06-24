@@ -132,7 +132,7 @@ def test_metric_name_parity_with_old_format(tmp_path):
         "Gross return monthly (1A)", "Net return annualized (2B)",
         "TC mean monthly (1B)", "SR_net_annualized(1B)", "SR_gross_monthly(2A)",
         "Net portfolio effect annualized", "Training share annualized (%)",
-        "LW p-val (H1, net)", "LW p-val (total, gross)",
+        "LW p-val (H3, net)", "LW p-val (total, gross)",
         "Turnover (2B)", "Raw trade sum (1A)",
     ]:
         assert expected in names

@@ -188,13 +188,13 @@ def format_two_by_two_rows(
             {"metric": "Training share annualized (%)", "value": training_share},
             {"metric": "LW p-val (training, net)", "value": decomp_net["lw_training"].get("p_value", np.nan)},
             {"metric": "LW p-val (total, net)", "value": decomp_net["lw_total"].get("p_value", np.nan)},
-            {"metric": "LW p-val (H1, net)", "value": decomp_net["lw_h3"].get("p_value", np.nan)},
+            {"metric": "LW p-val (H3, net)", "value": decomp_net["lw_h3"].get("p_value", np.nan)},
             {"metric": "Gross training effect annualized", "value": gross_training},
             {"metric": "Gross portfolio effect annualized", "value": gross_portfolio},
             {"metric": "Gross total effect annualized", "value": gross_total},
             {"metric": "LW p-val (training, gross)", "value": decomp_gross["lw_training"].get("p_value", np.nan)},
             {"metric": "LW p-val (total, gross)", "value": decomp_gross["lw_total"].get("p_value", np.nan)},
-            {"metric": "LW p-val (H1, gross)", "value": decomp_gross["lw_h3"].get("p_value", np.nan)},
+            {"metric": "LW p-val (H3, gross)", "value": decomp_gross["lw_h3"].get("p_value", np.nan)},
         ]
     )
 
@@ -258,7 +258,7 @@ def build_table_values(
         "lw_training_pval": decomp_net["lw_training"].get("p_value", np.nan),
         "lw_portfolio_pval": decomp_net["lw_portfolio"].get("p_value", np.nan),
         "lw_total_pval": decomp_net["lw_total"].get("p_value", np.nan),
-        "lw_h1_pval": decomp_net["lw_h3"].get("p_value", np.nan),
+        "lw_h3_pval": decomp_net["lw_h3"].get("p_value", np.nan),
     }
 
 
