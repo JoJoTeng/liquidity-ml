@@ -87,9 +87,21 @@ def _is_proportional_tc_scenario(value: object) -> bool:
     return isinstance(value, str) and value.strip().lower() in PROPORTIONAL_TC_ALIASES
 
 
-def _leg_aum(aum: float, portfolio_mode: str = "long_short") -> float:
-    """Capital allocated to the traded leg for TC sizing."""
+def _leg_aum(
+    aum: float, portfolio_mode: str = "long_short", leg_capital: str = "gross"
+) -> float:
+    """Capital allocated to the traded leg for TC sizing.
+
+    ``gross`` (default): each leg trades ``aum / 2``, so the long-short book is
+    ``$A`` gross (|long| + |short| = $A) — comparable with the capacity book.
+    ``full``: each leg trades the full ``aum``, the legacy ``$2A``-gross
+    convention ($A long + $A short).
+    """
     _validate_portfolio_mode(portfolio_mode)
+    if leg_capital == "full":
+        return float(aum)
+    if leg_capital != "gross":
+        raise ValueError(f"leg_capital must be 'gross' or 'full', got {leg_capital!r}")
     return float(aum) / 2.0
 
 
@@ -659,6 +671,7 @@ def compute_net_returns(
     tc_context: dict[str, Any] | None = None,
     portfolio_mode: str = "long_short",
     proportional_tc_only: bool = False,
+    leg_capital: str = "gross",
 ) -> pd.DataFrame:
     """Compute net returns using turnover-adjusted trade sizes.
 
@@ -689,6 +702,7 @@ def compute_net_returns(
         tc_context=tc_context,
         portfolio_mode=portfolio_mode,
         proportional_tc_only=proportional_tc_only,
+        leg_capital=leg_capital,
     )
 
 
@@ -730,6 +744,7 @@ def _compute_net_returns_with_context(
     portfolio_mode: str = "long_short",
     leg_aum_override: float | None = None,
     proportional_tc_only: bool = False,
+    leg_capital: str = "gross",
 ) -> pd.DataFrame:
     """Compute net returns from a prebuilt transaction-cost context."""
     portfolio_mode = _validate_portfolio_mode(portfolio_mode)
@@ -741,7 +756,7 @@ def _compute_net_returns_with_context(
     leg_aum = (
         float(leg_aum_override)
         if leg_aum_override is not None
-        else _leg_aum(aum, portfolio_mode=portfolio_mode)
+        else _leg_aum(aum, portfolio_mode=portfolio_mode, leg_capital=leg_capital)
     )
 
     months = sorted(positions_history.keys())
@@ -902,6 +917,7 @@ def compute_net_returns_all_aum(
     panel: pd.DataFrame,
     config: dict | None = None,
     portfolio_mode: str = "long_short",
+    leg_capital: str = "gross",
 ) -> pd.DataFrame:
     """Compute net returns for all AUM scenarios from config.
 
@@ -928,6 +944,7 @@ def compute_net_returns_all_aum(
             tc_context=tc_context,
             portfolio_mode=portfolio_mode,
             proportional_tc_only=proportional_tc_only,
+            leg_capital=leg_capital,
         )
         label = (
             "PropTC"

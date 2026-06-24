@@ -24,6 +24,7 @@ from src.portfolio.construction import (
     compute_net_returns,
     _assign_quantiles,
     _drift_positions,
+    _leg_aum,
 )
 
 _cfg = load_config()
@@ -743,3 +744,13 @@ class TestComputeNetReturns:
 
         assert net_df["transaction_cost"].iloc[0] == pytest.approx(0.02 / 2.0)
         assert net_df["ret_long_short_net"].iloc[0] == pytest.approx(-0.01)
+
+
+def test_leg_aum_gross_vs_full():
+    # gross (default): each leg trades $A/2 -> long-short is $A gross
+    assert _leg_aum(1_000.0) == pytest.approx(500.0)
+    assert _leg_aum(1_000.0, leg_capital="gross") == pytest.approx(500.0)
+    # full: each leg trades the full $A -> legacy $2A gross
+    assert _leg_aum(1_000.0, leg_capital="full") == pytest.approx(1_000.0)
+    with pytest.raises(ValueError, match="leg_capital"):
+        _leg_aum(1_000.0, leg_capital="bogus")
