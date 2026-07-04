@@ -188,7 +188,9 @@ def main():
     liquidity_key = get_motivation_liquidity_key(args.liquidity, args.aum)
     output_dir = _step3_output_dir(base_output, args.model, liquidity_key)
     output_dir.mkdir(parents=True, exist_ok=True)
-    tex_dir = Path("paper/TablesNew")
+    # Raw LaTeX tables are data artifacts; the curated paper tables live in
+    # paper/TablesNew and are built by scripts/build_paper_tables.py.
+    tex_dir = output_dir / "tables"
     tex_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Model: %s", args.model)
     logger.info("Liquidity: %s (%s)", args.liquidity, liq["label"])
@@ -264,11 +266,19 @@ def main():
         imp_std = pd.read_csv(std_paths["importance_shap"])
         native_std = pd.read_csv(std_paths["importance_native"])
         params_std = pd.read_csv(std_paths["tuned_params"])
-        diag_std = (
-            pd.read_csv(std_paths["training_diagnostics"])
-            if std_paths["training_diagnostics"].exists()
-            else pd.DataFrame()
-        )
+        try:
+            diag_std = (
+                pd.read_csv(std_paths["training_diagnostics"])
+                if std_paths["training_diagnostics"].exists()
+                else pd.DataFrame()
+            )
+        except pd.errors.EmptyDataError:
+            # Tolerate a zero-byte/header-less diagnostics file (older cache runs
+            # wrote an empty frame); diagnostics are optional for this script.
+            logger.warning(
+                "training_diagnostics.csv is empty; continuing without diagnostics"
+            )
+            diag_std = pd.DataFrame()
     else:
         if args.force_train:
             logger.info("--force-train requested; retraining formal M_std")

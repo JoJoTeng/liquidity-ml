@@ -89,7 +89,9 @@ def main():
     liquidity_key = get_motivation_liquidity_key(args.liquidity, args.aum)
     output_dir = Path(get_output_dir()) / "motivation" / "step2" / liquidity_key
     output_dir.mkdir(parents=True, exist_ok=True)
-    tex_dir = Path("paper/TablesNew")
+    # Raw LaTeX tables are data artifacts; the curated paper tables live in
+    # paper/TablesNew and are built by scripts/build_paper_tables.py.
+    tex_dir = output_dir / "tables"
     tex_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Liquidity: %s (%s)", args.liquidity, liq["label"])
     if args.liquidity == "tc":

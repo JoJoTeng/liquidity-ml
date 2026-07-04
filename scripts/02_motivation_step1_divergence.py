@@ -247,8 +247,10 @@ def main():
         cat_summary, output_dir / "divergence_bar_chart.png"
     )
 
-    # Save LaTeX version for paper
-    tex_dir = Path("paper/TablesNew")
+    # Save raw LaTeX table as a data artifact under the script's output dir.
+    # The curated, reference-styled paper table is built separately by
+    # scripts/build_paper_tables.py, which owns paper/TablesNew.
+    tex_dir = output_dir / "tables"
     tex_dir.mkdir(parents=True, exist_ok=True)
     tex_path = tex_dir / "DivergenceByCategory.tex"
     cat_tex = cat_summary.rename(columns={
