@@ -999,7 +999,8 @@ def plot_weight_distribution(
     Parameters
     ----------
     w_col : Dollar-volume implementability weight column.
-    title_suffix : Optional suffix for the plot title.
+    title_suffix : Retained for backward compatibility; no in-figure title
+        is drawn (the paper caption names the figure).
     vw_col : Optional value-weight (market cap) column for comparison.
         If provided, its normalized weights are overlaid as a second density.
     """
@@ -1014,65 +1015,55 @@ def plot_weight_distribution(
     pcts = [5, 25, 50, 75, 95]
     pct_vals = np.percentile(w.values, pcts)
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    # Paper-figure styling: no in-figure title (the LaTeX caption names it)
+    # and no percentile stat box (the percentiles live in the prose and the
+    # exported CSV). The x-axis is clipped to the bulk of the distribution;
+    # the thin tail of near-zero-volume names below the floor is annotated.
+    XLO, XHI = -5.0, 3.0
+    BLUE, GREEN, RED = "#2c6b9c", "#3f7d5a", "#c0392b"
+    bins = np.linspace(XLO, XHI, 90)
+    tail_share = float((w.values < 1e-5).mean() * 100)
 
-    # Dollar-volume weights
-    ax.hist(log_w, bins=80, density=True, alpha=0.6, color="steelblue",
-            edgecolor="none", label="Dollar volume weights")
+    fig, ax = plt.subplots(figsize=(8, 4.4))
+
+    # Dollar-volume weights (clipped to the plotted range)
+    ax.hist(np.clip(log_w, XLO, XHI), bins=bins, density=True, alpha=0.55,
+            color=BLUE, edgecolor="none",
+            label=r"Dollar-volume weight $\tilde w^{\mathrm{dv}}$")
 
     # Value-weight comparison (if provided)
     if vw_col is not None and vw_col in panel.columns:
-        # Compute normalized VW weights: me / mean(me) per month
-        vw_raw = panel.groupby("yyyymm")[vw_col].transform(
-            lambda x: x / x.mean()
-        )
+        vw_raw = panel.groupby("yyyymm")[vw_col].transform(lambda x: x / x.mean())
         vw_valid = vw_raw.dropna()
         vw_valid = vw_valid[vw_valid > 0]
         log_vw = np.log10(vw_valid.values)
-
-        ax.hist(log_vw, bins=80, density=True, color="green", alpha=0.2,
-                edgecolor="green", linewidth=1.5, histtype="stepfilled",
-                label="Value weights (market cap)")
-
-        # VW percentiles
         vw_pcts = np.percentile(vw_valid.values, pcts)
-        vw_median_log = np.log10(vw_pcts[2])  # 50th percentile
 
-        ax.axvline(vw_median_log, color="green", linestyle=":", linewidth=1.5,
-                   label=f"VW median = {vw_pcts[2]:.3f}")
+        ax.hist(np.clip(log_vw, XLO, XHI), bins=bins, density=True,
+                histtype="step", color=GREEN, linewidth=1.6,
+                linestyle=(0, (4, 1.5)), label="Value weight (market cap)")
 
-    # Equal-weight reference
-    ax.axvline(0, color="red", linestyle="--", linewidth=1.5,
-               label=r"Equal-weight: $\log_{10}(1) = 0$")
-
-    # DV median
+    # Equal-weight reference and dollar-volume median
+    ax.axvline(0, color=RED, linewidth=1.6, linestyle="--",
+               label=r"Equal weight ($\tilde w = 1$)")
     dv_median_log = np.log10(pct_vals[2])
-    ax.axvline(dv_median_log, color="steelblue", linestyle=":", linewidth=1.5,
-               label=f"DV median = {pct_vals[2]:.3f}")
+    ax.axvline(dv_median_log, color=BLUE, linewidth=1.1, linestyle=":")
+    ax.text(dv_median_log - 0.12, ax.get_ylim()[1] * 0.93,
+            f"median\n{pct_vals[2]:.3f}", ha="right", va="top",
+            color=BLUE, fontsize=9.5)
 
-    # Percentile annotation box
-    pct_text = "Dollar vol. percentiles:\n" + "\n".join(
-        f"  {p}th: {v:.3f}" for p, v in zip(pcts, pct_vals)
-    )
-    if vw_col is not None and vw_col in panel.columns:
-        pct_text += "\n\nValue-wt percentiles:\n" + "\n".join(
-            f"  {p}th: {v:.3f}" for p, v in zip(pcts, vw_pcts)
-        )
-    ax.text(
-        0.98, 0.95, pct_text,
-        transform=ax.transAxes, fontsize=8,
-        verticalalignment="top", horizontalalignment="right",
-        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
-    )
+    ax.annotate(f"{tail_share:.1f}% of mass\n" r"$<10^{-5}$ (near-zero volume)",
+                xy=(XLO, 0.02), xytext=(XLO + 0.15, 0.12),
+                fontsize=8.5, color="0.35", va="bottom")
 
-    ax.set_xlabel(r"$\log_{10}(\tilde{w})$")
+    ax.set_xlim(XLO, XHI)
+    ax.set_xlabel(r"$\log_{10}\tilde w$  (normalised, mean one)")
     ax.set_ylabel("Density")
-    ax.set_title(f"Distribution of Normalized Weights: Dollar Volume vs Value{title_suffix}")
-    ax.legend(fontsize=9, loc="upper left")
+    ax.legend(frameon=False, fontsize=10.5, loc="upper right")
 
     plt.tight_layout()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
     # Export underlying data to CSV
