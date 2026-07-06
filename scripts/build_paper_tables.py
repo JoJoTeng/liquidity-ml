@@ -734,6 +734,205 @@ def build_capacity_ce():
 """
 
 
+# ════════════════════════════════════════════════════════════════════
+# Section 6 tables (formal 21e track, spec/model sweeps, regimes).
+# ════════════════════════════════════════════════════════════════════
+
+FORMAL_AN_ROOT = ROOT / "outputs/formalanalysis/analysis/xgboost/tc_rank_lam3_500m"
+EVAL_ROOT = ROOT / "outputs/eval_realignment/analysis"
+
+
+def build_consistency_dose_response():
+    """S6.1: training effect across the 21e leg-weighting x universe grid."""
+    LEGS = [("prediction_quantile", "Equal legs"),
+            ("prediction_quantile_signal_weight", "Signal legs"),
+            ("prediction_quantile_value_weight", "Value legs")]
+    UNIS = [("full", "Full"), ("nyse", "NYSE"), ("top40", "Top-40\\%")]
+
+    def grid(leg, uni):
+        f = FORMAL_AN_ROOT / leg / "stock_universe" / uni / "two_by_two_500M.csv"
+        if not f.exists():
+            return None
+        t = pd.read_csv(f).set_index("metric")["value"]
+        return t
+
+    rows_a = []
+    ex_lo, ex_hi = float("inf"), float("-inf")
+    for leg, llab in LEGS:
+        cells = []
+        for uni, _ in UNIS:
+            t = grid(leg, uni)
+            if t is None:
+                cells.append("---")
+                continue
+            eff = t["Net training effect annualized"]
+            p = t["LW p-val (training, net)"]
+            cells.append(f"{num(eff, plus=True)} ({p:.2f})")
+            ex = t["Net portfolio effect annualized"]
+            ex_lo, ex_hi = min(ex_lo, ex), max(ex_hi, ex)
+        rows_a.append(f"\\quad {llab} & " + " & ".join(cells) + r" \\")
+    body = "\n".join(rows_a)
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lccc}}
+\toprule
+ & \multicolumn{{3}}{{c}}{{Stock universe}} \\
+\cmidrule(lr){{2-4}}
+Leg weighting & Full & NYSE & Top-40\% \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile portfolio of the formal track, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; moving right or down makes the portfolio object progressively more consistent with the deployment weight used in training. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le 0.002$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
+\label{{tab:dose_response}}
+\end{{table}}
+"""
+
+
+def build_weight_family_sweep():
+    """S6.3: 2x2 effects, deployment-R2, and weight-concentration by family."""
+    import copy
+    import sys
+
+    sys.path.insert(0, str(ROOT))
+    import yaml
+
+    from src.data.loader import load_processed_panel
+    from src.weighting.schemes import compute_weights
+
+    cfg = yaml.safe_load(open(ROOT / "config/config.yaml"))
+    out = load_processed_panel()
+    panel = out[0] if isinstance(out, tuple) else out
+
+    cfg2 = copy.deepcopy(cfg); cfg2["weighting"]["softmax_rank_lambda"] = 2.0
+    cfg3 = copy.deepcopy(cfg); cfg3["weighting"]["softmax_rank_lambda"] = 3.0
+    SPECS = [
+        ("tc_rank_lam3_500m", "TC-rank $\\lambda{=}3$ (\\$500M)", "tc_rank", cfg, 500e6),
+        ("tc_500m", "TC level (\\$500M)", "tc", cfg, 500e6),
+        ("softmax_rank_lam2", "Softmax rank $\\lambda{=}2$", "softmax_rank", cfg2, None),
+        ("softmax_rank_lam3", "Softmax rank $\\lambda{=}3$", "softmax_rank", cfg3, None),
+        ("dolvol", "Dollar volume", "dolvol", cfg, None),
+    ]
+    rows = []
+    for spec, lab, scheme, c, aum in SPECS:
+        w = compute_weights(panel, scheme=scheme, config=c, aum=aum)
+        df = pd.DataFrame({"yyyymm": panel["yyyymm"], "w": w}).dropna()
+        df = df[df.w > 0]
+        g = df.groupby("yyyymm")["w"]
+        ess = g.apply(lambda x: (x.sum() ** 2 / (x ** 2).sum()) / len(x) * 100).mean()
+        top10 = g.apply(lambda x: x.nlargest(10).sum() / x.sum() * 100).mean()
+        t = pd.read_csv(EVAL_ROOT / f"xgboost/{spec}/two_by_two_500M.csv").set_index("metric")["value"]
+        r2 = pd.read_csv(EVAL_ROOT / f"xgboost/{spec}/liquidity_breakpoints/nyse/deployment_weighted_r2.csv")
+        dq45 = r2.loc[r2.universe == "liquid_q4q5", "delta_pct"].iloc[0]
+        # Training p-values follow the Section 5 two-decimal convention, except
+        # values that would round to 0.00 are printed at four decimals so the
+        # table matches the precision quoted in the text (e.g. p=0.0004).
+        p_tr = t["LW p-val (training, net)"]
+        p_tr_txt = f"{p_tr:.4f}" if p_tr < 0.005 else f"{p_tr:.2f}"
+        rows.append(
+            f"\\quad {lab} & {ess:.0f} & {top10:.1f} & {num(dq45, plus=True)} & "
+            f"{num(t['Net training effect annualized'], plus=True)} ({p_tr_txt}) & "
+            f"{num(t['Net portfolio effect annualized'], plus=True)} & "
+            f"{num(t['Net total effect annualized'], plus=True)} ({t['LW p-val (total, net)']:.4f}) \\\\"
+        )
+    body = "\n".join(rows)
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lcccccc}}
+\toprule
+ & \multicolumn{{2}}{{c}}{{Weight concentration}} & & \multicolumn{{3}}{{c}}{{Two-by-two at \$500M (net)}} \\
+\cmidrule(lr){{2-3}} \cmidrule(lr){{5-7}}
+Weight family & ESS (\%) & Top-10 (\%) & $\Delta R^2_{{\tilde w}}$ (pp) & Training ($p$) & Execution & Total ($p$) \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Across weighting families.}} Each row re-estimates the weighted model and the full evaluation pipeline under a different implementability-weight family (Section~\ref{{subsec:weighting_schemes}}). ESS is the mean monthly Kish effective sample size $(\sum_i w_i)^2/\sum_i w_i^2$ as a percentage of the cross-section; Top-10 is the mean share of total weight carried by the ten largest names. $\Delta R^2_{{\tilde w}}$ is the deployment-weighted $R^2$ gain of Equation~\eqref{{eq:dw_r2}} on the liquid $Q4$--$Q5$ set, each family evaluated under its own weight. The two-by-two columns report the net annualised training, execution, and total effects of Equation~\eqref{{eq:decomp}} at \$500M, with \citet{{ledoit2008robust}} bootstrap $p$-values for the training and total effects. 299 months, 2000--2024.}}
+\label{{tab:weight_sweep}}
+\end{{table}}
+"""
+
+
+def build_linear_benchmark():
+    """S6.4: elastic net vs XGBoost at the primary specification."""
+    rows = []
+    for model, lab in [("xgboost", "XGBoost"), ("elastic_net", "Elastic net")]:
+        t = pd.read_csv(EVAL_ROOT / f"{model}/tc_rank_lam3_500m/two_by_two_500M.csv").set_index("metric")["value"]
+        rows.append(
+            f"\\quad {lab} & " + " & ".join(num(t[f"SR_net_annualized({c})"]) for c in ["1A", "1B", "2A", "2B"]) +
+            f" & {num(t['Net training effect annualized'], plus=True)} ({t['LW p-val (training, net)']:.2f}) & "
+            f"{num(t['Net portfolio effect annualized'], plus=True)} & "
+            f"{num(t['Net total effect annualized'], plus=True)} ({t['LW p-val (total, net)']:.4f}) \\\\"
+        )
+    body = "\n".join(rows)
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lccccccc}}
+\toprule
+ & \multicolumn{{4}}{{c}}{{Net SR by cell}} & & & \\
+\cmidrule(lr){{2-5}}
+Model & $1A$ & $1B$ & $2A$ & $2B$ & Training ($p$) & Execution & Total ($p$) \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Linear versus nonlinear learners.}} The two-by-two design of Section~\ref{{subsec:twobytwo_results}} at the primary specification and \$500M, for the gradient-boosted trees of the main analysis and the regularised linear benchmark (elastic net; Appendix~\ref{{app:models}}). Net annualised Sharpe ratios by cell, with the net training, execution, and total effects and \citet{{ledoit2008robust}} bootstrap $p$-values for the training and total effects. 299 months, 2000--2024.}}
+\label{{tab:linear}}
+\end{{table}}
+"""
+
+
+def build_regime_splits():
+    """S6.5: 2x2 effects in friction/volatility regimes (descriptive)."""
+    import numpy as np
+
+    base = EVAL_ROOT / "xgboost/tc_rank_lam3_500m"
+    fullr = pd.read_csv(base / "capacity_portfolio_monthly_500M.csv")
+    gated = pd.read_csv(base / "capacity_breakeven_monthly_500M.csv")
+    ri = pd.read_csv(ROOT / "data/regime_indicators.csv")
+
+    def cells(df, rt):
+        return df[df.row_type == rt].set_index("yyyymm")["ret_net"]
+
+    c = pd.DataFrame({"1A": cells(fullr, "standard"), "2A": cells(fullr, "weighted"),
+                      "1B": cells(gated, "standard"), "2B": cells(gated, "weighted")}).dropna()
+    c = c.join(ri.set_index("yyyymm")[["vix", "recession"]], how="left")
+    med = c["vix"].median()
+
+    def sr(x):
+        return x.mean() / x.std() * np.sqrt(12)
+
+    rows = []
+    for lab, mask in [("High-VIX months", c.vix > med), ("Low-VIX months", c.vix <= med),
+                      ("NBER recessions", c.recession == 1), ("Expansions", c.recession == 0)]:
+        s = c[mask]
+        tr = sr(s["2A"]) - sr(s["1A"])
+        ex = sr(s["1B"]) - sr(s["1A"])
+        tot = sr(s["2B"]) - sr(s["1A"])
+        rows.append(f"\\quad {lab} & {len(s)} & {num(sr(s['1A']))} & {num(tr, plus=True)} & "
+                    f"{num(ex, plus=True)} & {num(tot, plus=True)} \\\\")
+    rows.insert(2, r"\addlinespace")
+    body = "\n".join(rows)
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lccccc}}
+\toprule
+Regime & Months & $1A$ net SR & Training & Execution & Total \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{The decomposition across market regimes.}} Net annualised Sharpe ratios and the training, execution, and total effects of Equation~\eqref{{eq:decomp}} for the \$500M capacity book, computed within subsamples of the 299 test months: months with VIX above and below its sample median ($17.9$), and NBER recession versus expansion months. The subsample effects are descriptive point estimates --- no subsample bootstrap is run --- and the recession sample contains only $28$ months. VIX is the CBOE volatility index and recession months are NBER business-cycle dates (both from FRED).}}
+\label{{tab:regimes}}
+\end{{table}}
+"""
+
+
+BUILDERS["ConsistencyDoseResponse.tex"] = build_consistency_dose_response
+BUILDERS["WeightFamilySweep.tex"] = build_weight_family_sweep
+BUILDERS["LinearBenchmark.tex"] = build_linear_benchmark
+BUILDERS["RegimeSplits.tex"] = build_regime_splits
+
 BUILDERS["CapacityCE.tex"] = build_capacity_ce
 BUILDERS["DeploymentWeightedR2.tex"] = build_deployment_weighted_r2
 BUILDERS["CapacityPortfolio.tex"] = build_capacity_portfolio
