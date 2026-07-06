@@ -789,6 +789,11 @@ Leg weighting & Full & NYSE & Top-40\% \\
 """
 
 
+def _pfmt(p):
+    """p-value display: two decimals unless p < 0.01, then four."""
+    return f"{p:.4f}" if p < 0.01 else f"{p:.2f}"
+
+
 def build_weight_family_sweep():
     """S6.3: 2x2 effects, deployment-R2, and weight-concentration by family."""
     import copy
@@ -833,7 +838,7 @@ def build_weight_family_sweep():
             f"\\quad {lab} & {ess:.0f} & {top10:.1f} & {num(dq45, plus=True)} & "
             f"{num(t['Net training effect annualized'], plus=True)} ({p_tr_txt}) & "
             f"{num(t['Net portfolio effect annualized'], plus=True)} & "
-            f"{num(t['Net total effect annualized'], plus=True)} ({t['LW p-val (total, net)']:.4f}) \\\\"
+            f"{num(t['Net total effect annualized'], plus=True)} ({_pfmt(t['LW p-val (total, net)'])}) \\\\"
         )
     body = "\n".join(rows)
     return rf"""\begin{{table}}[t!]
