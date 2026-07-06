@@ -1,5 +1,18 @@
 # Formal Analysis Results — `softmax_rank_lam2`
 
+> ⚠️ **SUPERSEDED (2026-07-03) — preserved as the historical record.** The
+> portfolio results below (sections covering script `22`) were produced by the
+> **pre-rework** evaluation: full-universe, equal-weighted legs, no screen, no
+> hysteresis, and the 2×3 design with the tc-target column (`1C`/`2C`). That
+> construction was replaced in early July 2026 by the consistency-aligned
+> quantile sort (signal/w̃ leg weighting, top-60% DolVol screen, membership
+> hysteresis, training × execution 2×2; see `docs/portfolio_construction.md`).
+> These numbers remain valuable precisely **as** the conventional-scoreboard
+> record: the negative training effects documented here are reproduced by the
+> current pipeline's `equal legs × full universe` grid cell, and the contrast
+> with the consistent cells is the paper's dose–response exhibit (§6.1).
+> Prediction-level sections (`21a`–`21d`) are unaffected by the rework.
+
 > **Project:** LiquidityML
 > **Branch:** `formalanalysis`
 > **Weight spec:** `softmax_rank_lam2` — softmax-rank training weights `exp(2·rank_it)`, mean-one per month (upweights liquid stocks)

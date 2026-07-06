@@ -1,5 +1,17 @@
 # Formal Portfolio Tables — Cross-Spec Sweep
 
+> ⚠️ **SUPERSEDED (2026-07-03) — preserved as the historical record.** This
+> sweep was produced by the **pre-rework** evaluation (full/NYSE universes,
+> equal/value legs, no screen, no hysteresis, 2×3 design with the tc-target
+> column). It was replaced in early July 2026 by the consistency-aligned
+> quantile sort (signal/w̃ leg weighting, top-60% DolVol screen, membership
+> hysteresis, training × execution 2×2; see `docs/portfolio_construction.md`).
+> The old raw outputs (`two_by_three_*.csv`, Table-12 workbooks) were deleted;
+> this document is their surviving record. The conventional-scoreboard numbers
+> here are reproduced by the current pipeline's `equal legs × full universe`
+> grid cell and serve as the "before" column of the paper's dose–response
+> exhibit (§6.1).
+
 > **Project:** LiquidityML
 > **Branch:** `formalanalysis`
 > **Scope:** the portfolio tables (scripts `22`/`22b`) across **all 4 primary weight specs**
