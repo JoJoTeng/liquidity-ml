@@ -956,10 +956,8 @@ def plot_density_comparison(
     # Shared legend from first subplot
     axes[0, 0].legend(fontsize=9, loc="upper right")
 
-    fig.suptitle(
-        f"Training vs Deployment Distributions{title_suffix}",
-        fontsize=14, y=1.02,
-    )
+    # No in-figure suptitle: the paper caption names the figure
+    # (title_suffix retained in the signature for backward compatibility).
     plt.tight_layout()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")

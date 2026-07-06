@@ -104,6 +104,74 @@ def build_importance_reallocation(n_each: int = 7):
     return movers
 
 
+def build_importance_vs_liquid_r2():
+    """fig:importance_liquid (S2.3) — misallocation scatter, cluster-marked.
+
+    Rebuilds the pipeline scatter to match its paper caption: no in-figure
+    title/stats, and the HIGHLIGHTED points are the S2 illiquidity-proxy
+    cluster (|avg rank corr with dollar volume| > 0.5), not the focal list.
+    """
+    _paper_style()
+    iv = pd.read_csv(ROOT / "outputs/motivation/step3/xgboost/dvol/importance_vs_liquid_r2.csv")
+    rel = pd.read_csv(ROOT / "outputs/motivation/step3/xgboost/dvol/illiquidity_relatedness.csv", index_col=0)
+    cluster = set(rel[abs(rel[rel.columns[0]]) > 0.5].index)
+
+    in_c = iv[iv.feature.isin(cluster)]
+    out_c = iv[~iv.feature.isin(cluster)]
+
+    fig, ax = plt.subplots(figsize=(8, 5.2))
+    ax.scatter(out_c.liquid_r2, out_c.avg_importance, s=26, color="#2c6b9c",
+               alpha=0.45, edgecolors="none", label="Other characteristics")
+    ax.scatter(in_c.liquid_r2, in_c.avg_importance, s=42, color="#b0533b",
+               alpha=0.95, edgecolors="0.2", linewidths=0.4,
+               label=r"Illiquidity cluster ($|\bar\rho_j| > 0.5$)")
+    for _, r in in_c.iterrows():
+        ax.annotate(r.feature, (r.liquid_r2, r.avg_importance),
+                    xytext=(4, 3), textcoords="offset points",
+                    fontsize=8, color="#7a3826")
+    ax.set_xlabel(r"Univariate predictive $R^2$ among liquid $Q4$--$Q5$ stocks")
+    ax.set_ylabel("Average native (gain) importance")
+    ax.legend(frameon=False, fontsize=10, loc="upper right")
+    fig.tight_layout()
+    path = OUT / "importance_vs_liquid_r2.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {path}")
+
+
+def build_breakeven_cumret():
+    """S5.3 exhibit — cumulative net returns of the four 2x2 cells at $500m."""
+    _paper_style()
+    base = ROOT / "outputs/eval_realignment/analysis/xgboost/tc_rank_lam3_500m"
+    fullr = pd.read_csv(base / "capacity_portfolio_monthly_500M.csv")
+    gated = pd.read_csv(base / "capacity_breakeven_monthly_500M.csv")
+
+    def series(df, rt):
+        s = df[df.row_type == rt].set_index("yyyymm")["ret_net"].sort_index()
+        s.index = pd.to_datetime(s.index.astype(str), format="%Y%m")
+        return s.cumsum()
+
+    SPECS = [
+        (series(fullr, "standard"), "Standard, full rebalance ($1A$)", "#2c6b9c", (0, (4, 2)), 1.2),
+        (series(fullr, "weighted"), "Weighted, full rebalance ($2A$)", "#b0533b", (0, (4, 2)), 1.2),
+        (series(gated, "standard"), "Standard, breakeven gate ($1B$)", "#2c6b9c", "solid", 1.6),
+        (series(gated, "weighted"), "Weighted, breakeven gate ($2B$)", "#b0533b", "solid", 1.6),
+    ]
+    fig, ax = plt.subplots(figsize=(8.6, 4.4))
+    for s, lab, col, ls, lw in SPECS:
+        ax.plot(s.index, s.values, label=lab, color=col, linestyle=ls, linewidth=lw)
+    ax.axhline(0, color="0.3", lw=0.7, ls=":")
+    ax.set_ylabel("Cumulative net return")
+    ax.legend(frameon=False, fontsize=9.5, loc="upper left", ncols=2)
+    fig.tight_layout()
+    path = OUT / "capacity_breakeven_net_cumret_500M.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {path}")
+
+
 if __name__ == "__main__":
     print("Building curated paper figures:")
     build_importance_reallocation()
+    build_importance_vs_liquid_r2()
+    build_breakeven_cumret()

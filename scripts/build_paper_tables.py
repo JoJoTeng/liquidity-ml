@@ -366,7 +366,7 @@ def build_characteristics_table():
     return rf"""{{\footnotesize
 \setlength{{\tabcolsep}}{{4pt}}
 \renewcommand{{\arraystretch}}{{1.05}}
-\begin{{longtable}}{{p{{3.4cm}}p{{5.2cm}}p{{4.4cm}}p{{1.9cm}}}}
+\begin{{longtable}}{{>{{\raggedright\arraybackslash}}p{{3.9cm}}>{{\raggedright\arraybackslash}}p{{4.7cm}}>{{\raggedright\arraybackslash}}p{{4.3cm}}>{{\raggedright\arraybackslash}}p{{2.0cm}}}}
 \caption{{\footnotesize \textbf{{Stock-level predictors.}} The $113$ characteristics used throughout the paper, drawn from the open-source library of \citet{{chen2022open}} (see Section~\ref{{subsec:returns_chars}} for the selection rule). Descriptions are the library's short names; full construction details are documented in the library. The category column reports the broad economic grouping used in Sections~\ref{{sec:imbalance}} and~\ref{{sec:data}}.}}
 \label{{tab:characteristics}} \\
 \toprule
@@ -524,6 +524,8 @@ def build_capacity_two_by_two():
 
     return rf"""\begin{{table}}[t!]
 \centering
+\footnotesize
+\setlength{{\tabcolsep}}{{3.5pt}}
 \begin{{tabular}}{{lccccccc}}
 \toprule
 \multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M}}}} \\[2pt]
@@ -843,6 +845,8 @@ def build_weight_family_sweep():
     body = "\n".join(rows)
     return rf"""\begin{{table}}[t!]
 \centering
+\footnotesize
+\setlength{{\tabcolsep}}{{3.5pt}}
 \begin{{tabular}}{{lcccccc}}
 \toprule
  & \multicolumn{{2}}{{c}}{{Weight concentration}} & & \multicolumn{{3}}{{c}}{{Two-by-two at \$500M (net)}} \\
