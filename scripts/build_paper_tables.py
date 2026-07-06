@@ -641,7 +641,7 @@ def build_reallocation():
     for lab, sub in [
         (rf"Illiquidity cluster ($|\bar\rho_j|>0.5$; {len(cluster)})", cluster),
         (rf"Illiquidity/microstructure group ({len(econ)})", econ),
-        (rf"Liquid-signal group (interaction-based; {len(retain)})", retain),
+        (rf"Liquid-signal group (quintile-based; {len(retain)})", retain),
     ]:
         ms, mw, d = share_diff(sub)
         r = newey_west_tstat(d.values, lags=6)
@@ -680,12 +680,61 @@ def build_reallocation():
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Feature-importance reallocation.}} Shares of total SHAP importance under standard and implementability-weighted training (primary specification), averaged over the 299 rolling windows; $\Delta$ is the mean of the per-window paired share differences and $t$ its Newey--West statistic (6 lags), the same convention as the per-feature reallocation tests of the formal pipeline. In Panel~A, the illiquidity cluster is the rule-based group of Section~\ref{{sec:imbalance}} (characteristics whose average rank correlation with dollar volume exceeds $0.5$ in absolute value); the illiquidity/microstructure group is the broader economically defined list fixed in the project configuration; the liquid-signal group collects characteristics whose predictive slopes are significant among liquid names in the interaction regressions of Section~\ref{{sec:imbalance}} (significant in both tails or only at the liquid end). Panel~B reports the five largest decreases and increases in per-window importance share.}}
+\caption{{\footnotesize \textbf{{Feature-importance reallocation.}} Shares of total SHAP importance under standard and implementability-weighted training (primary specification), averaged over the 299 rolling windows; $\Delta$ is the mean of the per-window paired share differences and $t$ its Newey--West statistic (6 lags), the same convention as the per-feature reallocation tests of the formal pipeline. In Panel~A, the illiquidity cluster is the rule-based group of Section~\ref{{sec:imbalance}} (characteristics whose average rank correlation with dollar volume exceeds $0.5$ in absolute value); the illiquidity/microstructure group is the broader economically defined list fixed in the project configuration; the liquid-signal group collects characteristics whose predictive slopes are significant in the most liquid quintile of the quintile-specific Fama--MacBeth regressions underlying Section~\ref{{sec:imbalance}} (significant in Q5, whether or not also in Q1). Panel~B reports the five largest decreases and increases in per-window importance share.}}
 \label{{tab:reallocation}}
 \end{{table}}
 """
 
 
+def build_capacity_ce():
+    """Appendix companion to tab:capacity: mean net returns, turnover, CE grid."""
+    def rows_for(tag, aum, lab):
+        df = pd.read_csv(EVAL / f"capacity_portfolio{tag}_metrics_{aum}.csv")
+        out = []
+        for rt, rlab in [("standard", "standard"), ("weighted", "weighted")]:
+            r = df[df.row_type == rt].iloc[0]
+            out.append(
+                f"\\quad {lab}, {rlab} & {num(r['net_mean_annual']*100)} & "
+                f"{r['turnover_mean']:.2f} & {num(r['net_ce_annual_g1']*100)} & "
+                f"{num(r['net_ce_annual_g5']*100)} & {num(r['net_ce_annual_g10']*100)} \\\\"
+            )
+        return out
+
+    rows_a = []
+    for aum, lab in AUM_GRID:
+        rows_a.extend(rows_for("", aum, lab))
+        rows_a.append(r"[2pt]") if False else None
+    # interleave the [2pt] spacing between AUM blocks
+    spaced_a = []
+    for i, r in enumerate(rows_a):
+        spaced_a.append(r if (i % 2 == 0 or i == len(rows_a) - 1) else r + "[2pt]")
+    body_a = "\n".join(spaced_a)
+    rows_b = []
+    for tag, lab in [("_equal", "Equal"), ("_value", "Value")]:
+        rr = rows_for(tag, "500M", lab)
+        rows_b.append(rr[0])
+        rows_b.append(rr[1] + ("[2pt]" if tag == "_equal" else ""))
+    body_b = "\n".join(rows_b)
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lccccc}}
+\toprule
+ & Net mean (\%) & Turnover & $\mathrm{{CE}}(1)$ & $\mathrm{{CE}}(5)$ & $\mathrm{{CE}}(10)$ \\
+\midrule
+\multicolumn{{6}}{{l}}{{\textit{{Panel A: Signal-weighted book across deployed capital}}}} \\[2pt]
+{body_a}
+\midrule
+\multicolumn{{6}}{{l}}{{\textit{{Panel B: Capacity-weight benchmarks at \$500M}}}} \\[2pt]
+{body_b}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Mean net returns, turnover, and certainty equivalents of the capacity books.}} Companion to Table~\ref{{tab:capacity}}: annualised mean net returns (\%), mean monthly one-sided turnover, and the annualised certainty-equivalent return $\mathrm{{CE}}(\gamma)$ of Equation~\eqref{{eq:ce}} (\%) evaluated on the monthly net series, for the full-rebalance capacity book of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A sweeps deployed capital under the signal capacity weight $\tilde w$; turnover does not vary with $A$. Panel~B replaces the capacity weight with equal and value weights at \$500M. The certainty-equivalent comparison of the two training losses reproduces the net-Sharpe comparison of Table~\ref{{tab:capacity}}: the standard book dominates under proportional costs, the two books are within a few basis points of one another at \$100M, and the weighted book dominates at \$500M and \$1B at every $\gamma$. 299 months, 2000--2024.}}
+\label{{tab:capacity_ce}}
+\end{{table}}
+"""
+
+
+BUILDERS["CapacityCE.tex"] = build_capacity_ce
 BUILDERS["DeploymentWeightedR2.tex"] = build_deployment_weighted_r2
 BUILDERS["CapacityPortfolio.tex"] = build_capacity_portfolio
 BUILDERS["CapacityTwoByTwo.tex"] = build_capacity_two_by_two
