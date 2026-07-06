@@ -389,6 +389,310 @@ Acronym & Description & Original reference & Category \\
 BUILDERS["CharacteristicsTable.tex"] = build_characteristics_table
 
 
+# ════════════════════════════════════════════════════════════════════
+# Section 5 tables (eval_realignment 41-45 + formal 21b), xgboost,
+# primary spec tc_rank_lam3_500m.
+# ════════════════════════════════════════════════════════════════════
+
+EVAL = ROOT / "outputs/eval_realignment/analysis/xgboost/tc_rank_lam3_500m"
+FORMAL_AN = ROOT / "outputs/formalanalysis/analysis/xgboost/tc_rank_lam3_500m"
+FORMAL_EXP = ROOT / "outputs/formalanalysis/experiment/xgboost"
+AUM_GRID = [("PropTC", "Prop.\\ TC"), ("100M", "\\$100M"),
+            ("500M", "\\$500M"), ("1B", "\\$1B")]
+
+
+def _two_by_two(aum):
+    t = pd.read_csv(EVAL / f"two_by_two_{aum}.csv").set_index("metric")["value"]
+    return t.to_dict()
+
+
+def build_deployment_weighted_r2():
+    r2 = pd.read_csv(EVAL / "liquidity_breakpoints/nyse/deployment_weighted_r2.csv")
+    st = pd.read_csv(EVAL / "liquidity_breakpoints/nyse/deployment_weighted_error_diff_stats.csv")
+    m = r2.merge(st[["universe", "t_stat"]], on="universe")
+    LAB = {"Q1": "Q1 (Illiquid)", "Q2": "Q2", "Q3": "Q3", "Q4": "Q4",
+           "Q5": "Q5 (Liquid)", "liquid_q4q5": "Liquid (Q4--Q5)", "full": "Full cross-section"}
+    ORDER = ["Q1", "Q2", "Q3", "Q4", "Q5", "liquid_q4q5", "full"]
+    m = m.set_index("universe").loc[ORDER].reset_index()
+    rows = []
+    for _, r in m.iterrows():
+        pre = r"\midrule" + "\n" if r["universe"] == "liquid_q4q5" else ""
+        rows.append(
+            pre + f"{LAB[r['universe']]} & {num(r['r2_weighted_std_pct'])} & "
+            f"{num(r['r2_weighted_wt_pct'])} & {num(r['delta_pct'], plus=True)} & "
+            f"{tstat(r['t_stat'])} \\\\"
+        )
+    body = "\n".join(rows)
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lcccc}}
+\toprule
+ & \multicolumn{{2}}{{c}}{{$R^2_{{\tilde w}}$ (\%)}} & & \\
+\cmidrule(lr){{2-3}}
+Universe & Standard & Weighted & $\Delta R^2_{{\tilde w}}$ (pp) & $t(D_t)$ \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Deployment-weighted out-of-sample $R^2$.}} The deployment-weighted $R^2$ of Equation~\eqref{{eq:dw_r2}} for the standard and implementability-weighted models, within NYSE-breakpoint dollar-volume quintiles of the prediction universe (Q1 = least liquid), on the pooled liquid set, and on the full cross-section; the primary specification's weight ($\tilde w^{{\mathrm{{tcr}}}}$ at \$500m) prices the errors throughout, with the global mean-one normalisation held fixed across subsets. $\Delta R^2_{{\tilde w}}$ is weighted minus standard in percentage points. The last column reports the Newey--West $t$-statistic (6 lags) on the monthly weighted mean-squared-error differential $D_t$ (Appendix~\ref{{app:capacity}}); no individual differential is statistically significant. Out-of-sample period 2000--2024, 299 months.}}
+\label{{tab:dw_r2}}
+\end{{table}}
+"""
+
+
+def build_capacity_portfolio():
+    def metrics(tag, aum):
+        f = EVAL / f"capacity_portfolio{tag}_metrics_{aum}.csv"
+        df = pd.read_csv(f)
+        s = df[df.row_type == "standard"].iloc[0]
+        w = df[df.row_type == "weighted"].iloc[0]
+        d = df[df.row_type == "difference"].iloc[0]
+        return s, w, d
+
+    rows_a = []
+    for aum, lab in AUM_GRID:
+        s, w, d = metrics("", aum)
+        delta_ann = w["net_sr_annual"] - s["net_sr_annual"]
+        rows_a.append(
+            f"\\quad {lab} & {num(s['net_sr_annual'])} & {num(w['net_sr_annual'])} & "
+            f"{num(delta_ann, plus=True)} & {d['net_sr_diff_pval']:.2f} \\\\"
+        )
+    s0, w0, _ = metrics("", "500M")
+    rows_b = []
+    for tag, lab in [("", "Signal ($\\tilde w$)"), ("_equal", "Equal"), ("_value", "Value")]:
+        s, w, d = metrics(tag, "500M")
+        delta_ann = w["net_sr_annual"] - s["net_sr_annual"]
+        rows_b.append(
+            f"\\quad {lab} & {num(s['gross_sr_annual'])} & {num(w['gross_sr_annual'])} & "
+            f"{num(s['net_sr_annual'])} & {num(w['net_sr_annual'])} & "
+            f"{num(delta_ann, plus=True)} & {d['net_sr_diff_pval']:.2f} \\\\"
+        )
+    body_a = "\n".join(rows_a)
+    body_b = "\n".join(rows_b)
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lcccccc}}
+\toprule
+\multicolumn{{7}}{{l}}{{\textit{{Panel A: Signal-weighted book across deployed capital (net Sharpe ratios)}}}} \\[2pt]
+ & Standard & Weighted & $\Delta$SR & $p$ & & \\
+\midrule
+{body_a}
+\midrule
+\multicolumn{{7}}{{l}}{{\textit{{Panel B: Capacity-weight benchmarks at \$500M}}}} \\[2pt]
+ & \multicolumn{{2}}{{c}}{{Gross SR}} & \multicolumn{{2}}{{c}}{{Net SR}} & & \\
+\cmidrule(lr){{2-3}} \cmidrule(lr){{4-5}}
+Capacity weight & Std & Wt & Std & Wt & $\Delta$SR & $p$ \\
+\midrule
+{body_b}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross book of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds the signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the book grid; the gross Sharpe ratio does not depend on $A$ ($1.48$ standard, $1.32$ weighted). Panel~B holds $A=\$500$M fixed and replaces the capacity weight in the book construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. No training-stage difference is statistically significant. 299 months, 2000--2024.}}
+\label{{tab:capacity}}
+\end{{table}}
+"""
+
+
+def build_capacity_two_by_two():
+    t5 = _two_by_two("500M")
+
+    def cell(c):
+        return (f"{num(t5[f'SR_net_annualized({c})'])} & ({num(t5[f'SR_gross_annualized({c})'])}) & "
+                f"{t5[f'TC mean monthly ({c})'] * 1e4:.0f} & {t5[f'Turnover ({c})']:.2f}")
+
+    rows_b = []
+    for aum, lab in AUM_GRID:
+        t = _two_by_two(aum)
+        rows_b.append(
+            f"\\quad {lab} & {num(t['Net training effect annualized'], plus=True)} & "
+            f"{t['LW p-val (training, net)']:.2f} & "
+            f"{num(t['Net portfolio effect annualized'], plus=True)} & "
+            f"{num(t['Net total effect annualized'], plus=True)} & "
+            f"{t['LW p-val (total, net)']:.4f} & "
+            f"{num(t['Net interaction annualized'], plus=True)} \\\\"
+        )
+    body_b = "\n".join(rows_b)
+
+    rows_c = []
+    for key, lab in [("capm", "CAPM"), ("ff3", "FF3"), ("ff5", "FF5"), ("ff5_mom", "FF5+Mom")]:
+        cells = []
+        for c in ["1A", "1B", "2A", "2B"]:
+            a = t5[f"alpha_{key}({c})_annual"] * 100
+            tt = t5[f"alpha_{key}({c})_tstat"]
+            cells.append(f"{num(a)} {tstat(tt)}")
+        rows_c.append(f"\\quad {lab} & " + " & ".join(cells) + r" \\")
+    body_c = "\n".join(rows_c)
+
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lccccccc}}
+\toprule
+\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M}}}} \\[2pt]
+ & Net SR & (Gross SR) & Cost (bps/mo) & Turnover & & & \\
+\midrule
+\multicolumn{{8}}{{l}}{{\emph{{Full rebalance ($A$)}}}} \\
+\quad Standard training ($1A$) & {cell('1A')} & & & \\
+\quad Weighted training ($2A$) & {cell('2A')} & & & \\[2pt]
+\multicolumn{{8}}{{l}}{{\emph{{Breakeven gate ($B$)}}}} \\
+\quad Standard training ($1B$) & {cell('1B')} & & & \\
+\quad Weighted training ($2B$) & {cell('2B')} & & & \\
+\midrule
+\multicolumn{{8}}{{l}}{{\textit{{Panel B: Decomposition across deployed capital (net, annualised)}}}} \\[2pt]
+ & Training & $p$ & Execution & Total & $p$ & Interaction & \\
+\midrule
+{body_b}
+\midrule
+\multicolumn{{8}}{{l}}{{\textit{{Panel C: Annualised factor alphas at \$500M (\%, $t$-statistics in parentheses)}}}} \\[2pt]
+ & $1A$ & $1B$ & $2A$ & $2B$ & & & \\
+\midrule
+{body_c}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Cost-aware execution and the training $\times$ execution decomposition.}} Panel~A reports the four cells of the two-by-two design at the primary \$500M scale: net and gross annualised Sharpe ratios, the mean monthly transaction-cost drag in basis points, and monthly one-sided turnover. Rows vary the training loss (standard vs.\ implementability-weighted); blocks vary execution (full monthly rebalancing vs.\ the breakeven gate of Equation~\eqref{{eq:gate}}). Panel~B decomposes the net gain of Equation~\eqref{{eq:decomp}} at each level of deployed capital; $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap ($p$-values are reported for the training and total effects; the execution effect carries no separate bootstrap). Turnover and gate composition do not vary with $A$ because the gate triggers on the half-spread alone, so the execution effect grows with capital purely through the price of the avoided trades. Panel~C reports annualised factor alphas of the four net return series at \$500M with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
+\label{{tab:capacity_2x2}}
+\end{{table}}
+"""
+
+
+def build_longonly_two_by_two():
+    lt5 = pd.read_csv(EVAL / "longonly_two_by_two_500M.csv").set_index("metric")["value"].to_dict()
+
+    def cell(c):
+        return (f"{num(lt5[f'SR_net_annualized({c})'])} & "
+                f"{lt5[f'TC mean monthly ({c})'] * 1e4:.0f} & {lt5[f'Turnover ({c})']:.2f}")
+
+    rows_b = []
+    for aum, lab in AUM_GRID:
+        t = pd.read_csv(EVAL / f"longonly_two_by_two_{aum}.csv").set_index("metric")["value"].to_dict()
+        inter = t.get("Net interaction annualized",
+                      t["Net total effect annualized"] - t["Net training effect annualized"]
+                      - t["Net portfolio effect annualized"])
+        rows_b.append(
+            f"\\quad {lab} & {num(t['Net training effect annualized'], plus=True)} & "
+            f"{t['LW p-val (training, net)']:.2f} & "
+            f"{num(t['Net portfolio effect annualized'], plus=True)} & "
+            f"{num(t['Net total effect annualized'], plus=True)} & "
+            f"{t['LW p-val (total, net)']:.4f} & "
+            f"{num(inter, plus=True)} \\\\"
+        )
+    body_b = "\n".join(rows_b)
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lccccccc}}
+\toprule
+\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M --- net SR, mean monthly cost (bps), turnover}}}} \\[2pt]
+ & \multicolumn{{3}}{{c}}{{Plain membership ($A$)}} & \multicolumn{{3}}{{c}}{{Hysteresis band ($B$)}} & \\
+\cmidrule(lr){{2-4}} \cmidrule(lr){{5-7}}
+\quad Standard training & {cell('1A')} & {cell('1B')} & \\
+\quad Weighted training & {cell('2A')} & {cell('2B')} & \\
+\midrule
+\multicolumn{{8}}{{l}}{{\textit{{Panel B: Decomposition across deployed capital (net, annualised)}}}} \\[2pt]
+ & Training & $p$ & Execution & Total & $p$ & Interaction & \\
+\midrule
+{body_b}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{The long-only capacity book.}} The two-by-two design applied to the long-only book of Equation~\eqref{{eq:longonly}}: rows vary the training loss, columns vary execution between plain monthly membership refresh and the cost-scaled membership-hysteresis band. Panel~A reports net annualised Sharpe ratios, mean monthly cost drag (bps), and monthly one-sided turnover at \$500M; Panel~B decomposes the net gain at each level of deployed capital, with \citet{{ledoit2008robust}} bootstrap $p$-values for the training and total effects. 299 months, 2000--2024.}}
+\label{{tab:longonly_2x2}}
+\end{{table}}
+"""
+
+
+def build_reallocation():
+    """S5.5 mechanism table: per-window importance-share shifts with NW t.
+
+    All inference in this table is computed here, per window, with the same
+    Newey-West(6) convention as the 21b per-feature tests: for each group or
+    feature, the monthly share of total |SHAP| importance is computed for the
+    standard and weighted models on their common windows, and the t-statistic
+    is on the time series of paired share differences.
+    """
+    import sys
+
+    sys.path.insert(0, str(ROOT))
+    import numpy as np
+
+    from src.evaluation.statistics import newey_west_tstat
+
+    std = pd.read_csv(FORMAL_EXP / "standard/importance_shap.csv").set_index("yyyymm").sort_index()
+    wt = pd.read_csv(FORMAL_EXP / "tc_rank_lam3_500m/importance_shap.csv").set_index("yyyymm").sort_index()
+    common = std.index.intersection(wt.index)
+    std, wt = std.loc[common], wt.loc[common]
+    feats = [c for c in std.columns if c in wt.columns]
+    tot_s = std[feats].abs().sum(axis=1)
+    tot_w = wt[feats].abs().sum(axis=1)
+
+    def share_diff(sub):
+        s = std[sub].abs().sum(axis=1) / tot_s
+        w = wt[sub].abs().sum(axis=1) / tot_w
+        return s.mean(), w.mean(), (w - s)
+
+    # Group definitions
+    rel = pd.read_csv(MOT / "step3/xgboost/dvol/illiquidity_relatedness.csv", index_col=0)
+    cluster = [f for f in rel[abs(rel[rel.columns[0]]) > 0.5].index if f in feats]
+    import yaml
+
+    cfg = yaml.safe_load(open(ROOT / "config/config.yaml"))
+    econ = [f for f in cfg["data"]["illiquidity_features"] if f in feats]
+    shift = pd.read_csv(FORMAL_AN / "importance_shift.csv")
+    gmap = dict(zip(shift["feature"], shift["group"]))
+    retain = [f for f in feats if gmap.get(f) in ("both", "Q5_only")]
+
+    rows_a = []
+    for lab, sub in [
+        (rf"Illiquidity cluster ($|\bar\rho_j|>0.5$; {len(cluster)})", cluster),
+        (rf"Illiquidity/microstructure group ({len(econ)})", econ),
+        (rf"Liquid-signal group (interaction-based; {len(retain)})", retain),
+    ]:
+        ms, mw, d = share_diff(sub)
+        r = newey_west_tstat(d.values, lags=6)
+        rows_a.append(
+            f"\\quad {lab} & {ms*100:.1f} & {mw*100:.1f} & "
+            f"{num(r['mean']*100, plus=True)} & {tstat(r['t_stat'])} \\\\"
+        )
+    body_a = "\n".join(rows_a)
+
+    # Per-feature: top movers by |mean per-window share diff|
+    per = []
+    for f in feats:
+        ms, mw, d = share_diff([f])
+        r = newey_west_tstat(d.values, lags=6)
+        per.append((f, ms * 100, mw * 100, r["mean"] * 100, r["t_stat"]))
+    per.sort(key=lambda x: x[3])
+    losers, gainers = per[:5], sorted(per[-5:], key=lambda x: -x[3])
+    rows_b = []
+    for f, ms, mw, dd, tt in losers + gainers:
+        rows_b.append(f"\\quad {_latex_escape(f)} & {ms:.2f} & {mw:.2f} & {num(dd, plus=True)} & {tstat(tt)} \\\\")
+    rows_b.insert(5, r"\addlinespace")
+    body_b = "\n".join(rows_b)
+
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lcccc}}
+\toprule
+ & \multicolumn{{2}}{{c}}{{Share of importance (\%)}} & & \\
+\cmidrule(lr){{2-3}}
+ & Standard & Weighted & $\Delta$ (pp) & $t$ \\
+\midrule
+\multicolumn{{5}}{{l}}{{\textit{{Panel A: Group shares}}}} \\[2pt]
+{body_a}
+\midrule
+\multicolumn{{5}}{{l}}{{\textit{{Panel B: Largest individual share shifts}}}} \\[2pt]
+{body_b}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Feature-importance reallocation.}} Shares of total SHAP importance under standard and implementability-weighted training (primary specification), averaged over the 299 rolling windows; $\Delta$ is the mean of the per-window paired share differences and $t$ its Newey--West statistic (6 lags), the same convention as the per-feature reallocation tests of the formal pipeline. In Panel~A, the illiquidity cluster is the rule-based group of Section~\ref{{sec:imbalance}} (characteristics whose average rank correlation with dollar volume exceeds $0.5$ in absolute value); the illiquidity/microstructure group is the broader economically defined list fixed in the project configuration; the liquid-signal group collects characteristics whose predictive slopes are significant among liquid names in the interaction regressions of Section~\ref{{sec:imbalance}} (significant in both tails or only at the liquid end). Panel~B reports the five largest decreases and increases in per-window importance share.}}
+\label{{tab:reallocation}}
+\end{{table}}
+"""
+
+
+BUILDERS["DeploymentWeightedR2.tex"] = build_deployment_weighted_r2
+BUILDERS["CapacityPortfolio.tex"] = build_capacity_portfolio
+BUILDERS["CapacityTwoByTwo.tex"] = build_capacity_two_by_two
+BUILDERS["LongOnlyTwoByTwo.tex"] = build_longonly_two_by_two
+BUILDERS["Reallocation.tex"] = build_reallocation
+
+
 def main(out_dir: Path = OUT):
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, builder in BUILDERS.items():
