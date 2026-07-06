@@ -324,6 +324,71 @@ def build_data_descriptives():
 BUILDERS["DataDescriptives.tex"] = build_data_descriptives
 
 
+def _latex_escape(s):
+    s = str(s)
+    for a, b in [("\\", r"\textbackslash{}"), ("&", r"\&"), ("%", r"\%"),
+                 ("$", r"\$"), ("#", r"\#"), ("_", r"\_"), ("{", r"\{"),
+                 ("}", r"\}"), ("~", r"\textasciitilde{}"), ("^", r"\^{}")]:
+        s = s.replace(a, b)
+    return s
+
+
+def build_characteristics_table():
+    """Appendix longtable of all 113 predictors (app:features).
+
+    Mirrors the reference paper's asset-characteristics appendix table:
+    acronym, description, original reference, and economic category, one row
+    per predictor, sourced from data/SignalDoc.csv + data/feature_list.json +
+    config/feature_categories.json.
+    """
+    feats = json.load(open(ROOT / "data/feature_list.json"))["features"]
+    broad = json.load(open(ROOT / "config/feature_categories.json"))["broad"]
+    sd = pd.read_csv(ROOT / "data/SignalDoc.csv").set_index("Acronym")
+
+    rows = []
+    for f in feats:
+        r = sd.loc[f]
+        year = int(r["Year"]) if pd.notna(r["Year"]) else ""
+        ref = f"{_latex_escape(r['Authors'])} ({year})" if year else _latex_escape(r["Authors"])
+        rows.append({
+            "acr": _latex_escape(f),
+            "desc": _latex_escape(r["LongDescription"]),
+            "ref": ref,
+            "cat": broad.get(f, "Other"),
+        })
+    # Category order by descending count (as in the prose lists), then acronym.
+    order = pd.Series([r["cat"] for r in rows]).value_counts().index.tolist()
+    rows.sort(key=lambda r: (order.index(r["cat"]), r["acr"].lower()))
+
+    body = "\n".join(
+        f"{r['acr']} & {r['desc']} & {r['ref']} & {r['cat']} \\\\" for r in rows
+    )
+    return rf"""{{\footnotesize
+\setlength{{\tabcolsep}}{{4pt}}
+\renewcommand{{\arraystretch}}{{1.05}}
+\begin{{longtable}}{{p{{3.4cm}}p{{5.2cm}}p{{4.4cm}}p{{1.9cm}}}}
+\caption{{\footnotesize \textbf{{Stock-level predictors.}} The $113$ characteristics used throughout the paper, drawn from the open-source library of \citet{{chen2022open}} (see Section~\ref{{subsec:returns_chars}} for the selection rule). Descriptions are the library's short names; full construction details are documented in the library. The category column reports the broad economic grouping used in Sections~\ref{{sec:imbalance}} and~\ref{{sec:data}}.}}
+\label{{tab:characteristics}} \\
+\toprule
+Acronym & Description & Original reference & Category \\
+\midrule
+\endfirsthead
+\multicolumn{{4}}{{l}}{{\footnotesize\emph{{Table~\ref{{tab:characteristics}}, continued}}}} \\
+\toprule
+Acronym & Description & Original reference & Category \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+{body}
+\end{{longtable}}
+}}
+"""
+
+
+BUILDERS["CharacteristicsTable.tex"] = build_characteristics_table
+
+
 def main(out_dir: Path = OUT):
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, builder in BUILDERS.items():
