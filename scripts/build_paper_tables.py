@@ -121,7 +121,7 @@ Characteristic & $\bar\beta_j$ & $t$ & $\bar\gamma_j$ & $t$ \\
 {rows}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Heterogeneous predictability across the liquidity spectrum.}} Monthly Fama--MacBeth regressions of next-month returns on fifteen focal characteristics and their interactions with the within-month dollar-volume percentile rank $L_{{it}}\in[0,1]$: $r_{{i,t+1}} = \alpha_t + x_{{it}}'\beta_t + (x_{{it}}L_{{it}})'\gamma_t + \varepsilon_{{i,t+1}}$. Since $L=0$ ($L=1$) marks the least (most) liquid stock, $\bar\gamma_j$ measures the change in the predictive slope of characteristic $j$ from the illiquid to the liquid end of the spectrum. $t$-statistics use Newey--West standard errors (6 lags); {n_sig} of 15 interactions are significant at $|t|>2$, and the joint time-series $F$-test of $\gamma=0$ is $F={f_stat:.1f}$ ($p<0.001$). Estimating the same regression on all 113 characteristics yields {n_sig_full} significant interactions ($F={f_full:.1f}$, $p<0.001$). The sample is the full CRSP cross-section, 1989--2024.}}
+\caption{{\footnotesize \textbf{{Heterogeneous predictability across the liquidity spectrum.}} Monthly Fama--MacBeth regressions of next-month returns on fifteen focal characteristics and their interactions with the within-month dollar-volume percentile rank $L_{{i,t}}\in[0,1]$: $r_{{i,t+1}} = \alpha_t + x_{{i,t}}'\beta_t + (x_{{i,t}}L_{{i,t}})'\gamma_t + \varepsilon_{{i,t+1}}$. Since $L=0$ ($L=1$) marks the least (most) liquid stock, $\bar\gamma_j$ measures the change in the predictive slope of characteristic $j$ from the illiquid to the liquid end of the spectrum. $t$-statistics use Newey--West standard errors (6 lags); {n_sig} of 15 interactions are significant at $|t|>2$, and the joint time-series $F$-test of $\gamma=0$ is $F={f_stat:.1f}$ ($p<0.001$). Estimating the same regression on all 113 characteristics yields {n_sig_full} significant interactions ($F={f_full:.1f}$, $p<0.001$). The sample is the full CRSP cross-section, 1989--2024.}}
 \label{{tab:heterogeneity}}
 \end{{table}}
 """
@@ -182,13 +182,13 @@ def build_evaluation_measures():
 Evaluation measure & Universe & $R^2$ (\%) \\
 \midrule
 Pooled, equal-weighted & Full cross-section & {num(pooled, 2, plus=True)} \\
-Implementability-weighted ($\tilde w^{{\mathrm{{tcr}}}}$, \$500m) & Full cross-section & {num(dw_full, 2, plus=True)} \\
-Implementability-weighted ($\tilde w^{{\mathrm{{tcr}}}}$, \$500m) & Liquid (Q4--Q5) & {num(dw_q45, 2, plus=True)} \\
+Implementability-weighted ($\tilde w^{{\mathrm{{tcr}}}}$, \$500M) & Full cross-section & {num(dw_full, 2, plus=True)} \\
+Implementability-weighted ($\tilde w^{{\mathrm{{tcr}}}}$, \$500M) & Liquid (Q4--Q5) & {num(dw_q45, 2, plus=True)} \\
 Dollar-volume-weighted & Full cross-section & {num(dvolw, 2, plus=True)} \\
 Value-weighted (market cap) & Full cross-section & {num(mcapw, 2, plus=True)} \\
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The same predictions under different measures.}} Out-of-sample $R^2$ (zero benchmark, 2000--2024) of the identical standard-loss prediction panel, evaluated under alternative cross-sectional weightings of squared errors. Row 1 weights every stock-month equally. Rows 2--3 weight errors by the transaction-cost-rank implementability weight of Section~\ref{{sec:framework}} at \$500m; rows 4--5 weight by normalised dollar volume and market capitalisation. All weights are normalised to mean one within each month.}}
+\caption{{\footnotesize \textbf{{The same predictions under different measures.}} Out-of-sample $R^2$ (zero benchmark, 2000--2024) of the identical standard-loss prediction panel, evaluated under alternative cross-sectional weightings of squared errors. Row 1 weights every stock-month equally. Rows 2--3 weight errors by the transaction-cost-rank implementability weight of Section~\ref{{sec:framework}} at \$500M; rows 4--5 weight by normalised dollar volume and market capitalisation. All weights are normalised to mean one within each month.}}
 \label{{tab:evaluation_measures}}
 \end{{table}}
 """
@@ -292,7 +292,7 @@ def build_data_descriptives():
 
     rows = [
         prow(r"Daily dollar volume (\$M)", dv.values, dp=2),
-        prow(r"Half bid--ask spread (bps)", sp.values, dp=1),
+        prow(r"Half-spread (bps)", sp.values, dp=1),
         prow(r"Daily-scaled volatility $\sigma$ (\%)", sg.values, dp=2),
     ]
     for aum, label in [(100e6, r"\$100M"), (500e6, r"\$500M"), (1e9, r"\$1B")]:
@@ -315,7 +315,7 @@ def build_data_descriptives():
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Liquidity and cost inputs: cross-sectional descriptives.}} Pooled percentiles across all stock-months, 1989--2024. Daily dollar volume is the 21-day trailing average of daily price times share volume from the CRSP daily file; the half spread is one half of the \citet{{chen2022open}} \texttt{{BidAskSpread}} series (a \citet{{corwin2012simple}} high--low effective-spread estimate scaled by price); $\sigma$ is the 12-month rolling standard deviation of monthly excess returns rescaled to a daily horizon by $1/\sqrt{{21}}$. The one-way cost $\tau$ applies Equation~\eqref{{eq:tc_primitive}} with $\lambda=0.1$ and equal-breadth participation $Q_t = A/N_t$, where $N_t$ is the full cross-section in month $t$; missing spread, volatility, or volume inputs are imputed at within-month medians, as in the weight construction. The last column reports the ratio of the 99th percentile to the median.}}
+\caption{{\footnotesize \textbf{{Liquidity and cost inputs: cross-sectional descriptives.}} Pooled percentiles across all stock-months, 1989--2024. Daily dollar volume is the 21-day trailing average of daily price times share volume from the CRSP daily file; the half-spread is one half of the \citet{{chen2022open}} \texttt{{BidAskSpread}} series (a \citet{{corwin2012simple}} high--low effective-spread estimate scaled by price); $\sigma$ is the 12-month rolling standard deviation of monthly excess returns rescaled to a daily horizon by $1/\sqrt{{21}}$. The one-way cost $\tau$ applies Equation~\eqref{{eq:tc_primitive}} with $\lambda=0.1$ and equal-breadth participation $Q_t = A/N_t$, where $N_t$ is the full cross-section in month $t$; missing spread, volatility, or volume inputs are imputed at within-month medians, as in the weight construction. The last column reports the ratio of the 99th percentile to the median.}}
 \label{{tab:data_descriptives}}
 \end{{table}}
 """
@@ -434,7 +434,7 @@ Universe & Standard & Weighted & $\Delta R^2_{{\tilde w}}$ (pp) & $t(D_t)$ \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Deployment-weighted out-of-sample $R^2$.}} The deployment-weighted $R^2$ of Equation~\eqref{{eq:dw_r2}} for the standard and implementability-weighted models, within NYSE-breakpoint dollar-volume quintiles of the prediction universe (Q1 = least liquid), on the pooled liquid set, and on the full cross-section; the primary specification's weight ($\tilde w^{{\mathrm{{tcr}}}}$ at \$500m) prices the errors throughout, with the global mean-one normalisation held fixed across subsets. $\Delta R^2_{{\tilde w}}$ is weighted minus standard in percentage points. The last column reports the Newey--West $t$-statistic (6 lags) on the monthly weighted mean-squared-error differential $D_t$ (Appendix~\ref{{app:capacity}}); no individual differential is statistically significant. Out-of-sample period 2000--2024, 299 months.}}
+\caption{{\footnotesize \textbf{{Deployment-weighted out-of-sample $R^2$.}} The deployment-weighted $R^2$ of Equation~\eqref{{eq:dw_r2}} for the standard and implementability-weighted models, within NYSE-breakpoint dollar-volume quintiles of the prediction universe (Q1 = least liquid), on the pooled liquid set, and on the full cross-section; the primary specification's weight ($\tilde w^{{\mathrm{{tcr}}}}$ at \$500M) prices the errors throughout, with the global mean-one normalisation held fixed across subsets. $\Delta R^2_{{\tilde w}}$ is weighted minus standard in percentage points. The last column reports the Newey--West $t$-statistic (6 lags) on the monthly weighted mean-squared-error differential $D_t$ (Appendix~\ref{{app:capacity}}); no individual differential is statistically significant. Out-of-sample period 2000--2024, 299 months.}}
 \label{{tab:dw_r2}}
 \end{{table}}
 """
@@ -682,7 +682,7 @@ def build_reallocation():
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Feature-importance reallocation.}} Shares of total SHAP importance under standard and implementability-weighted training (primary specification), averaged over the 299 rolling windows; $\Delta$ is the mean of the per-window paired share differences and $t$ its Newey--West statistic (6 lags), the same convention as the per-feature reallocation tests of the formal pipeline. In Panel~A, the illiquidity cluster is the rule-based group of Section~\ref{{sec:imbalance}} (characteristics whose average rank correlation with dollar volume exceeds $0.5$ in absolute value); the illiquidity/microstructure group is the broader economically defined list fixed in the project configuration; the liquid-signal group collects characteristics whose predictive slopes are significant in the most liquid quintile of the quintile-specific Fama--MacBeth regressions underlying Section~\ref{{subsec:heterogeneity}} (significant in Q5, whether or not also in Q1). Panel~B reports the five largest decreases and increases in per-window importance share.}}
+\caption{{\footnotesize \textbf{{Feature-importance reallocation.}} Shares of total SHAP importance under standard and implementability-weighted training (primary specification), averaged over the 299 rolling windows; $\Delta$ is the mean of the per-window paired share differences and $t$ its Newey--West statistic (6 lags), the same convention as the per-feature tests. In Panel~A, the illiquidity cluster is the rule-based group of Section~\ref{{sec:imbalance}} (characteristics whose average rank correlation with dollar volume exceeds $0.5$ in absolute value); the illiquidity/microstructure group is the broader economically defined list fixed ex ante; the liquid-signal group collects characteristics whose predictive slopes are significant in the most liquid quintile of the quintile-specific Fama--MacBeth regressions underlying Section~\ref{{subsec:heterogeneity}} (significant in Q5, whether or not also in Q1). Panel~B reports the five largest decreases and increases in per-window importance share.}}
 \label{{tab:reallocation}}
 \end{{table}}
 """
@@ -785,7 +785,7 @@ Leg weighting & Full & NYSE & Top-40\% \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile portfolio of the formal track, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; moving right or down makes the portfolio object progressively more consistent with the deployment weight used in training. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le 0.002$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
+\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; moving right or down makes the portfolio object progressively more consistent with the deployment weight used in training. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le 0.002$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
 \label{{tab:dose_response}}
 \end{{table}}
 """
@@ -814,10 +814,10 @@ def build_weight_family_sweep():
     cfg2 = copy.deepcopy(cfg); cfg2["weighting"]["softmax_rank_lambda"] = 2.0
     cfg3 = copy.deepcopy(cfg); cfg3["weighting"]["softmax_rank_lambda"] = 3.0
     SPECS = [
-        ("tc_rank_lam3_500m", "TC-rank $\\lambda{=}3$ (\\$500M)", "tc_rank", cfg, 500e6),
+        ("tc_rank_lam3_500m", "TC-rank $\\beta{=}3$ (\\$500M)", "tc_rank", cfg, 500e6),
         ("tc_500m", "TC level (\\$500M)", "tc", cfg, 500e6),
-        ("softmax_rank_lam2", "Softmax rank $\\lambda{=}2$", "softmax_rank", cfg2, None),
-        ("softmax_rank_lam3", "Softmax rank $\\lambda{=}3$", "softmax_rank", cfg3, None),
+        ("softmax_rank_lam2", "Softmax rank $\\beta{=}2$", "softmax_rank", cfg2, None),
+        ("softmax_rank_lam3", "Softmax rank $\\beta{=}3$", "softmax_rank", cfg3, None),
         ("dolvol", "Dollar volume", "dolvol", cfg, None),
     ]
     rows = []
