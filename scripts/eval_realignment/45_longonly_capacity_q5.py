@@ -154,10 +154,12 @@ def main():
         preds_std, preds_wt = load_predictions(spec)
         weight_label = formal_weight_label(spec, config)
 
-        # F5: config-driven screen / top-quantile, shared with the formal top40
-        # universe via config.portfolio.liquidity_screen_pct (top-40% = 0.60 on
-        # this branch); the top quantile follows n_quantiles.
-        screen_pct = float(config["portfolio"].get("liquidity_screen_pct", 0.40) or 0.40)
+        # Long-only liquidity screen (paper S5.4): keep the top 60% by dollar
+        # volume, i.e. dvol pct >= 0.40, via the DEDICATED parameter
+        # config.portfolio.longonly_screen_pct. This is intentionally separate
+        # from config.portfolio.liquidity_screen_pct (= 0.60), which defines
+        # the formal track's top-40% universe (21e/22b).
+        screen_pct = float(config["portfolio"].get("longonly_screen_pct", 0.40) or 0.40)
         n_q = int(config["portfolio"].get("n_quantiles", 5))
         q5_quantile = (n_q - 1) / n_q
 

@@ -749,7 +749,7 @@ def build_consistency_dose_response():
     LEGS = [("prediction_quantile", "Equal legs"),
             ("prediction_quantile_signal_weight", "Signal legs"),
             ("prediction_quantile_value_weight", "Value legs")]
-    UNIS = [("full", "Full"), ("nyse", "NYSE"), ("top40", "Top-40\\%")]
+    UNIS = [("full", "Full"), ("nyse", "NYSE"), ("top60", "Top-60\\%")]
 
     def grid(leg, uni):
         f = FORMAL_AN_ROOT / leg / "stock_universe" / uni / "two_by_two_500M.csv"

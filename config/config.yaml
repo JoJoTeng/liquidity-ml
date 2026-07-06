@@ -267,17 +267,18 @@ portfolio:
   rebalance_frequency: "monthly"
   # Branch default (eval-realignment): construct the long-short as a TRUE $A
   # dollar-neutral book with SIGNAL (w-tilde) legs over the 3-way universe axis
-  # {full, nyse, top40}. equal/value/dolvol legs, other universes, and the legacy
+  # {full, nyse, top60}. equal/value/dolvol legs, other universes, and the legacy
   # $2A sizing are reachable via 21e flags (--portfolio-weighting, --universe,
   # --leg-capital).
   weighting: "signal"             # equal | value | signal | dolvol (signal = the spec's w-tilde)
   value_weight_col: "liq_me_raw"  # column for "value" weighting (market cap)
   dolvol_col: "liq_dvol_21d"      # column for "dolvol" weighting and the liquidity screen
   signal_weight_col: "w_tilde"    # column the formal layer merges (compute_formal_utility_weights)
-  liquidity_screen_pct: 0.60      # 'top40' universe / script 45: keep dvol pct >= 0.60 (top 40%)
+  liquidity_screen_pct: 0.40      # formal 'top60' universe (21e/22b): keep dvol pct >= 0.40 (top 60%)
+  longonly_screen_pct: 0.40       # script 45 long-only book (paper S5.4): keep dvol pct >= 0.40 (top 60%)
   universe:
-    default: "all"                # full | nyse | top40 | all (parallel long-short universes)
-    choices: ["full", "nyse", "top40"]
+    default: "all"                # full | nyse | top60 | all (parallel long-short universes)
+    choices: ["full", "nyse", "top60"]
     nyse_col: "exchcd"
   # No position cap - capacity-weighted within each selected quintile leg.
 

@@ -87,12 +87,12 @@ def parse_args():
     parser.add_argument(
         "--universe",
         nargs="*",
-        choices=["full", "nyse", "top40", "all"],
+        choices=["full", "nyse", "top60", "all"],
         default=None,
         help=(
             "Investable universe(s) for the long-short — parallel options: 'full' "
-            "(all stocks, unscreened), 'nyse' (exchcd==1, unscreened), 'top40' "
-            "(top 40%% by dollar volume = config.portfolio.liquidity_screen_pct), "
+            "(all stocks, unscreened), 'nyse' (exchcd==1, unscreened), 'top60' "
+            "(top 60%% by dollar volume = config.portfolio.liquidity_screen_pct), "
             "or 'all'. Default reads config.portfolio.universe.default."
         ),
     )
@@ -182,10 +182,10 @@ def _portfolio_weightings(choice: str) -> list[str]:
 
 
 def _resolve_universes(arg: list[str] | None, config: dict) -> list[str]:
-    """Universes to run; default (or 'all') is full+nyse+top40."""
-    allu = ["full", "nyse", "top40"]
+    """Universes to run; default (or 'all') is full+nyse+top60."""
+    allu = ["full", "nyse", "top60"]
     if not arg:
-        default = config["portfolio"].get("universe", {}).get("default", "top40")
+        default = config["portfolio"].get("universe", {}).get("default", "top60")
         return allu if default == "all" else [default]
     if "all" in arg:
         return allu
@@ -197,14 +197,14 @@ def _universe_panel(
 ) -> tuple[pd.DataFrame, float | None]:
     """Return (panel_slice, screen_pct) for one universe.
 
-    'full' and 'nyse' are UNSCREENED (screen_pct=None); 'top40' is the full
+    'full' and 'nyse' are UNSCREENED (screen_pct=None); 'top60' is the full
     sample with the top-40%% dollar-volume screen
     (config.portfolio.liquidity_screen_pct, shared with script 45).
     """
     screen = float(config["portfolio"].get("liquidity_screen_pct", 0.0) or 0.0)
     if universe == "full":
         return panel, None
-    if universe == "top40":
+    if universe == "top60":
         return panel, (screen or None)
     if universe == "nyse":
         if "exchcd" not in panel.columns:
