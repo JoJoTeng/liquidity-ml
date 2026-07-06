@@ -760,6 +760,7 @@ def build_consistency_dose_response():
 
     rows_a = []
     ex_lo, ex_hi = float("inf"), float("-inf")
+    max_total_p = 0.0
     for leg, llab in LEGS:
         cells = []
         for uni, _ in UNIS:
@@ -772,20 +773,22 @@ def build_consistency_dose_response():
             cells.append(f"{num(eff, plus=True)} ({p:.2f})")
             ex = t["Net portfolio effect annualized"]
             ex_lo, ex_hi = min(ex_lo, ex), max(ex_hi, ex)
+            max_total_p = max(max_total_p, t["LW p-val (total, net)"])
         rows_a.append(f"\\quad {llab} & " + " & ".join(cells) + r" \\")
     body = "\n".join(rows_a)
+    p_bound = "0.001" if max_total_p <= 0.001 else ("0.002" if max_total_p <= 0.002 else f"{max_total_p:.4f}")
     return rf"""\begin{{table}}[t!]
 \centering
 \begin{{tabular}}{{lccc}}
 \toprule
  & \multicolumn{{3}}{{c}}{{Stock universe}} \\
 \cmidrule(lr){{2-4}}
-Leg weighting & Full & NYSE & Top-40\% \\
+Leg weighting & Full & NYSE & Top-60\% \\
 \midrule
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; moving right or down makes the portfolio object progressively more consistent with the deployment weight used in training. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le 0.002$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
+\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; moving right or down makes the portfolio object progressively more consistent with the deployment weight used in training. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
 \label{{tab:dose_response}}
 \end{{table}}
 """
