@@ -17,6 +17,7 @@ Tables produced (all XGBoost, dvol liquidity, OOS 2000-2024):
     R2ByQuintileML.tex         tab:r2_by_quintile           (script 04 data)
     EvaluationMeasures.tex     tab:evaluation_measures      (04 + 41 data)
     ScreeningSplitting.tex     tab:screening_splitting      (05 + 06 data)
+    DataDescriptives.tex       tab:data_descriptives        (S4; panel + schemes.py)
 
 Run:
     python scripts/build_paper_tables.py
@@ -247,6 +248,80 @@ BUILDERS = {
     "EvaluationMeasures.tex": build_evaluation_measures,
     "ScreeningSplitting.tex": build_screening_splitting,
 }
+
+
+def build_data_descriptives():
+    """S4 descriptives of the liquidity and cost inputs (pooled 1989-2024).
+
+    tau(A) is computed through the same code path as the tc/tc_rank weight
+    families (src/weighting/schemes.py::_compute_tc_per_stock): lambda = 0.1,
+    equal-breadth participation Q_t = A / N_t with N_t the full cross-section,
+    and within-month median imputation of missing spread / sigma / ADV.
+    """
+    import sys
+
+    sys.path.insert(0, str(ROOT))
+    import numpy as np
+
+    from src.weighting.schemes import _compute_tc_per_stock
+
+    panel = pd.read_parquet(
+        ROOT / "data/processed_panel.parquet",
+        columns=[
+            "permno", "yyyymm",
+            "liq_dvol_21d", "liq_BidAskSpread", "liq_excess_sigma_12m_daily",
+        ],
+    )
+    Q = [1, 25, 50, 75, 95, 99]
+
+    def pcell(v, dp):
+        # A value that would render as 0.0...0 is shown as "<" the last digit.
+        if v < 10 ** (-dp) / 2:
+            return rf"$<${10 ** (-dp):.{dp}f}"
+        return f"{v:,.{dp}f}"
+
+    def prow(label, vals, dp=1):
+        cells = " & ".join(pcell(np.percentile(vals, q), dp) for q in Q)
+        ratio = np.percentile(vals, 99) / np.percentile(vals, 50)
+        return f"{label} & {cells} & {ratio:,.0f} \\\\"
+
+    dv = panel["liq_dvol_21d"].dropna()
+    dv = dv[dv > 0] / 1e6                                   # $M
+    sp = panel["liq_BidAskSpread"].dropna().abs() / 2 * 1e4  # half-spread, bps
+    sg = panel["liq_excess_sigma_12m_daily"].dropna().abs() * 100  # %
+
+    rows = [
+        prow(r"Daily dollar volume (\$M)", dv.values, dp=2),
+        prow(r"Half bid--ask spread (bps)", sp.values, dp=1),
+        prow(r"Daily-scaled volatility $\sigma$ (\%)", sg.values, dp=2),
+    ]
+    for aum, label in [(100e6, r"\$100M"), (500e6, r"\$500M"), (1e9, r"\$1B")]:
+        taus = panel.groupby("yyyymm", group_keys=False).apply(
+            lambda g: _compute_tc_per_stock(
+                g, aum=aum, lam=0.1, spread_col="liq_BidAskSpread",
+                sigma_col="liq_excess_sigma_12m_daily", adv_col="liq_dvol_21d",
+            ),
+            include_groups=False,
+        )
+        rows.append(prow(rf"$\tau$ at {label} (bps)", taus.values * 1e4, dp=1))
+    body = "\n".join(rows)
+
+    return rf"""\begin{{table}}[t!]
+\centering
+\begin{{tabular}}{{lccccccc}}
+\toprule
+ & p1 & p25 & p50 & p75 & p95 & p99 & p99/p50 \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Liquidity and cost inputs: cross-sectional descriptives.}} Pooled percentiles across all stock-months, 1989--2024. Daily dollar volume is the 21-day trailing average of daily price times share volume from the CRSP daily file; the half spread is one half of the \citet{{chen2022open}} \texttt{{BidAskSpread}} series (a \citet{{corwin2012simple}} high--low effective-spread estimate scaled by price); $\sigma$ is the 12-month rolling standard deviation of monthly excess returns rescaled to a daily horizon by $1/\sqrt{{21}}$. The one-way cost $\tau$ applies Equation~\eqref{{eq:tc_primitive}} with $\lambda=0.1$ and equal-breadth participation $Q_t = A/N_t$, where $N_t$ is the full cross-section in month $t$; missing spread, volatility, or volume inputs are imputed at within-month medians, as in the weight construction. The last column reports the ratio of the 99th percentile to the median.}}
+\label{{tab:data_descriptives}}
+\end{{table}}
+"""
+
+
+BUILDERS["DataDescriptives.tex"] = build_data_descriptives
 
 
 def main(out_dir: Path = OUT):
