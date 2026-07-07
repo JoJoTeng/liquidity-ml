@@ -363,26 +363,34 @@ def build_characteristics_table():
     body = "\n".join(
         f"{r['acr']} & {r['desc']} & {r['ref']} & {r['cat']} \\\\" for r in rows
     )
-    return rf"""{{\footnotesize
-\setlength{{\tabcolsep}}{{4pt}}
-\renewcommand{{\arraystretch}}{{1.05}}
-\begin{{longtable}}{{>{{\raggedright\arraybackslash}}p{{3.9cm}}>{{\raggedright\arraybackslash}}p{{4.7cm}}>{{\raggedright\arraybackslash}}p{{4.3cm}}>{{\raggedright\arraybackslash}}p{{2.0cm}}}}
+    # Compact landscape longtable, mirroring the reference paper's
+    # asset-characteristics appendix table (arraystretch 0.7, tabcolsep 2pt,
+    # tiny body, midrule-only frame, "(continued)" markers).
+    return rf"""\begin{{landscape}}
+\renewcommand{{\arraystretch}}{{0.7}}
+\setlength{{\tabcolsep}}{{2pt}}
+\begin{{tiny}}
+\begin{{longtable}}{{>{{\raggedright\arraybackslash}}p{{3.2cm}}>{{\raggedright\arraybackslash}}p{{8.4cm}}>{{\raggedright\arraybackslash}}p{{6.2cm}}>{{\raggedright\arraybackslash}}p{{3.0cm}}}}
 \caption{{\footnotesize \textbf{{Stock-level predictors.}} The $113$ characteristics used throughout the paper, drawn from the open-source library of \citet{{chen2022open}} (see Section~\ref{{subsec:returns_chars}} for the selection rule). Descriptions are the library's short names; full construction details are documented in the library. The category column reports the broad economic grouping used in Sections~\ref{{sec:imbalance}} and~\ref{{sec:data}}.}}
 \label{{tab:characteristics}} \\
-\toprule
-Acronym & Description & Original reference & Category \\
+\midrule
+\textbf{{Acronym}} & \textbf{{Description}} & \textbf{{Original reference}} & \textbf{{Category}} \\
 \midrule
 \endfirsthead
-\multicolumn{{4}}{{l}}{{\footnotesize\emph{{Table~\ref{{tab:characteristics}}, continued}}}} \\
-\toprule
-Acronym & Description & Original reference & Category \\
+\multicolumn{{4}}{{c}}{{\small\itshape (continued)}} \\
+\midrule
+\textbf{{Acronym}} & \textbf{{Description}} & \textbf{{Original reference}} & \textbf{{Category}} \\
 \midrule
 \endhead
-\bottomrule
+\midrule
+\multicolumn{{4}}{{r}}{{\small\itshape (continued)}} \\
 \endfoot
+\midrule
+\endlastfoot
 {body}
 \end{{longtable}}
-}}
+\end{{tiny}}
+\end{{landscape}}
 """
 
 
@@ -1000,6 +1008,72 @@ Regime & Months & $1A$ net SR & Training & Execution & Total \\
 """
 
 
+def build_training_scale_matrix():
+    """Appendix: 2x2 effects as the training-weight scale varies over the fitted grid."""
+    SPECS = [("tc_rank_lam3_10m", "\\$10M"),
+             ("tc_rank_lam3_100m", "\\$100M"),
+             ("tc_rank_lam3_500m", "\\$500M (primary)"),
+             ("tc_rank_lam3_1000m", "\\$1B")]
+    AUMS = ["PropTC", "100M", "500M", "1B"]
+
+    def t(spec, aum):
+        f = EVAL_ROOT / f"xgboost/{spec}/two_by_two_{aum}.csv"
+        return pd.read_csv(f).set_index("metric")["value"]
+
+    def pfmt3(p):
+        # Table-local: three decimals on [0.01, 0.10) so borderline values
+        # (e.g. 0.052) are never printed as the bare 5% threshold.
+        if p < 0.01:
+            return f"{p:.4f}"
+        if p < 0.10:
+            return f"{p:.3f}"
+        return f"{p:.2f}"
+
+    rows_a, rows_b = [], []
+    n_total_sig, n_bonf, min_train_p, min_total = 0, 0, 1.0, 1.0
+    for spec, lab in SPECS:
+        ca, cb = [], []
+        for aum in AUMS:
+            v = t(spec, aum)
+            tr, p_tr = v["Net training effect annualized"], v["LW p-val (training, net)"]
+            to, p_to = v["Net total effect annualized"], v["LW p-val (total, net)"]
+            ca.append(f"{num(tr, plus=True)} ({pfmt3(p_tr)})")
+            cb.append(f"{num(to, plus=True)} ({pfmt3(p_to)})")
+            n_total_sig += int(p_to <= 0.05)
+            n_bonf += int(p_to <= 0.05 / 16)
+            min_train_p = min(min_train_p, p_tr)
+            min_total = min(min_total, to)
+        rows_a.append(f"\\quad {lab} & " + " & ".join(ca) + r" \\")
+        rows_b.append(f"\\quad {lab} & " + " & ".join(cb) + r" \\")
+    assert min_total > 0, "caption claims the total effect is positive in every cell"
+    body_a = "\n".join(rows_a)
+    body_b = "\n".join(rows_b)
+    words = {9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
+             14: "fourteen", 15: "fifteen", 16: "all sixteen"}
+    n_sig_txt = words.get(n_total_sig, str(n_total_sig))
+    n_bonf_txt = words.get(n_bonf, str(n_bonf))
+    return rf"""\begin{{table}}[t!]
+\centering
+\footnotesize
+\begin{{tabular}}{{lcccc}}
+\toprule
+ & \multicolumn{{4}}{{c}}{{Deployed capital (book grid)}} \\
+\cmidrule(lr){{2-5}}
+Training scale & Prop.\ TC & \$100M & \$500M & \$1B \\
+\midrule
+\multicolumn{{5}}{{l}}{{\textit{{Panel A: Net training effect ($2A-1A$, annualised)}}}} \\[2pt]
+{body_a}
+\midrule
+\multicolumn{{5}}{{l}}{{\textit{{Panel B: Net total effect ($2B-1A$, annualised)}}}} \\[2pt]
+{body_b}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Training-scale sensitivity of the decomposition.}} Net annualised training effect ($2A-1A$, Panel~A) and total effect ($2B-1A$, Panel~B) of Equation~\eqref{{eq:decomp}} for the capacity book, in annualised net Sharpe-ratio units, as the scale $A$ at which the training weight of Equation~\eqref{{eq:tcr}} is computed (rows) varies over the fitted grid of Section~\ref{{subsec:weighting_schemes}} and the capital at which the book is charged costs (columns) varies over the book grid of Table~\ref{{tab:capacity_2x2}}; the main text reports the \$500M row. Each row is a self-contained pipeline---the row's weight enters the training loss, the book tilt, and the deployment-weighted evaluation---so effects are comparable across rows, while the underlying cell Sharpe ratios (not shown) are not. Matched training and deployment scales lie on the diagonal, with the Prop.~TC column (half-spread only) approximating the \$10M zero-impact limit. One-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses, from the same seeded machinery as Table~\ref{{tab:capacity_2x2}}, unadjusted across the sixteen cells of each panel. The total effect is positive in every cell and nominally significant at the $5\%$ level in {n_sig_txt} of sixteen ({n_bonf_txt} of sixteen survive a Bonferroni correction at the same level); no training effect is individually significant even before adjustment (the smallest $p$, ${min_train_p:.3f}$, is the unadjusted minimum over the grid), and Panel~A is read as a pattern of point estimates, not as cell-level inference, as in Table~\ref{{tab:dose_response}}. 299 months, 2000--2024.}}
+\label{{tab:train_scale}}
+\end{{table}}
+"""
+
+
 BUILDERS["ConsistencyDoseResponse.tex"] = build_consistency_dose_response
 BUILDERS["WeightFamilySweep.tex"] = build_weight_family_sweep
 BUILDERS["LinearBenchmark.tex"] = build_linear_benchmark
@@ -1011,6 +1085,7 @@ BUILDERS["CapacityPortfolio.tex"] = build_capacity_portfolio
 BUILDERS["CapacityTwoByTwo.tex"] = build_capacity_two_by_two
 BUILDERS["LongOnlyTwoByTwo.tex"] = build_longonly_two_by_two
 BUILDERS["Reallocation.tex"] = build_reallocation
+BUILDERS["TrainingScaleMatrix.tex"] = build_training_scale_matrix
 
 
 def main(out_dir: Path = OUT):
