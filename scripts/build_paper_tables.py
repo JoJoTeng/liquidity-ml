@@ -486,7 +486,7 @@ Capacity weight & Std & Wt & Std & Wt & $\Delta$SR & $p$ \\
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross book of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds the signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the book grid; the gross Sharpe ratio does not depend on $A$ ($1.48$ standard, $1.32$ weighted). Panel~B holds $A=\$500$M fixed and replaces the capacity weight in the book construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. No training-stage difference is statistically significant. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross book of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds the signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the book grid; the gross Sharpe ratio does not depend on $A$ ($1.48$ standard, $1.32$ weighted). Panel~B holds $A=\$500$M fixed and replaces the capacity weight in the book construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No training-stage difference is statistically significant. 299 months, 2000--2024.}}
 \label{{tab:capacity}}
 \end{{table}}
 """
@@ -611,7 +611,7 @@ def build_longonly_two_by_two():
 \centering
 \begin{{tabular}}{{lccccccc}}
 \toprule
-\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M --- net SR, mean monthly cost (bps), turnover}}}} \\[2pt]
+\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M---net SR, mean monthly cost (bps), turnover}}}} \\[2pt]
  & \multicolumn{{3}}{{c}}{{Plain membership ($A$)}} & \multicolumn{{3}}{{c}}{{Hysteresis band ($B$)}} & \\
 \cmidrule(lr){{2-4}} \cmidrule(lr){{5-7}}
 \quad Standard training & {cell('1A')} & {cell('1B')} & \\
@@ -712,7 +712,7 @@ def build_reallocation():
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Feature-importance reallocation.}} Shares of total SHAP importance under standard and implementability-weighted training (primary specification), averaged over the 299 rolling windows; $\Delta$ is the mean of the per-window paired share differences and $t$ its Newey--West statistic (6 lags), the same convention as the per-feature tests. In Panel~A, the illiquidity cluster is the rule-based group of Section~\ref{{sec:imbalance}} (characteristics whose average rank correlation with dollar volume exceeds $0.5$ in absolute value); the illiquidity/microstructure group is the broader economically defined list fixed ex ante; the liquid-signal group collects characteristics whose predictive slopes are significant in the most liquid quintile of the quintile-specific Fama--MacBeth regressions underlying Section~\ref{{subsec:heterogeneity}} (significant in Q5, whether or not also in Q1). Panel~B reports the five largest decreases and increases in per-window importance share.}}
+\caption{{\footnotesize \textbf{{Feature-importance reallocation.}} Shares of total SHAP importance under standard and implementability-weighted training (primary specification), averaged over the 299 rolling windows; $\Delta$ is the mean of the per-window paired share differences and $t$ its Newey--West statistic (6 lags), the same convention as the per-feature tests. In Panel~A, the illiquidity cluster is the rule-based group of Section~\ref{{sec:imbalance}} (characteristics whose average rank correlation with dollar volume exceeds $0.5$ in absolute value); the illiquidity/microstructure group is the broader economically defined list fixed ex ante; the liquid-signal group collects characteristics whose predictive slopes are significant in the most liquid quintile of the all-113-characteristic quintile-specific Fama--MacBeth regressions of Section~\ref{{subsec:heterogeneity}} (significant in Q5, whether or not also in Q1). Panel~B reports the five largest decreases and increases in per-window importance share.}}
 \label{{tab:reallocation}}
 \end{{table}}
 """
@@ -818,7 +818,7 @@ Leg weighting & Full & NYSE & Top-60\% \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; moving right or down makes the portfolio object progressively more consistent with the deployment weight used in training. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
+\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; the NYSE universe and the signal-weighted legs bring the object into alignment with the deployment weight used in training, while the top-$60\%$ universe pre-screens away the illiquid margin the weighting corrects, so the substitutes logic of Section~\ref{{subsec:cost_sensitive}} predicts the attenuation toward zero observed in that column. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
 \label{{tab:dose_response}}
 \end{{table}}
 """
@@ -869,27 +869,41 @@ def build_weight_family_sweep():
         # table matches the precision quoted in the text (e.g. p=0.0004).
         p_tr = t["LW p-val (training, net)"]
         p_tr_txt = f"{p_tr:.4f}" if p_tr < 0.005 else f"{p_tr:.2f}"
+
+        # Execution and total p-values print four decimals below 0.05 so that
+        # exact bootstrap values (e.g. 0.0136) are quoted rather than "0.01".
+        def pfmt4(p):
+            return f"{p:.4f}" if p < 0.05 else f"{p:.2f}"
+
+        exec_cell = f"{num(t['Net portfolio effect annualized'], plus=True)}"
+        supf = EVAL_ROOT / f"xgboost/{spec}/inference_supplement.csv"
+        if supf.exists():
+            d = pd.read_csv(supf)
+            d = d[(d.part == "A_pairwise_LW") & (d.book == "long_short")
+                  & (d.aum == "500M") & (d.statistic == "execution_1B_vs_1A")]
+            if len(d):
+                exec_cell += f" ({pfmt4(d['p_value_one_sided'].iloc[0])})"
         rows.append(
             f"\\quad {lab} & {ess:.0f} & {top10:.1f} & {num(dq45, plus=True)} & "
             f"{num(t['Net training effect annualized'], plus=True)} ({p_tr_txt}) & "
-            f"{num(t['Net portfolio effect annualized'], plus=True)} & "
-            f"{num(t['Net total effect annualized'], plus=True)} ({_pfmt(t['LW p-val (total, net)'])}) \\\\"
+            f"{exec_cell} & "
+            f"{num(t['Net total effect annualized'], plus=True)} ({pfmt4(t['LW p-val (total, net)'])}) \\\\"
         )
     body = "\n".join(rows)
     return rf"""\begin{{table}}[t!]
 \centering
 \footnotesize
-\setlength{{\tabcolsep}}{{3.5pt}}
+\setlength{{\tabcolsep}}{{3pt}}
 \begin{{tabular}}{{lcccccc}}
 \toprule
  & \multicolumn{{2}}{{c}}{{Weight concentration}} & & \multicolumn{{3}}{{c}}{{Two-by-two at \$500M (net)}} \\
 \cmidrule(lr){{2-3}} \cmidrule(lr){{5-7}}
-Weight family & ESS (\%) & Top-10 (\%) & $\Delta R^2_{{\tilde w}}$ (pp) & Training ($p$) & Execution & Total ($p$) \\
+Weight family & ESS (\%) & Top-10 (\%) & $\Delta R^2_{{\tilde w}}$ (pp) & Training ($p$) & Execution ($p$) & Total ($p$) \\
 \midrule
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Across weighting families.}} Each row re-estimates the weighted model and the full evaluation pipeline under a different implementability-weight family (Section~\ref{{subsec:weighting_schemes}}). ESS is the mean monthly Kish effective sample size $(\sum_i w_i)^2/\sum_i w_i^2$ as a percentage of the cross-section; Top-10 is the mean share of total weight carried by the ten largest names. $\Delta R^2_{{\tilde w}}$ is the deployment-weighted $R^2$ gain of Equation~\eqref{{eq:dw_r2}} on the liquid $Q4$--$Q5$ set, each family evaluated under its own weight. The two-by-two columns report the net annualised training, execution, and total effects of Equation~\eqref{{eq:decomp}} at \$500M, with one-sided \citet{{ledoit2008robust}} bootstrap $p$-values for the training and total effects. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Across weighting families.}} Each row re-estimates the weighted model and the full evaluation pipeline under a different implementability-weight family (Section~\ref{{subsec:weighting_schemes}}). ESS is the mean monthly Kish effective sample size $(\sum_i w_i)^2/\sum_i w_i^2$ as a percentage of the cross-section; Top-10 is the mean share of total weight carried by the ten largest names. $\Delta R^2_{{\tilde w}}$ is the deployment-weighted $R^2$ gain of Equation~\eqref{{eq:dw_r2}} on the liquid $Q4$--$Q5$ set, each family evaluated under its own weight. The two-by-two columns report the net annualised training, execution ($1B$ vs.\ $1A$), and total effects of Equation~\eqref{{eq:decomp}} at \$500M, with one-sided \citet{{ledoit2008robust}} bootstrap $p$-values for each contrast (the execution tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). 299 months, 2000--2024.}}
 \label{{tab:weight_sweep}}
 \end{{table}}
 """
@@ -899,26 +913,42 @@ def build_linear_benchmark():
     """S6.4: elastic net vs XGBoost at the primary specification."""
     rows = []
     for model, lab in [("xgboost", "XGBoost"), ("elastic_net", "Elastic net")]:
-        t = pd.read_csv(EVAL_ROOT / f"{model}/tc_rank_lam3_500m/two_by_two_500M.csv").set_index("metric")["value"]
+        base = EVAL_ROOT / f"{model}/tc_rank_lam3_500m"
+        t = pd.read_csv(base / "two_by_two_500M.csv").set_index("metric")["value"]
+        sup = {}
+        f = base / "inference_supplement.csv"
+        if f.exists():
+            d = pd.read_csv(f)
+            d = d[(d.part == "A_pairwise_LW") & (d.book == "long_short") & (d.aum == "500M")]
+            sup = dict(zip(d["statistic"], d["p_value_one_sided"]))
+        adopt = t["SR_net_annualized(2B)"] - t["SR_net_annualized(1B)"]
+        exec_cell = f"{num(t['Net portfolio effect annualized'], plus=True)}"
+        if "execution_1B_vs_1A" in sup:
+            exec_cell += f" ({_pfmt(sup['execution_1B_vs_1A'])})"
+        adopt_cell = f"{num(adopt, plus=True)}"
+        if "adoption_2B_vs_1B" in sup:
+            adopt_cell += f" ({_pfmt(sup['adoption_2B_vs_1B'])})"
         rows.append(
             f"\\quad {lab} & " + " & ".join(num(t[f"SR_net_annualized({c})"]) for c in ["1A", "1B", "2A", "2B"]) +
             f" & {num(t['Net training effect annualized'], plus=True)} ({t['LW p-val (training, net)']:.2f}) & "
-            f"{num(t['Net portfolio effect annualized'], plus=True)} & "
+            f"{exec_cell} & {adopt_cell} & "
             f"{num(t['Net total effect annualized'], plus=True)} ({t['LW p-val (total, net)']:.4f}) \\\\"
         )
     body = "\n".join(rows)
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{lccccccc}}
+\footnotesize
+\setlength{{\tabcolsep}}{{3.5pt}}
+\begin{{tabular}}{{lcccccccc}}
 \toprule
- & \multicolumn{{4}}{{c}}{{Net SR by cell}} & & & \\
+ & \multicolumn{{4}}{{c}}{{Net SR by cell}} & & & & \\
 \cmidrule(lr){{2-5}}
-Model & $1A$ & $1B$ & $2A$ & $2B$ & Training ($p$) & Execution & Total ($p$) \\
+Model & $1A$ & $1B$ & $2A$ & $2B$ & Training ($p$) & Execution ($p$) & $2B{{-}}1B$ ($p$) & Total ($p$) \\
 \midrule
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Linear versus nonlinear learners.}} The two-by-two design of Section~\ref{{subsec:twobytwo_results}} at the primary specification and \$500M, for the gradient-boosted trees of the main analysis and the regularised linear benchmark (elastic net; Appendix~\ref{{app:models}}). Net annualised Sharpe ratios by cell, with the net training, execution, and total effects and one-sided \citet{{ledoit2008robust}} bootstrap $p$-values for the training and total effects. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Linear versus nonlinear learners.}} The two-by-two design of Section~\ref{{subsec:twobytwo_results}} at the primary specification and \$500M, for the gradient-boosted trees of the main analysis and the regularised linear benchmark (elastic net; Appendix~\ref{{app:models}}). Net annualised Sharpe ratios by cell, with the net training, execution ($1B$ vs.\ $1A$), adoption ($2B$ vs.\ $1B$), and total effects and one-sided \citet{{ledoit2008robust}} bootstrap $p$-values for each contrast (the execution and adoption tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so they can differ from the printed cells in the last digit. 299 months, 2000--2024.}}
 \label{{tab:linear}}
 \end{{table}}
 """
@@ -964,7 +994,7 @@ Regime & Months & $1A$ net SR & Training & Execution & Total \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The decomposition across market regimes.}} Net annualised Sharpe ratios and the training, execution, and total effects of Equation~\eqref{{eq:decomp}} for the \$500M capacity book, computed within subsamples of the 299 test months: months with VIX above and below its sample median ($17.9$), and NBER recession versus expansion months. The subsample effects are descriptive point estimates --- no subsample bootstrap is run --- and the recession sample contains only $28$ months. VIX is the CBOE volatility index and recession months are NBER business-cycle dates (both from FRED).}}
+\caption{{\footnotesize \textbf{{The decomposition across market regimes.}} Net annualised Sharpe ratios and the training, execution, and total effects of Equation~\eqref{{eq:decomp}} for the \$500M capacity book, computed within subsamples of the 299 test months: months with VIX above and below its sample median ($17.9$), and NBER recession versus expansion months. The subsample effects are descriptive point estimates---no subsample bootstrap is run---and the recession sample contains only $28$ months. VIX is the CBOE volatility index and recession months are NBER business-cycle dates (both from FRED).}}
 \label{{tab:regimes}}
 \end{{table}}
 """
