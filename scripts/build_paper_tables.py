@@ -492,6 +492,18 @@ Capacity weight & Std & Wt & Std & Wt & $\Delta$SR & $p$ \\
 """
 
 
+def _supplement_pvals(book):
+    """Pairwise p-values from the inference supplement (script 46), by AUM."""
+    f = EVAL / "inference_supplement.csv"
+    out = {}
+    if f.exists():
+        d = pd.read_csv(f)
+        d = d[(d.part == "A_pairwise_LW") & (d.book == book)]
+        for _, r in d.iterrows():
+            out[(r["aum"], r["statistic"])] = r["p_value_one_sided"]
+    return out
+
+
 def build_capacity_two_by_two():
     t5 = _two_by_two("500M")
 
@@ -499,15 +511,24 @@ def build_capacity_two_by_two():
         return (f"{num(t5[f'SR_net_annualized({c})'])} & ({num(t5[f'SR_gross_annualized({c})'])}) & "
                 f"{t5[f'TC mean monthly ({c})'] * 1e4:.0f} & {t5[f'Turnover ({c})']:.2f}")
 
+    sup = _supplement_pvals("long_short")
     rows_b = []
     for aum, lab in AUM_GRID:
         t = _two_by_two(aum)
+        p_exec = sup.get((aum, "execution_1B_vs_1A"))
+        adopt = t["SR_net_annualized(2B)"] - t["SR_net_annualized(1B)"]
+        p_adopt = sup.get((aum, "adoption_2B_vs_1B"))
+        exec_cell = f"{num(t['Net portfolio effect annualized'], plus=True)}"
+        if p_exec is not None:
+            exec_cell += f" ({_pfmt(p_exec)})"
+        adopt_cell = f"{num(adopt, plus=True)}"
+        if p_adopt is not None:
+            adopt_cell += f" ({_pfmt(p_adopt)})"
         rows_b.append(
-            f"\\quad {lab} & {num(t['Net training effect annualized'], plus=True)} & "
-            f"{t['LW p-val (training, net)']:.2f} & "
-            f"{num(t['Net portfolio effect annualized'], plus=True)} & "
-            f"{num(t['Net total effect annualized'], plus=True)} & "
-            f"{t['LW p-val (total, net)']:.4f} & "
+            f"\\quad {lab} & "
+            f"{num(t['Net training effect annualized'], plus=True)} ({_pfmt(t['LW p-val (training, net)'])}) & "
+            f"{exec_cell} & {adopt_cell} & "
+            f"{num(t['Net total effect annualized'], plus=True)} ({_pfmt(t['LW p-val (total, net)'])}) & "
             f"{num(t['Net interaction annualized'], plus=True)} \\\\"
         )
     body_b = "\n".join(rows_b)
@@ -539,7 +560,7 @@ def build_capacity_two_by_two():
 \quad Weighted training ($2B$) & {cell('2B')} & & & \\
 \midrule
 \multicolumn{{8}}{{l}}{{\textit{{Panel B: Decomposition across deployed capital (net, annualised)}}}} \\[2pt]
- & Training & $p$ & Execution & Total & $p$ & Interaction & \\
+ & Training ($p$) & Execution ($p$) & $2B{{-}}1B$ ($p$) & Total ($p$) & Interaction & & \\
 \midrule
 {body_b}
 \midrule
@@ -549,7 +570,7 @@ def build_capacity_two_by_two():
 {body_c}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Cost-aware execution and the training $\times$ execution decomposition.}} Panel~A reports the four cells of the two-by-two design at the primary \$500M scale: net and gross annualised Sharpe ratios, the mean monthly transaction-cost drag in basis points, and monthly one-sided turnover. Rows vary the training loss (standard vs.\ implementability-weighted); blocks vary execution (full monthly rebalancing vs.\ the breakeven gate of Equation~\eqref{{eq:gate}}). Panel~B decomposes the net gain of Equation~\eqref{{eq:decomp}} at each level of deployed capital; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap (reported for the training and total effects; the execution effect carries no separate bootstrap). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. Turnover and gate composition do not vary with $A$ because the gate triggers on the half-spread alone, so the execution effect grows with capital purely through the price of the avoided trades. Panel~C reports annualised factor alphas of the four net return series at \$500M with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Cost-aware execution and the training $\times$ execution decomposition.}} Panel~A reports the four cells of the two-by-two design at the primary \$500M scale: net and gross annualised Sharpe ratios, the mean monthly transaction-cost drag in basis points, and monthly one-sided turnover. Rows vary the training loss (standard vs.\ implementability-weighted); blocks vary execution (full monthly rebalancing vs.\ the breakeven gate of Equation~\eqref{{eq:gate}}). Panel~B decomposes the net gain of Equation~\eqref{{eq:decomp}} at each level of deployed capital; one-sided $p$-values in parentheses are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap: the training, total, execution ($1B$ vs.\ $1A$), and adoption ($2B$ vs.\ $1B$, what weighted training adds on top of the gate) contrasts are all tested with the same seeded machinery (the pairwise execution and adoption tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. Turnover and gate composition do not vary with $A$ because the gate triggers on the half-spread alone, so the execution effect grows with capital purely through the price of the avoided trades. Panel~C reports annualised factor alphas of the four net return series at \$500M with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
 \label{{tab:capacity_2x2}}
 \end{{table}}
 """
@@ -562,18 +583,27 @@ def build_longonly_two_by_two():
         return (f"{num(lt5[f'SR_net_annualized({c})'])} & "
                 f"{lt5[f'TC mean monthly ({c})'] * 1e4:.0f} & {lt5[f'Turnover ({c})']:.2f}")
 
+    sup = _supplement_pvals("long_only")
     rows_b = []
     for aum, lab in AUM_GRID:
         t = pd.read_csv(EVAL / f"longonly_two_by_two_{aum}.csv").set_index("metric")["value"].to_dict()
         inter = t.get("Net interaction annualized",
                       t["Net total effect annualized"] - t["Net training effect annualized"]
                       - t["Net portfolio effect annualized"])
+        p_exec = sup.get((aum, "execution_1B_vs_1A"))
+        adopt = t["SR_net_annualized(2B)"] - t["SR_net_annualized(1B)"]
+        p_adopt = sup.get((aum, "adoption_2B_vs_1B"))
+        exec_cell = f"{num(t['Net portfolio effect annualized'], plus=True)}"
+        if p_exec is not None:
+            exec_cell += f" ({_pfmt(p_exec)})"
+        adopt_cell = f"{num(adopt, plus=True)}"
+        if p_adopt is not None:
+            adopt_cell += f" ({_pfmt(p_adopt)})"
         rows_b.append(
-            f"\\quad {lab} & {num(t['Net training effect annualized'], plus=True)} & "
-            f"{t['LW p-val (training, net)']:.2f} & "
-            f"{num(t['Net portfolio effect annualized'], plus=True)} & "
-            f"{num(t['Net total effect annualized'], plus=True)} & "
-            f"{t['LW p-val (total, net)']:.4f} & "
+            f"\\quad {lab} & "
+            f"{num(t['Net training effect annualized'], plus=True)} ({_pfmt(t['LW p-val (training, net)'])}) & "
+            f"{exec_cell} & {adopt_cell} & "
+            f"{num(t['Net total effect annualized'], plus=True)} ({_pfmt(t['LW p-val (total, net)'])}) & "
             f"{num(inter, plus=True)} \\\\"
         )
     body_b = "\n".join(rows_b)
@@ -588,12 +618,12 @@ def build_longonly_two_by_two():
 \quad Weighted training & {cell('2A')} & {cell('2B')} & \\
 \midrule
 \multicolumn{{8}}{{l}}{{\textit{{Panel B: Decomposition across deployed capital (net, annualised)}}}} \\[2pt]
- & Training & $p$ & Execution & Total & $p$ & Interaction & \\
+ & Training ($p$) & Execution ($p$) & $2B{{-}}1B$ ($p$) & Total ($p$) & Interaction & & \\
 \midrule
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The long-only capacity book.}} The two-by-two design applied to the long-only book of Equation~\eqref{{eq:longonly}}: rows vary the training loss, columns vary execution between plain monthly membership refresh and the cost-scaled membership-hysteresis band. Panel~A reports net annualised Sharpe ratios, mean monthly cost drag (bps), and monthly one-sided turnover at \$500M; Panel~B decomposes the net gain at each level of deployed capital, with one-sided \citet{{ledoit2008robust}} bootstrap $p$-values for the training and total effects. Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The long-only capacity book.}} The two-by-two design applied to the long-only book of Equation~\eqref{{eq:longonly}}: rows vary the training loss, columns vary execution between plain monthly membership refresh and the cost-scaled membership-hysteresis band. Panel~A reports net annualised Sharpe ratios, mean monthly cost drag (bps), and monthly one-sided turnover at \$500M; Panel~B decomposes the net gain at each level of deployed capital; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses cover the training, execution ($1B$ vs.\ $1A$), adoption ($2B$ vs.\ $1B$), and total contrasts (the execution and adoption tests are computed in the inference supplement described in Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. 299 months, 2000--2024.}}
 \label{{tab:longonly_2x2}}
 \end{{table}}
 """
