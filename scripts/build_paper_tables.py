@@ -785,7 +785,7 @@ EVAL_ROOT = ROOT / "outputs/eval_realignment/analysis"
 def build_consistency_dose_response():
     """S6.1: training effect across the 21e leg-weighting x universe grid."""
     LEGS = [("prediction_quantile", "Equal legs"),
-            ("prediction_quantile_signal_weight", "Signal legs"),
+            ("prediction_quantile_signal_weight", "Deployment-weighted legs"),
             ("prediction_quantile_value_weight", "Value legs")]
     UNIS = [("full", "Full"), ("nyse", "NYSE"), ("top60", "Top-60\\%")]
 
@@ -826,7 +826,7 @@ Leg weighting & Full & NYSE & Top-60\% \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; the NYSE universe and the signal-weighted legs bring the object into alignment with the deployment weight used in training, while the top-$60\%$ universe pre-screens away the illiquid margin the weighting corrects, so the substitutes logic of Section~\ref{{subsec:cost_sensitive}} predicts the attenuation toward zero observed in that column. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
+\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; the NYSE universe and the deployment-weighted legs (within-leg positions proportional to $\tilde w$; the forecast determines membership only) bring the object into alignment with the trained objective, while the top-$60\%$ universe pre-screens away the illiquid margin the weighting corrects, so the substitutes logic of Section~\ref{{subsec:cost_sensitive}} predicts the attenuation toward zero observed in that column. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
 \label{{tab:dose_response}}
 \end{{table}}
 """
