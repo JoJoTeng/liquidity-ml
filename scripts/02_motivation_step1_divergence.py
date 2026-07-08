@@ -295,11 +295,29 @@ def main():
             output_dir / "weight_regression_r2_monthly.csv", index=False
         )
 
+        # Ex-liquidity spanning: repeat the regression on the non-liquidity
+        # characteristics only. Because w̃ is a function of dollar volume and
+        # the full regressor set includes dollar volume and its transforms,
+        # part of the full R² is mechanical; dropping the Liquidity category
+        # shows the spanning does not rest on those variables (reported in the
+        # paper alongside the full R²).
+        non_liq_features = [f for f in features if f not in liq_features]
+        fm_exliq = fama_macbeth_weight_regression(panel, non_liq_features, "w_tilde")
+        logger.info(
+            "Ex-liquidity (%d non-liquidity chars): R̄² = %.3f (median %.3f) over %d months",
+            len(non_liq_features), fm_exliq["r2_mean"], fm_exliq["r2_median"],
+            fm_exliq["n_months"],
+        )
+
         # Summary metadata (JSON)
         fm_meta = {
             "r2_mean": fm["r2_mean"],
             "r2_median": fm["r2_median"],
             "n_months": fm["n_months"],
+            "r2_mean_ex_liquidity": fm_exliq["r2_mean"],
+            "r2_median_ex_liquidity": fm_exliq["r2_median"],
+            "n_liquidity_excluded": len(liq_features),
+            "n_features_ex_liquidity": len(non_liq_features),
         }
         with open(output_dir / "weight_regression_meta.json", "w") as f:
             json.dump(fm_meta, f, indent=2)
