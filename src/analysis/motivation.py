@@ -1052,12 +1052,12 @@ def plot_weight_distribution(
         pct_text += "\n\nValue-wt percentiles:\n" + "\n".join(
             f"  {p}th: {v:.3f}" for p, v in zip(pcts, vw_pcts)
         )
-    # Percentile box on the left, filling the empty low-weight region
-    # below the legend (the near-zero tail leaves the left side sparse).
+    # Percentile box in the top-right corner, above the low right tail
+    # (the clipped x-axis leaves that corner empty).
     ax.text(
-        0.02, 0.60, pct_text,
+        0.98, 0.95, pct_text,
         transform=ax.transAxes, fontsize=8,
-        verticalalignment="top", horizontalalignment="left",
+        verticalalignment="top", horizontalalignment="right",
         bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
     )
 
