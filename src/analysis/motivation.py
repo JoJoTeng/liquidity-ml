@@ -1013,8 +1013,6 @@ def plot_weight_distribution(
     pcts = [5, 25, 50, 75, 95]
     pct_vals = np.percentile(w.values, pcts)
 
-    # Large fonts so labels stay legible when the 8x8 canvas is displayed
-    # at a reduced width in the paper.
     fig, ax = plt.subplots(figsize=(8, 8))
 
     # Dollar-volume weights
@@ -1054,20 +1052,17 @@ def plot_weight_distribution(
         pct_text += "\n\nValue-wt percentiles:\n" + "\n".join(
             f"  {p}th: {v:.3f}" for p, v in zip(pcts, vw_pcts)
         )
-    # Percentile box on the left, filling the empty low-weight region
-    # below the legend (the near-zero tail leaves the left side sparse).
     ax.text(
-        0.02, 0.60, pct_text,
-        transform=ax.transAxes, fontsize=14,
-        verticalalignment="top", horizontalalignment="left",
+        0.98, 0.95, pct_text,
+        transform=ax.transAxes, fontsize=8,
+        verticalalignment="top", horizontalalignment="right",
         bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
     )
 
-    ax.set_xlabel(r"$\log_{10}(\tilde{w})$", fontsize=22)
-    ax.set_ylabel("Density", fontsize=22)
-    ax.tick_params(labelsize=17)
+    ax.set_xlabel(r"$\log_{10}(\tilde{w})$")
+    ax.set_ylabel("Density")
     # No in-figure title: the LaTeX caption names the figure (fig:weight_dist).
-    ax.legend(fontsize=18, loc="upper left")
+    ax.legend(fontsize=9, loc="upper left")
 
     plt.tight_layout()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
