@@ -855,11 +855,9 @@ def plot_density_comparison(
     import matplotlib.pyplot as plt
     _set_academic_style()
 
-    # Define the two panels
-    panel_a_label = "Panel A: Liquidity-related characteristics"
-    panel_b_label = "Panel B: Non-liquidity characteristics"
-
-    # Map features to panels — order matters for subplot placement
+    # Map features to the two subplot columns — order matters for placement.
+    # The columns are not a liquidity vs non-liquidity split; they merely lay
+    # out the six representative characteristics.
     panel_a_features = ["Illiquidity", "BM", "STreversal"]
     panel_b_features = ["IdioVol3F", "Mom12m", "AnnouncementReturn"]
 
@@ -943,15 +941,9 @@ def plot_density_comparison(
     for i in range(len(panel_b), nrows):
         axes[i, 1].set_visible(False)
 
-    # Panel labels
-    axes[0, 0].annotate(
-        panel_a_label, xy=(0.5, 1.15), xycoords="axes fraction",
-        ha="center", fontsize=11, fontstyle="italic",
-    )
-    axes[0, 1].annotate(
-        panel_b_label, xy=(0.5, 1.15), xycoords="axes fraction",
-        ha="center", fontsize=11, fontstyle="italic",
-    )
+    # No column headers: the two columns are not a liquidity vs non-liquidity
+    # split (the caption names the characteristics), so avoid a misleading
+    # panel label.
 
     # Shared legend from first subplot
     axes[0, 0].legend(fontsize=9, loc="upper right")
