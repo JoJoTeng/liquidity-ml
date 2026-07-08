@@ -1061,6 +1061,10 @@ def plot_weight_distribution(
         bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
     )
 
+    # Clip the view to where the data lives: the near-zero tail (~0.2% of
+    # mass) otherwise stretches the axis to log10(w) < -14 and leaves most
+    # of the panel empty. The omitted tail is quantified in the caption.
+    ax.set_xlim(-6, 3)
     ax.set_xlabel(r"$\log_{10}(\tilde{w})$")
     ax.set_ylabel("Density")
     # No in-figure title: the LaTeX caption names the figure (fig:weight_dist).
