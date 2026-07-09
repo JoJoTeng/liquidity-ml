@@ -101,9 +101,13 @@ FOCAL_LABELS = {
 def build_heterogeneity_focal():
     ir = pd.read_csv(MOT / "step2/dvol/interaction_regression.csv")
     im = json.load(open(MOT / "step2/dvol/interaction_meta.json"))
+    # t-statistics sit in their own labelled columns here, so they carry no
+    # parentheses (parentheses are reserved for t-stats sharing a cell with a
+    # coefficient, as in the alpha panel of tab:capacity_2x2). Negatives keep a
+    # math minus so the sign of each interaction reads at a glance.
     rows = "\n".join(
         f"{FOCAL_LABELS.get(r['feature'], r['feature'])} & {num(r['beta_bar'], 3)} & "
-        f"{tstat(r['beta_t'])} & {num(r['gamma_bar'], 3)} & {tstat(r['gamma_t'])} \\\\"
+        f"{num(r['beta_t'], 2)} & {num(r['gamma_bar'], 3)} & {num(r['gamma_t'], 2)} \\\\"
         for _, r in ir.iterrows()
     )
     n_sig = im["n_sig_gamma_continuous"]
@@ -121,7 +125,7 @@ Characteristic & $\bar\beta_j$ & $t$ & $\bar\gamma_j$ & $t$ \\
 {rows}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Heterogeneous predictability across the liquidity spectrum.}} Monthly Fama--MacBeth regressions of next-month returns on fifteen focal characteristics and their interactions with the within-month dollar-volume percentile rank $L_{{i,t}}\in[0,1]$: $r_{{i,t+1}} = \alpha_t + x_{{i,t}}'\beta_t + (x_{{i,t}}L_{{i,t}})'\gamma_t + \varepsilon_{{i,t+1}}$. Since $L=0$ ($L=1$) marks the least (most) liquid stock, $\bar\gamma_j$ measures the change in the predictive slope of characteristic $j$ from the illiquid to the liquid end of the spectrum. $t$-statistics use Newey--West standard errors (6 lags); {n_sig} of 15 interactions are significant at $|t|>2$, and the joint time-series $F$-test of $\gamma=0$ is $F={f_stat:.1f}$ ($p<0.001$). Estimating the same regression on all 113 characteristics yields {n_sig_full} significant interactions ($F={f_full:.1f}$, $p<0.001$). The sample is the full CRSP cross-section, 1989--2024.}}
+\caption{{\footnotesize \textbf{{Heterogeneous predictability across the liquidity spectrum.}} Monthly Fama--MacBeth regressions of next-month returns on fifteen focal characteristics and their interactions with the within-month dollar-volume percentile rank $L_{{i,t}}\in[0,1]$: $r_{{i,t+1}} = \alpha_t + x_{{i,t}}'\beta_t + (x_{{i,t}}L_{{i,t}})'\gamma_t + \varepsilon_{{i,t+1}}$. Since $L=0$ ($L=1$) marks the least (most) liquid stock, $\bar\gamma_j$ measures the change in the predictive slope of characteristic $j$ from the illiquid to the liquid end of the spectrum. $t$-statistics use Newey--West standard errors (6 lags); {n_sig} of 15 interactions are significant at $|t|>2$, and the joint time-series $F$-test of $\gamma=0$ is $F={f_stat:.1f}$ ($p<0.001$). Estimating the same regression on all 113 characteristics yields {n_sig_full} significant interactions ($F={f_full:.1f}$, $p<0.001$). Missing characteristic ranks are set to the neutral value $0.5$. The sample comprises all NYSE, AMEX, and NASDAQ stock-months from 1989 to 2024, with no size or liquidity screen (Section~\ref{{sec:data}}).}}
 \label{{tab:heterogeneity}}
 \end{{table}}
 """
