@@ -230,9 +230,11 @@ def build_screening_splitting():
         MOT / "step3_quintile/xgboost/dvol/global/baseline/r2_comparison.csv"
     )
     # Numeric columns are right-aligned so the decimal points line up; see mnum.
+    # Panel A has no Delta column, but we keep the slot empty rather than drop
+    # it, so that N_train lands in the same column as Panel B's N_train.
     rows_a = "\n".join(
         f"\\quad {RESTRICT_UNIV[r_['model']]} & {mnum(r_['r2_q45_pct'])} & "
-        f"{mnum(r_['r2_full_pct'])} & {int(round(r_['N_train/month'])):,} \\\\"
+        f"{mnum(r_['r2_full_pct'])} & & {int(round(r_['N_train/month'])):,} \\\\"
         for _, r_ in r.iterrows()
     )
     rows_b = "\n".join(
@@ -245,7 +247,7 @@ def build_screening_splitting():
 \begin{{tabular}}{{l rrrr}}
 \toprule
 \multicolumn{{5}}{{l}}{{\textit{{Panel A: Progressive restriction of the training universe}}}} \\[2pt]
-Training universe & \multicolumn{{1}}{{c}}{{$R^2$ Q4--Q5 (\%)}} & \multicolumn{{1}}{{c}}{{$R^2$ full (\%)}} & \multicolumn{{1}}{{c}}{{$N_{{\mathrm{{train}}}}$/month}} & \\
+Training universe & \multicolumn{{1}}{{c}}{{$R^2$ Q4--Q5 (\%)}} & \multicolumn{{1}}{{c}}{{$R^2$ full (\%)}} & & \multicolumn{{1}}{{c}}{{$N_{{\mathrm{{train}}}}$/month}} \\
 \midrule
 {rows_a}
 \midrule
