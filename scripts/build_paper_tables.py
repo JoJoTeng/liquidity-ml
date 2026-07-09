@@ -229,27 +229,28 @@ def build_screening_splitting():
     q = pd.read_csv(
         MOT / "step3_quintile/xgboost/dvol/global/baseline/r2_comparison.csv"
     )
+    # Numeric columns are right-aligned so the decimal points line up; see mnum.
     rows_a = "\n".join(
-        f"\\quad {RESTRICT_UNIV[r_['model']]} & {num(r_['r2_q45_pct'])} & "
-        f"{num(r_['r2_full_pct'])} & {int(round(r_['N_train/month'])):,} \\\\"
+        f"\\quad {RESTRICT_UNIV[r_['model']]} & {mnum(r_['r2_q45_pct'])} & "
+        f"{mnum(r_['r2_full_pct'])} & {int(round(r_['N_train/month'])):,} \\\\"
         for _, r_ in r.iterrows()
     )
     rows_b = "\n".join(
-        f"\\quad {q_['quintile']} & {num(q_['r2_pooled_pct'])} & {num(q_['r2_own_pct'])} & "
-        f"{num(q_['delta_pp'])} & {int(q_['N_train/month']):,} \\\\"
+        f"\\quad {q_['quintile']} & {mnum(q_['r2_pooled_pct'])} & {mnum(q_['r2_own_pct'])} & "
+        f"{mnum(q_['delta_pp'])} & {int(q_['N_train/month']):,} \\\\"
         for _, q_ in q.iterrows()
     )
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{lcccc}}
+\begin{{tabular}}{{l rrrr}}
 \toprule
 \multicolumn{{5}}{{l}}{{\textit{{Panel A: Progressive restriction of the training universe}}}} \\[2pt]
-Training universe & $R^2$ Q4--Q5 (\%) & $R^2$ full (\%) & $N_{{\mathrm{{train}}}}$/month & \\
+Training universe & \multicolumn{{1}}{{c}}{{$R^2$ Q4--Q5 (\%)}} & \multicolumn{{1}}{{c}}{{$R^2$ full (\%)}} & \multicolumn{{1}}{{c}}{{$N_{{\mathrm{{train}}}}$/month}} & \\
 \midrule
 {rows_a}
 \midrule
 \multicolumn{{5}}{{l}}{{\textit{{Panel B: Quintile-specific models}}}} \\[2pt]
-Quintile & $R^2$ pooled (\%) & $R^2$ own (\%) & $\Delta$ (pp) & $N_{{\mathrm{{train}}}}$/month \\
+Quintile & \multicolumn{{1}}{{c}}{{$R^2$ pooled (\%)}} & \multicolumn{{1}}{{c}}{{$R^2$ own (\%)}} & \multicolumn{{1}}{{c}}{{$\Delta$ (pp)}} & \multicolumn{{1}}{{c}}{{$N_{{\mathrm{{train}}}}$/month}} \\
 \midrule
 {rows_b}
 \bottomrule
@@ -445,18 +446,18 @@ def build_deployment_weighted_r2():
     for _, r in m.iterrows():
         pre = r"\midrule" + "\n" if r["universe"] == "liquid_q4q5" else ""
         rows.append(
-            pre + f"{LAB[r['universe']]} & {num(r['r2_weighted_std_pct'])} & "
-            f"{num(r['r2_weighted_wt_pct'])} & {num(r['delta_pct'], plus=True)} & "
+            pre + f"{LAB[r['universe']]} & {mnum(r['r2_weighted_std_pct'])} & "
+            f"{mnum(r['r2_weighted_wt_pct'])} & {num(r['delta_pct'], plus=True)} & "
             f"{tstat(r['t_stat'])} \\\\"
         )
     body = "\n".join(rows)
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{lcccc}}
+\begin{{tabular}}{{l rrrr}}
 \toprule
  & \multicolumn{{2}}{{c}}{{$R^2_{{\tilde w}}$ (\%)}} & & \\
 \cmidrule(lr){{2-3}}
-Universe & Standard & Weighted & $\Delta R^2_{{\tilde w}}$ (pp) & $t(D_t)$ \\
+Universe & \multicolumn{{1}}{{c}}{{Standard}} & \multicolumn{{1}}{{c}}{{Weighted}} & \multicolumn{{1}}{{c}}{{$\Delta R^2_{{\tilde w}}$ (pp)}} & \multicolumn{{1}}{{c}}{{$t(D_t)$}} \\
 \midrule
 {body}
 \bottomrule
@@ -705,7 +706,7 @@ def build_reallocation():
         ms, mw, d = share_diff(sub)
         r = newey_west_tstat(d.values, lags=6)
         rows_a.append(
-            f"\\quad {lab} & {ms*100:.1f} & {mw*100:.1f} & "
+            f"\\quad {lab} & {mnum(ms*100, 1)} & {mnum(mw*100, 1)} & "
             f"{num(r['mean']*100, plus=True)} & {tstat(r['t_stat'])} \\\\"
         )
     body_a = "\n".join(rows_a)
@@ -720,17 +721,17 @@ def build_reallocation():
     losers, gainers = per[:5], sorted(per[-5:], key=lambda x: -x[3])
     rows_b = []
     for f, ms, mw, dd, tt in losers + gainers:
-        rows_b.append(f"\\quad {_latex_escape(f)} & {ms:.2f} & {mw:.2f} & {num(dd, plus=True)} & {tstat(tt)} \\\\")
+        rows_b.append(f"\\quad {_latex_escape(f)} & {mnum(ms)} & {mnum(mw)} & {num(dd, plus=True)} & {tstat(tt)} \\\\")
     rows_b.insert(5, r"\addlinespace")
     body_b = "\n".join(rows_b)
 
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{lcccc}}
+\begin{{tabular}}{{l rrrr}}
 \toprule
  & \multicolumn{{2}}{{c}}{{Share of importance (\%)}} & & \\
 \cmidrule(lr){{2-3}}
- & Standard & Weighted & $\Delta$ (pp) & $t$ \\
+ & \multicolumn{{1}}{{c}}{{Standard}} & \multicolumn{{1}}{{c}}{{Weighted}} & \multicolumn{{1}}{{c}}{{$\Delta$ (pp)}} & \multicolumn{{1}}{{c}}{{$t$}} \\
 \midrule
 \multicolumn{{5}}{{l}}{{\textit{{Panel A: Group shares}}}} \\[2pt]
 {body_a}
