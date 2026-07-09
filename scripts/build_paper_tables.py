@@ -105,9 +105,17 @@ def build_heterogeneity_focal():
     # parentheses (parentheses are reserved for t-stats sharing a cell with a
     # coefficient, as in the alpha panel of tab:capacity_2x2). Negatives keep a
     # math minus so the sign of each interaction reads at a glance.
+    #
+    # Every value in a column carries the same number of decimals, so the
+    # numeric columns are right-aligned: the decimal points line up and the
+    # minus signs hang to the left. Math-wrap all numbers (not just negatives)
+    # so digit metrics are identical down the column.
+    def mnum(x, dp):
+        return f"${x:.{dp}f}$"
+
     rows = "\n".join(
-        f"{FOCAL_LABELS.get(r['feature'], r['feature'])} & {num(r['beta_bar'], 3)} & "
-        f"{num(r['beta_t'], 2)} & {num(r['gamma_bar'], 3)} & {num(r['gamma_t'], 2)} \\\\"
+        f"{FOCAL_LABELS.get(r['feature'], r['feature'])} & {mnum(r['beta_bar'], 3)} & "
+        f"{mnum(r['beta_t'], 2)} & {mnum(r['gamma_bar'], 3)} & {mnum(r['gamma_t'], 2)} \\\\"
         for _, r in ir.iterrows()
     )
     n_sig = im["n_sig_gamma_continuous"]
@@ -116,11 +124,11 @@ def build_heterogeneity_focal():
     f_full = im["f_test_stat_full"]
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{lcccc}}
+\begin{{tabular}}{{l rrrr}}
 \toprule
  & \multicolumn{{2}}{{c}}{{Level}} & \multicolumn{{2}}{{c}}{{Liquidity interaction}} \\
 \cmidrule(lr){{2-3}} \cmidrule(lr){{4-5}}
-Characteristic & $\bar\beta_j$ & $t$ & $\bar\gamma_j$ & $t$ \\
+Characteristic & \multicolumn{{1}}{{c}}{{$\bar\beta_j$}} & \multicolumn{{1}}{{c}}{{$t$}} & \multicolumn{{1}}{{c}}{{$\bar\gamma_j$}} & \multicolumn{{1}}{{c}}{{$t$}} \\
 \midrule
 {rows}
 \bottomrule
