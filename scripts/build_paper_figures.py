@@ -119,16 +119,28 @@ def build_importance_vs_liquid_r2():
     in_c = iv[iv.feature.isin(cluster)]
     out_c = iv[~iv.feature.isin(cluster)]
 
-    fig, ax = plt.subplots(figsize=(8, 5.2))
+    # Compact canvas (displayed at 0.82\textwidth): the exhibit is a
+    # supporting diagnostic. Cluster labels take per-feature offsets so the
+    # Price/Size pair and the zerotrade stack do not collide.
+    LABEL_OFFSETS = {
+        "Price": (5, 5, "left"),
+        "Size": (5, -11, "left"),
+        "zerotrade1M": (6, 4, "left"),
+        "zerotrade6M": (-7, -4, "right"),
+        "zerotrade12M": (6, -11, "left"),
+        "VolSD": (7, 0, "left"),
+    }
+    fig, ax = plt.subplots(figsize=(7, 4.4))
     ax.scatter(out_c.liquid_r2, out_c.avg_importance, s=26, color="#2c6b9c",
                alpha=0.45, edgecolors="none", label="Other characteristics")
     ax.scatter(in_c.liquid_r2, in_c.avg_importance, s=42, color="#b0533b",
                alpha=0.95, edgecolors="0.2", linewidths=0.4,
                label=r"Illiquidity cluster ($|\bar\rho_j| > 0.5$)")
     for _, r in in_c.iterrows():
+        dx, dy, ha = LABEL_OFFSETS.get(r.feature, (4, 3, "left"))
         ax.annotate(r.feature, (r.liquid_r2, r.avg_importance),
-                    xytext=(4, 3), textcoords="offset points",
-                    fontsize=8, color="#7a3826")
+                    xytext=(dx, dy), textcoords="offset points",
+                    fontsize=9, color="#7a3826", ha=ha)
     ax.set_xlabel(r"Univariate predictive $R^2$ among liquid $Q4$--$Q5$ stocks")
     ax.set_ylabel("Average native (gain) importance")
     ax.legend(frameon=False, fontsize=10, loc="upper right")
