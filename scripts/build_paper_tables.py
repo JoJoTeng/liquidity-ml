@@ -194,20 +194,23 @@ def build_evaluation_measures():
     pooled = u["r2_standard_zero"] * 100
     dvolw = u["r2_weighted_zero"] * 100
     mcapw = u["r2_weighted_mcap_zero"] * 100
+    # Two columns only: the old three-column layout repeated "Full
+    # cross-section" four times and the implementability label twice. The one
+    # non-full-universe row is an indented variant of its parent row.
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{llc}}
+\begin{{tabular}}{{l r}}
 \toprule
-Evaluation measure & Universe & $R^2$ (\%) \\
+Error weighting $w_{{i,t}}$ & \multicolumn{{1}}{{c}}{{$R^2_w$ (\%)}} \\
 \midrule
-Pooled, equal-weighted & Full cross-section & {num(pooled, 2, plus=True)} \\
-Implementability-weighted ($\tilde w^{{\mathrm{{tcr}}}}$, \$500M) & Full cross-section & {num(dw_full, 2, plus=True)} \\
-Implementability-weighted ($\tilde w^{{\mathrm{{tcr}}}}$, \$500M) & Liquid (Q4--Q5) & {num(dw_q45, 2, plus=True)} \\
-Dollar-volume-weighted & Full cross-section & {num(dvolw, 2, plus=True)} \\
-Value-weighted (market cap) & Full cross-section & {num(mcapw, 2, plus=True)} \\
+Equal (the conventional pooled $R^2$) & {num(pooled, 2, plus=True)} \\
+Implementability ($\tilde w^{{\mathrm{{tcr}}}}$, \$500M) & {num(dw_full, 2, plus=True)} \\
+\quad restricted to the liquid $Q4$--$Q5$ book & {num(dw_q45, 2, plus=True)} \\
+Dollar volume & {num(dvolw, 2, plus=True)} \\
+Value (market capitalisation) & {num(mcapw, 2, plus=True)} \\
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The same predictions under different measures.}} Out-of-sample $R^2$ (zero benchmark, 2000--2024) of the identical standard-loss prediction panel, evaluated under alternative cross-sectional weightings of squared errors. Row 1 weights every stock-month equally. Rows 2--3 weight errors by the transaction-cost-rank implementability weight of Section~\ref{{sec:framework}} at \$500M; rows 4--5 weight by normalised dollar volume and market capitalisation. All weights are normalised to mean one within each month.}}
+\caption{{\footnotesize \textbf{{The same predictions under different measures.}} Out-of-sample $R^2_w$ of Equation~\eqref{{eq:weighted_r2}} (zero benchmark, 2000--2024) for the identical standard-loss prediction panel, under alternative cross-sectional weightings $w_{{i,t}}$ of the squared errors. All weights are normalised to mean one within each month, and every row uses the full cross-section except the indented one, which restricts the implementability-weighted average to the liquid $Q4$--$Q5$ names. The implementability weight is the transaction-cost-rank weight of Section~\ref{{subsec:weighting_schemes}} at \$500M.}}
 \label{{tab:evaluation_measures}}
 \end{{table}}
 """
