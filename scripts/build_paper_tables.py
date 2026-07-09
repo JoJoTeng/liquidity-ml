@@ -41,6 +41,16 @@ def num(x, dp=2, plus=False):
     return s
 
 
+def mnum(x, dp=2):
+    """Fixed-decimal number, always math-wrapped.
+
+    Used in right-aligned numeric columns: math-wrapping every value (not just
+    the negatives) keeps digit metrics identical down the column, so the
+    decimal points line up with the minus signs hanging into the left margin.
+    """
+    return f"${x:.{dp}f}$"
+
+
 def tstat(x):
     """t-statistic in parentheses, with a math minus for negatives."""
     return f"({x:.2f})" if x >= 0 else f"($-${abs(x):.2f})"
@@ -107,12 +117,7 @@ def build_heterogeneity_focal():
     # math minus so the sign of each interaction reads at a glance.
     #
     # Every value in a column carries the same number of decimals, so the
-    # numeric columns are right-aligned: the decimal points line up and the
-    # minus signs hang to the left. Math-wrap all numbers (not just negatives)
-    # so digit metrics are identical down the column.
-    def mnum(x, dp):
-        return f"${x:.{dp}f}$"
-
+    # numeric columns are right-aligned (see mnum).
     rows = "\n".join(
         f"{FOCAL_LABELS.get(r['feature'], r['feature'])} & {mnum(r['beta_bar'], 3)} & "
         f"{mnum(r['beta_t'], 2)} & {mnum(r['gamma_bar'], 3)} & {mnum(r['gamma_t'], 2)} \\\\"
@@ -153,19 +158,21 @@ def build_r2_by_quintile():
 
     def r2zero(quintile_label, fallback):
         v = zero_full.get(quintile_label.split()[0])  # 'Q1 (Illiquid)' -> 'Q1'
-        return num(v) if v is not None else num(fallback)  # 'Full sample' -> fallback
+        return mnum(v if v is not None else fallback)  # 'Full sample' -> fallback
 
+    # Numeric columns are right-aligned so the decimal points line up (each
+    # column carries a uniform number of decimals); see mnum.
     rows = "\n".join(
         f"{r['Quintile']} & {r2zero(r['Quintile'], r['R2_zero (%)'])} & "
-        f"{num(r['R2_CS (%)'])} & {num(r['R2_hist (%)'])} & {int(r['Avg N/month']):,} \\\\"
+        f"{mnum(r['R2_CS (%)'])} & {mnum(r['R2_hist (%)'])} & {int(r['Avg N/month']):,} \\\\"
         for _, r in t3.iterrows()
     )
     rows = rows.replace("Full sample &", r"\midrule" + "\nFull sample &")
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{lcccc}}
+\begin{{tabular}}{{l rrrr}}
 \toprule
-Quintile & $R^2_{{\mathrm{{zero}}}}$ (\%) & $R^2_{{\mathrm{{CS}}}}$ (\%) & $R^2_{{\mathrm{{hist}}}}$ (\%) & Avg.\ $N$/month \\
+Quintile & \multicolumn{{1}}{{c}}{{$R^2_{{\mathrm{{zero}}}}$ (\%)}} & \multicolumn{{1}}{{c}}{{$R^2_{{\mathrm{{CS}}}}$ (\%)}} & \multicolumn{{1}}{{c}}{{$R^2_{{\mathrm{{hist}}}}$ (\%)}} & \multicolumn{{1}}{{c}}{{Avg.\ $N$/month}} \\
 \midrule
 {rows}
 \bottomrule
