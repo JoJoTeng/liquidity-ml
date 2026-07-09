@@ -448,7 +448,7 @@ def build_deployment_weighted_r2():
         rows.append(
             pre + f"{LAB[r['universe']]} & {mnum(r['r2_weighted_std_pct'])} & "
             f"{mnum(r['r2_weighted_wt_pct'])} & {num(r['delta_pct'], plus=True)} & "
-            f"{tstat(r['t_stat'])} \\\\"
+            f"{mnum(r['t_stat'])} \\\\"
         )
     body = "\n".join(rows)
     return rf"""\begin{{table}}[t!]
@@ -706,8 +706,8 @@ def build_reallocation():
         ms, mw, d = share_diff(sub)
         r = newey_west_tstat(d.values, lags=6)
         rows_a.append(
-            f"\\quad {lab} & {mnum(ms*100, 1)} & {mnum(mw*100, 1)} & "
-            f"{num(r['mean']*100, plus=True)} & {tstat(r['t_stat'])} \\\\"
+            f"\\quad {lab} & {mnum(ms*100)} & {mnum(mw*100)} & "
+            f"{num(r['mean']*100, plus=True)} & {mnum(r['t_stat'])} \\\\"
         )
     body_a = "\n".join(rows_a)
 
@@ -721,7 +721,7 @@ def build_reallocation():
     losers, gainers = per[:5], sorted(per[-5:], key=lambda x: -x[3])
     rows_b = []
     for f, ms, mw, dd, tt in losers + gainers:
-        rows_b.append(f"\\quad {_latex_escape(f)} & {mnum(ms)} & {mnum(mw)} & {num(dd, plus=True)} & {tstat(tt)} \\\\")
+        rows_b.append(f"\\quad {_latex_escape(f)} & {mnum(ms)} & {mnum(mw)} & {num(dd, plus=True)} & {mnum(tt)} \\\\")
     rows_b.insert(5, r"\addlinespace")
     body_b = "\n".join(rows_b)
 
