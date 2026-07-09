@@ -486,6 +486,22 @@ def main():
         r2_results["gap_zero"] * 100,
     )
 
+    # Liquid-book (Q4-Q5) restriction of the same evaluations. The global
+    # mean-one weights are kept on the subset (no renormalisation), matching
+    # the eval_realignment convention: R² is a ratio, so a global rescale
+    # cancels and the subsets remain directly comparable.
+    pred_q45 = pred_with_q.loc[
+        pred_with_q["liq_quintile"] >= 4, ["permno", "yyyymm", "y_true", "y_pred"]
+    ]
+    r2_q45 = compute_utility_weighted_r2(pred_q45, panel_for_diagnostics)
+    r2_results["r2_standard_zero_q45"] = r2_q45["r2_standard_zero"]
+    r2_results["r2_weighted_zero_q45"] = r2_q45["r2_weighted_zero"]
+    logger.info(
+        "Liquid Q4-Q5 book:  Unweighted R²: %.4f%%  Utility-weighted R²: %.4f%%",
+        r2_q45["r2_standard_zero"] * 100,
+        r2_q45["r2_weighted_zero"] * 100,
+    )
+
     if args.liquidity != "mcap":
         # Market-cap weighted R² robustness check from the motivation document.
         logger.info("Computing market-cap weighted R² robustness...")
@@ -496,9 +512,14 @@ def main():
         r2_results["gap_mcap_zero"] = (
             r2_results["r2_standard_zero"] - r2_mcap["r2_weighted_zero"]
         )
+        r2_mcap_q45 = compute_utility_weighted_r2(
+            pred_q45, panel_mcap, w_col="w_tilde_mcap"
+        )
+        r2_results["r2_weighted_mcap_zero_q45"] = r2_mcap_q45["r2_weighted_zero"]
         logger.info(
-            "Market-cap weighted robustness: Zero R²=%.4f%%, Gap=%.4f pp",
+            "Market-cap weighted robustness: Zero R²=%.4f%% (Q4-Q5 %.4f%%), Gap=%.4f pp",
             r2_mcap["r2_weighted_zero"] * 100,
+            r2_mcap_q45["r2_weighted_zero"] * 100,
             r2_results["gap_mcap_zero"] * 100,
         )
 

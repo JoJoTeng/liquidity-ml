@@ -191,26 +191,44 @@ def build_evaluation_measures():
     )
     dw_full = b.loc[b.universe == "full", "r2_weighted_std_pct"].iloc[0]
     dw_q45 = b.loc[b.universe == "liquid_q4q5", "r2_weighted_std_pct"].iloc[0]
-    pooled = u["r2_standard_zero"] * 100
-    dvolw = u["r2_weighted_zero"] * 100
-    mcapw = u["r2_weighted_mcap_zero"] * 100
-    # Two columns only: the old three-column layout repeated "Full
-    # cross-section" four times and the implementability label twice. The one
-    # non-full-universe row is an indented variant of its parent row.
+
+    # Cross-pipeline integrity guard: the equal-weighted liquid-book cell from
+    # script 04 must equal Table 4's Mall Q4-Q5 entry (same predictions, same
+    # quintiles, independent code paths).
+    restr = pd.read_csv(
+        MOT / "step3_restriction/xgboost/dvol/global/baseline/restriction_comparison.csv"
+    )
+    q45_check = restr.loc[restr.model == "Mall", "r2_q45_pct"].iloc[0]
+    assert abs(u["r2_standard_zero_q45"] * 100 - q45_check) < 1e-4, (
+        "equal-weighted Q4-Q5 R2 disagrees with restriction_comparison"
+    )
+
+    rows = [
+        ("Equal (the conventional pooled $R^2$)",
+         u["r2_standard_zero"] * 100, u["r2_standard_zero_q45"] * 100),
+        (r"Implementability ($\tilde w^{\mathrm{tcr}}$, \$500M)",
+         dw_full, dw_q45),
+        ("Dollar volume",
+         u["r2_weighted_zero"] * 100, u["r2_weighted_zero_q45"] * 100),
+        ("Value (market capitalisation)",
+         u["r2_weighted_mcap_zero"] * 100, u["r2_weighted_mcap_zero_q45"] * 100),
+    ]
+    body = "\n".join(
+        f"{lab} & {num(full, 2, plus=True)} & {num(q45, 2, plus=True)} \\\\"
+        for lab, full, q45 in rows
+    )
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{l r}}
+\begin{{tabular}}{{l rr}}
 \toprule
-Error weighting $w_{{i,t}}$ & \multicolumn{{1}}{{c}}{{$R^2_w$ (\%)}} \\
+ & \multicolumn{{2}}{{c}}{{$R^2_w$ (\%)}} \\
+\cmidrule(lr){{2-3}}
+Error weighting $w_{{i,t}}$ & \multicolumn{{1}}{{c}}{{Full cross-section}} & \multicolumn{{1}}{{c}}{{Liquid $Q4$--$Q5$}} \\
 \midrule
-Equal (the conventional pooled $R^2$) & {num(pooled, 2, plus=True)} \\
-Implementability ($\tilde w^{{\mathrm{{tcr}}}}$, \$500M) & {num(dw_full, 2, plus=True)} \\
-\quad restricted to the liquid $Q4$--$Q5$ book & {num(dw_q45, 2, plus=True)} \\
-Dollar volume & {num(dvolw, 2, plus=True)} \\
-Value (market capitalisation) & {num(mcapw, 2, plus=True)} \\
+{body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The same predictions under different measures.}} Out-of-sample $R^2_w$ of Equation~\eqref{{eq:weighted_r2}} (zero benchmark, 2000--2024) for the identical standard-loss prediction panel, under alternative cross-sectional weightings $w_{{i,t}}$ of the squared errors. All weights are normalised to mean one within each month, and every row uses the full cross-section except the indented one, which restricts the implementability-weighted average to the liquid $Q4$--$Q5$ names. The implementability weight is the transaction-cost-rank weight of Section~\ref{{subsec:weighting_schemes}} at \$500M.}}
+\caption{{\footnotesize \textbf{{The same predictions under different measures.}} Out-of-sample $R^2_w$ of Equation~\eqref{{eq:weighted_r2}} (zero benchmark, 2000--2024) for the identical standard-loss prediction panel, under alternative cross-sectional weightings $w_{{i,t}}$ of the squared errors, on the full cross-section and restricted to the liquid $Q4$--$Q5$ names. All weights are normalised to mean one within each month over the full cross-section and are kept unrenormalised on the liquid subset; $R^2$ is a ratio, so the two columns are directly comparable. The implementability weight is the transaction-cost-rank weight of Section~\ref{{subsec:weighting_schemes}} at \$500M.}}
 \label{{tab:evaluation_measures}}
 \end{{table}}
 """
