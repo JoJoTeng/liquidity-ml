@@ -353,7 +353,7 @@ def build_data_descriptives():
 \centering
 \begin{{tabular}}{{lccccccc}}
 \toprule
- & p1 & p25 & p50 & p75 & p95 & p99 & p99/p50 \\
+ & P1 & P25 & P50 & P75 & P95 & P99 & P99/P50 \\
 \midrule
 {body}
 \bottomrule
