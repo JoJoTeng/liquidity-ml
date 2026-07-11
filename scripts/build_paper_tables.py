@@ -1,4 +1,4 @@
-"""Build the curated Section 2 paper tables into paper/TablesNew.
+"""Build the curated Section 2 paper tables into paper/Tables.
 
 This script owns the reference-styled (sdftc-paper) LaTeX tables that the
 paper \\input directly: caption below the tabular, \\footnotesize \\textbf
@@ -9,7 +9,7 @@ are held here verbatim.
 
 The raw per-script LaTeX dumps written by scripts 02/03/04 live under each
 script's own ``outputs/motivation/.../tables`` directory and are data
-artifacts, not paper assets -- they deliberately do not touch paper/TablesNew.
+artifacts, not paper assets -- they deliberately do not touch paper/Tables.
 
 Tables produced (all XGBoost, dvol liquidity, OOS 2000-2024):
     DivergenceByCategory.tex   tab:divergence_by_category   (script 02 data)
@@ -29,7 +29,7 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "paper" / "TablesNew"
+OUT = ROOT / "paper" / "Tables"
 MOT = ROOT / "outputs" / "motivation"
 
 
@@ -1161,7 +1161,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build curated Section 2 paper tables")
     parser.add_argument(
         "--out-dir", type=Path, default=OUT,
-        help="Destination directory (default: paper/TablesNew)",
+        help="Destination directory (default: paper/Tables)",
     )
     args = parser.parse_args()
     print("Building curated paper tables:")

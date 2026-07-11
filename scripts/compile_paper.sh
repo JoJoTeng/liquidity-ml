@@ -1,0 +1,30 @@
+#!/bin/bash
+# Clean full compile of the paper (and optionally the Internet Appendix).
+# Always deletes auxiliary files first: a compile interrupted mid-write
+# leaves a truncated .aux/.lot that makes every later pass fail with
+# "File ended while scanning" / "invalid character" errors.
+#
+#   bash scripts/compile_paper.sh       # Main.pdf
+#   bash scripts/compile_paper.sh ia    # Main.pdf + InternetAppendix.pdf
+set -euo pipefail
+cd "$(dirname "$0")/../paper"
+
+build () {
+    local doc="$1"
+    rm -f "${doc}.aux" "${doc}.out" "${doc}.toc" "${doc}.lof" "${doc}.lot" \
+          "${doc}.bbl" "${doc}.blg" "${doc}.log"
+    pdflatex -interaction=nonstopmode "${doc}.tex" > /dev/null
+    bibtex "${doc}" > /dev/null
+    pdflatex -interaction=nonstopmode "${doc}.tex" > /dev/null
+    pdflatex -interaction=nonstopmode -halt-on-error "${doc}.tex" > /dev/null
+    local pages warns over
+    pages=$(pdfinfo "${doc}.pdf" | awk '/^Pages/{print $2}')
+    warns=$(grep -c "undefined\|multiply" "${doc}.log" || true)
+    over=$(grep -c "Overfull" "${doc}.log" || true)
+    echo "${doc}.pdf: ${pages} pages, ${warns} reference warnings, ${over} overfull boxes"
+}
+
+build Main
+if [ "${1:-}" = "ia" ]; then
+    build InternetAppendix
+fi

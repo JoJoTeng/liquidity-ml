@@ -189,7 +189,7 @@ def main():
     output_dir = _step3_output_dir(base_output, args.model, liquidity_key)
     output_dir.mkdir(parents=True, exist_ok=True)
     # Raw LaTeX tables are data artifacts; the curated paper tables live in
-    # paper/TablesNew and are built by scripts/build_paper_tables.py.
+    # paper/Tables and are built by scripts/build_paper_tables.py.
     tex_dir = output_dir / "tables"
     tex_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Model: %s", args.model)

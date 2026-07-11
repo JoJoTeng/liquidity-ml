@@ -249,7 +249,7 @@ def main():
 
     # Save raw LaTeX table as a data artifact under the script's output dir.
     # The curated, reference-styled paper table is built separately by
-    # scripts/build_paper_tables.py, which owns paper/TablesNew.
+    # scripts/build_paper_tables.py, which owns paper/Tables.
     tex_dir = output_dir / "tables"
     tex_dir.mkdir(parents=True, exist_ok=True)
     tex_path = tex_dir / "DivergenceByCategory.tex"

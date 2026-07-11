@@ -1,4 +1,4 @@
-"""Build curated paper figures into paper/FiguresNew.
+"""Build curated paper figures into paper/Figures.
 
 Owns paper figures that are derived transformations of pipeline outputs
 (analogous to scripts/build_paper_tables.py for tables). Pipeline PNGs that
@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "paper" / "FiguresNew"
+OUT = ROOT / "paper" / "Figures"
 FORMAL_EXP = ROOT / "outputs/formalanalysis/experiment/xgboost"
 FORMAL_AN = ROOT / "outputs/formalanalysis/analysis/xgboost/tc_rank_lam3_500m"
 
