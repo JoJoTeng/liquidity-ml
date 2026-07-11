@@ -485,7 +485,7 @@ Universe & \multicolumn{{1}}{{c}}{{Standard}} & \multicolumn{{1}}{{c}}{{Weighted
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Deployment-weighted out-of-sample $R^2$.}} The deployment-weighted $R^2$ of Equation~\eqref{{eq:dw_r2}} for the standard and implementability-weighted models, within NYSE-breakpoint dollar-volume quintiles of the prediction universe (Q1 = least liquid), on the pooled liquid set, and on the full cross-section; the primary specification's weight ($\tilde w^{{\mathrm{{tcr}}}}$ at \$500M) prices the errors throughout, with the global mean-one normalisation held fixed across subsets. $\Delta R^2_{{\tilde w}}$ is weighted minus standard in percentage points. The last column reports the Newey--West $t$-statistic (6 lags) on the monthly weighted mean-squared-error differential $D_t$ (Appendix~\ref{{app:capacity}}); no individual differential is statistically significant. Out-of-sample period 2000--2024, 299 months.}}
+\caption{{\footnotesize \textbf{{Deployment-weighted out-of-sample $R^2$.}} The deployment-weighted $R^2$ of Equation~\eqref{{eq:dw_r2}} for the standard and implementability-weighted models, within NYSE-breakpoint dollar-volume quintiles of the prediction universe (Q1 = least liquid), on the pooled liquid set, and on the full cross-section; the primary specification's weight ($\tilde w^{{\mathrm{{tcr}}}}$ at \$500M) prices the errors throughout, with the global mean-one normalisation held fixed across subsets. $\Delta R^2_{{\tilde w}}$ is weighted minus standard in percentage points. The last column reports the Newey--West $t$-statistic (6 lags) on the monthly weighted mean-squared-error differential $D_t$ (Appendix~\ref{{app:capacity}}); no individual differential is statistically significant. 299 months, 2000--2024.}}
 \label{{tab:dw_r2}}
 \end{{table}}
 """
@@ -537,7 +537,7 @@ Capacity weight & Std & Wt & Std & Wt & $\Delta$SR & $p$ \\
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross book of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds the signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the book grid; the gross Sharpe ratio does not depend on $A$ ($1.48$ standard, $1.32$ weighted). Panel~B holds $A=\$500$M fixed and replaces the capacity weight in the book construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No training-stage difference is statistically significant. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross book of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds the signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the book grid; the gross Sharpe ratio does not depend on $A$ (${num(s0['gross_sr_annual'])}$ standard, ${num(w0['gross_sr_annual'])}$ weighted). Panel~B holds $A=\$500$M fixed and replaces the capacity weight in the book construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No training-stage difference is statistically significant. 299 months, 2000--2024.}}
 \label{{tab:capacity}}
 \end{{table}}
 """
@@ -590,7 +590,13 @@ def build_capacity_two_by_two():
         for c in ["1A", "1B", "2A", "2B"]:
             a = t5[f"alpha_{key}({c})_annual"] * 100
             tt = t5[f"alpha_{key}({c})_tstat"]
-            cells.append(f"{num(a)} {tstat(tt)}")
+            # A third decimal when two would round onto the 1.96 boundary,
+            # so the reader can resolve which side the statistic falls on.
+            if f"{abs(tt):.2f}" == "1.96":
+                ts = f"({tt:.3f})" if tt >= 0 else f"($-${abs(tt):.3f})"
+            else:
+                ts = tstat(tt)
+            cells.append(f"{num(a)} {ts}")
         rows_c.append(f"\\quad {lab} & " + " & ".join(cells) + r" \\")
     body_c = "\n".join(rows_c)
 
@@ -634,6 +640,15 @@ def build_longonly_two_by_two():
         return (f"{num(lt5[f'SR_net_annualized({c})'])} & "
                 f"{lt5[f'TC mean monthly ({c})'] * 1e4:.0f} & {lt5[f'Turnover ({c})']:.2f}")
 
+    def pfmt_lo(p):
+        # Table-local: three decimals on [0.01, 0.10) so the borderline $1B
+        # adoption p (0.097) is never printed as the bare 10% threshold.
+        if p < 0.01:
+            return f"{p:.4f}"
+        if p < 0.10:
+            return f"{p:.3f}"
+        return f"{p:.2f}"
+
     sup = _supplement_pvals("long_only")
     rows_b = []
     for aum, lab in AUM_GRID:
@@ -646,15 +661,15 @@ def build_longonly_two_by_two():
         p_adopt = sup.get((aum, "adoption_2B_vs_1B"))
         exec_cell = f"{num(t['Net portfolio effect annualized'], plus=True)}"
         if p_exec is not None:
-            exec_cell += f" ({_pfmt(p_exec)})"
+            exec_cell += f" ({pfmt_lo(p_exec)})"
         adopt_cell = f"{num(adopt, plus=True)}"
         if p_adopt is not None:
-            adopt_cell += f" ({_pfmt(p_adopt)})"
+            adopt_cell += f" ({pfmt_lo(p_adopt)})"
         rows_b.append(
             f"\\quad {lab} & "
-            f"{num(t['Net training effect annualized'], plus=True)} ({_pfmt(t['LW p-val (training, net)'])}) & "
+            f"{num(t['Net training effect annualized'], plus=True)} ({pfmt_lo(t['LW p-val (training, net)'])}) & "
             f"{exec_cell} & {adopt_cell} & "
-            f"{num(t['Net total effect annualized'], plus=True)} ({_pfmt(t['LW p-val (total, net)'])}) & "
+            f"{num(t['Net total effect annualized'], plus=True)} ({pfmt_lo(t['LW p-val (total, net)'])}) & "
             f"{num(inter, plus=True)} \\\\"
         )
     body_b = "\n".join(rows_b)
@@ -662,9 +677,10 @@ def build_longonly_two_by_two():
 \centering
 \begin{{tabular}}{{lccccccc}}
 \toprule
-\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M---net SR, mean monthly cost (bps), turnover}}}} \\[2pt]
+\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M}}}} \\[2pt]
  & \multicolumn{{3}}{{c}}{{Plain membership ($A$)}} & \multicolumn{{3}}{{c}}{{Hysteresis band ($B$)}} & \\
 \cmidrule(lr){{2-4}} \cmidrule(lr){{5-7}}
+ & Net SR & Cost (bps) & Turnover & Net SR & Cost (bps) & Turnover & \\
 \quad Standard training & {cell('1A')} & {cell('1B')} & \\
 \quad Weighted training & {cell('2A')} & {cell('2B')} & \\
 \midrule
@@ -763,7 +779,7 @@ def build_reallocation():
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Feature-importance reallocation.}} Shares of total SHAP importance under standard and implementability-weighted training (primary specification), averaged over the 299 rolling windows; $\Delta$ is the mean of the per-window paired share differences and $t$ its Newey--West statistic (6 lags), the same convention as the per-feature tests. In Panel~A, the illiquidity cluster is the rule-based group of Section~\ref{{sec:imbalance}} (characteristics whose average rank correlation with dollar volume exceeds $0.5$ in absolute value); the illiquidity/microstructure group is the broader economically defined list fixed ex ante; the liquid-signal group collects characteristics whose predictive slopes are significant in the most liquid quintile of the all-113-characteristic quintile-specific Fama--MacBeth regressions of Section~\ref{{subsec:heterogeneity}} (significant in Q5, whether or not also in Q1). Panel~B reports the five largest decreases and increases in per-window importance share.}}
+\caption{{\footnotesize \textbf{{Feature-importance reallocation.}} Shares of total SHAP importance under standard and implementability-weighted training (primary specification), averaged over the 299 rolling windows; $\Delta$ is the mean of the per-window paired share differences and $t$ its Newey--West statistic (6 lags), the same convention as the per-feature tests. In Panel~A, the illiquidity cluster is the rule-based group of Section~\ref{{sec:imbalance}} (characteristics whose average rank correlation with dollar volume exceeds $0.5$ in absolute value); the illiquidity/microstructure group is the broader economically defined list fixed ex ante; the liquid-signal group collects characteristics whose predictive slopes are significant in the most liquid quintile of the all-113-characteristic quintile-specific Fama--MacBeth regressions of Section~\ref{{subsec:heterogeneity}} (significant in Q5, whether or not also in Q1). Panel~B reports the five largest decreases and increases in per-window importance share. Out-of-sample period 2000--2024.}}
 \label{{tab:reallocation}}
 \end{{table}}
 """
@@ -869,7 +885,7 @@ Leg weighting & Full & NYSE & Top-60\% \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; the NYSE universe and the deployment-weighted legs (within-leg positions proportional to $\tilde w$; the forecast determines membership only) bring the object into alignment with the trained objective, while the top-$60\%$ universe pre-screens away the illiquid margin the weighting corrects, so the substitutes logic of Section~\ref{{subsec:cost_sensitive}} predicts the attenuation toward zero observed in that column. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}).}}
+\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; the NYSE universe and the deployment-weighted legs (within-leg positions proportional to $\tilde w$; the forecast determines membership only) bring the object into alignment with the trained objective, while the top-$60\%$ universe pre-screens away the illiquid margin the weighting corrects, so the substitutes logic of Section~\ref{{subsec:cost_sensitive}} predicts the attenuation toward zero observed in that column. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}). 299 months, 2000--2024.}}
 \label{{tab:dose_response}}
 \end{{table}}
 """
@@ -1021,6 +1037,7 @@ def build_regime_splits():
                       "1B": cells(gated, "standard"), "2B": cells(gated, "weighted")}).dropna()
     c = c.join(ri.set_index("yyyymm")[["vix", "recession"]], how="left")
     med = c["vix"].median()
+    n_rec = int((c.recession == 1).sum())
 
     def sr(x):
         return x.mean() / x.std() * np.sqrt(12)
@@ -1045,7 +1062,7 @@ Regime & Months & $1A$ net SR & Training & Execution & Total \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The decomposition across market regimes.}} Net annualised Sharpe ratios and the training, execution, and total effects of Equation~\eqref{{eq:decomp}} for the \$500M capacity book, computed within subsamples of the 299 test months: months with VIX above and below its sample median ($17.9$), and NBER recession versus expansion months. The subsample effects are descriptive point estimates---no subsample bootstrap is run---and the recession sample contains only $28$ months. VIX is the CBOE volatility index and recession months are NBER business-cycle dates (both from FRED).}}
+\caption{{\footnotesize \textbf{{The decomposition across market regimes.}} Net annualised Sharpe ratios and the training, execution, and total effects of Equation~\eqref{{eq:decomp}} for the \$500M capacity book, computed within subsamples of the 299 test months: months with VIX above and below its sample median (${med:.1f}$), and NBER recession versus expansion months. The subsample effects are descriptive point estimates---no subsample bootstrap is run---and the recession sample contains only ${n_rec}$ months. VIX is the CBOE volatility index and recession months are NBER business-cycle dates (both from FRED).}}
 \label{{tab:regimes}}
 \end{{table}}
 """
