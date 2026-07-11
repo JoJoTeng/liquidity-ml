@@ -192,7 +192,7 @@ def build_evaluation_measures():
     dw_full = b.loc[b.universe == "full", "r2_weighted_std_pct"].iloc[0]
     dw_q45 = b.loc[b.universe == "liquid_q4q5", "r2_weighted_std_pct"].iloc[0]
 
-    # Cross-pipeline integrity guard: the equal-weighted liquid-book cell from
+    # Cross-pipeline integrity guard: the equal-weighted liquid-set cell from
     # script 04 must equal Table 4's Mall Q4-Q5 entry (same predictions, same
     # quintiles, independent code paths).
     restr = pd.read_csv(
@@ -524,7 +524,7 @@ def build_capacity_portfolio():
 \centering
 \begin{{tabular}}{{lcccccc}}
 \toprule
-\multicolumn{{7}}{{l}}{{\textit{{Panel A: Signal-weighted book across deployed capital (net Sharpe ratios)}}}} \\[2pt]
+\multicolumn{{7}}{{l}}{{\textit{{Panel A: Signal-weighted portfolio across deployed capital (net Sharpe ratios)}}}} \\[2pt]
  & Standard & Weighted & $\Delta$SR & $p$ & & \\
 \midrule
 {body_a}
@@ -537,7 +537,7 @@ Capacity weight & Std & Wt & Std & Wt & $\Delta$SR & $p$ \\
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross book of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds the signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the book grid; the gross Sharpe ratio does not depend on $A$ (${num(s0['gross_sr_annual'])}$ standard, ${num(w0['gross_sr_annual'])}$ weighted). Panel~B holds $A=\$500$M fixed and replaces the capacity weight in the book construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No training-stage difference is statistically significant. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds the signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the capital grid; the gross Sharpe ratio does not depend on $A$ (${num(s0['gross_sr_annual'])}$ standard, ${num(w0['gross_sr_annual'])}$ weighted). Panel~B holds $A=\$500$M fixed and replaces the capacity weight in the portfolio construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No training-stage difference is statistically significant. 299 months, 2000--2024.}}
 \label{{tab:capacity}}
 \end{{table}}
 """
@@ -690,7 +690,7 @@ def build_longonly_two_by_two():
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The long-only capacity book.}} The two-by-two design applied to the long-only book of Equation~\eqref{{eq:longonly}}: rows vary the training loss, columns vary execution between plain monthly membership refresh and the cost-scaled membership-hysteresis band. Panel~A reports net annualised Sharpe ratios, mean monthly cost drag (bps), and monthly one-sided turnover at \$500M; Panel~B decomposes the net gain at each level of deployed capital; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses cover the training, execution ($1B$ vs.\ $1A$), adoption ($2B$ vs.\ $1B$), and total contrasts (the execution and adoption tests are computed in the inference supplement described in Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The long-only capacity portfolio.}} The two-by-two design applied to the long-only portfolio of Equation~\eqref{{eq:longonly}}: rows vary the training loss, columns vary execution between plain monthly membership refresh and the cost-scaled membership-hysteresis band. Panel~A reports net annualised Sharpe ratios, mean monthly cost drag (bps), and monthly one-sided turnover at \$500M; Panel~B decomposes the net gain at each level of deployed capital; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses cover the training, execution ($1B$ vs.\ $1A$), adoption ($2B$ vs.\ $1B$), and total contrasts (the execution and adoption tests are computed in the inference supplement described in Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. 299 months, 2000--2024.}}
 \label{{tab:longonly_2x2}}
 \end{{table}}
 """
@@ -820,14 +820,14 @@ def build_capacity_ce():
 \toprule
  & Net mean (\%) & Turnover & $\mathrm{{CE}}(1)$ & $\mathrm{{CE}}(5)$ & $\mathrm{{CE}}(10)$ \\
 \midrule
-\multicolumn{{6}}{{l}}{{\textit{{Panel A: Signal-weighted book across deployed capital}}}} \\[2pt]
+\multicolumn{{6}}{{l}}{{\textit{{Panel A: Signal-weighted portfolio across deployed capital}}}} \\[2pt]
 {body_a}
 \midrule
 \multicolumn{{6}}{{l}}{{\textit{{Panel B: Capacity-weight benchmarks at \$500M}}}} \\[2pt]
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Mean net returns, turnover, and certainty equivalents of the capacity books.}} Companion to Table~8 of the main paper: annualised mean net returns (\%), mean monthly one-sided turnover, and the annualised certainty-equivalent return $\mathrm{{CE}}(\gamma)$ of Equation~\eqref{{eq:ce}} (\%) evaluated on the monthly net series, for the full-rebalance capacity book of Equations~(11)--(12) of the main paper under standard and implementability-weighted training. Panel~A sweeps deployed capital under the signal capacity weight $\tilde w$; turnover does not vary with $A$. Panel~B replaces the capacity weight with equal and value weights at \$500M. Within Panel~A, the certainty-equivalent comparison of the two training losses reproduces the net-Sharpe comparison of Table~8 of the main paper: the standard book dominates under proportional costs, the two books are within a few basis points of one another at \$100M, and the weighted book dominates at \$500M and \$1B at every $\gamma$. In Panel~B the two criteria diverge for the equal book: the weighted equal book carries the higher mean net return and the higher certainty equivalent at every $\gamma$ although its net Sharpe ratio is lower---both means are negative, so the Sharpe ordering there is the familiar negative-mean pathology. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Mean net returns, turnover, and certainty equivalents of the capacity portfolios.}} Companion to Table~8 of the main paper: annualised mean net returns (\%), mean monthly one-sided turnover, and the annualised certainty-equivalent return $\mathrm{{CE}}(\gamma)$ of Equation~\eqref{{eq:ce}} (\%) evaluated on the monthly net series, for the full-rebalance capacity portfolio of Equations~(11)--(12) of the main paper under standard and implementability-weighted training. Panel~A sweeps deployed capital under the signal capacity weight $\tilde w$; turnover does not vary with $A$. Panel~B replaces the capacity weight with equal and value weights at \$500M. Within Panel~A, the certainty-equivalent comparison of the two training losses reproduces the net-Sharpe comparison of Table~8 of the main paper: the standard portfolio dominates under proportional costs, the two portfolios are within a few basis points of one another at \$100M, and the weighted portfolio dominates at \$500M and \$1B at every $\gamma$. In Panel~B the two criteria diverge for the equal-weighted portfolio: under weighted training it carries the higher mean net return and the higher certainty equivalent at every $\gamma$ although its net Sharpe ratio is lower---both means are negative, so the Sharpe ordering there is the familiar negative-mean pathology. 299 months, 2000--2024.}}
 \label{{tab:capacity_ce}}
 \end{{table}}
 """
@@ -885,7 +885,7 @@ Leg weighting & Full & NYSE & Top-60\% \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted book.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short book) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; the NYSE universe and the deployment-weighted legs (within-leg positions proportional to $\tilde w$; the forecast determines membership only) bring the object into alignment with the trained objective, while the top-$60\%$ universe pre-screens away the illiquid margin the weighting corrects, so the substitutes logic of Section~\ref{{subsec:cost_sensitive}} predicts the attenuation toward zero observed in that column. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-book counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted portfolio.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted long--short portfolio) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; the NYSE universe and the deployment-weighted legs (within-leg positions proportional to $\tilde w$; the forecast determines membership only) bring the object into alignment with the trained objective, while the top-$60\%$ universe pre-screens away the illiquid margin the weighting corrects, so the substitutes logic of Section~\ref{{subsec:cost_sensitive}} predicts the attenuation toward zero observed in that column. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-portfolio counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}). 299 months, 2000--2024.}}
 \label{{tab:dose_response}}
 \end{{table}}
 """
@@ -1062,7 +1062,7 @@ Regime & Months & $1A$ net SR & Training & Execution & Total \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The decomposition across market regimes.}} Net annualised Sharpe ratios and the training, execution, and total effects of Equation~\eqref{{eq:decomp}} for the \$500M capacity book, computed within subsamples of the 299 test months: months with VIX above and below its sample median (${med:.1f}$), and NBER recession versus expansion months. The subsample effects are descriptive point estimates---no subsample bootstrap is run---and the recession sample contains only ${n_rec}$ months. VIX is the CBOE volatility index and recession months are NBER business-cycle dates (both from FRED).}}
+\caption{{\footnotesize \textbf{{The decomposition across market regimes.}} Net annualised Sharpe ratios and the training, execution, and total effects of Equation~\eqref{{eq:decomp}} for the \$500M capacity portfolio, computed within subsamples of the 299 test months: months with VIX above and below its sample median (${med:.1f}$), and NBER recession versus expansion months. The subsample effects are descriptive point estimates---no subsample bootstrap is run---and the recession sample contains only ${n_rec}$ months. VIX is the CBOE volatility index and recession months are NBER business-cycle dates (both from FRED).}}
 \label{{tab:regimes}}
 \end{{table}}
 """
@@ -1117,7 +1117,7 @@ def build_training_scale_matrix():
 \footnotesize
 \begin{{tabular}}{{lcccc}}
 \toprule
- & \multicolumn{{4}}{{c}}{{Deployed capital (book grid)}} \\
+ & \multicolumn{{4}}{{c}}{{Deployed capital (capital grid)}} \\
 \cmidrule(lr){{2-5}}
 Training scale & Prop.\ TC & \$100M & \$500M & \$1B \\
 \midrule
@@ -1128,7 +1128,7 @@ Training scale & Prop.\ TC & \$100M & \$500M & \$1B \\
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Training-scale sensitivity of the decomposition.}} Net annualised training effect ($2A-1A$, Panel~A) and total effect ($2B-1A$, Panel~B) of Equation~(15) of the main paper for the capacity book, in annualised net Sharpe-ratio units, as the scale $A$ at which the training weight of Equation~(7) of the main paper is computed (rows) varies over the fitted grid of Section~3.4 of the main paper and the capital at which the book is charged costs (columns) varies over the book grid of Table~9 of the main paper; the main text reports the \$500M row. Each row is a self-contained pipeline---the row's weight enters the training loss, the book tilt, and the deployment-weighted evaluation---so effects are comparable across rows, while the underlying cell Sharpe ratios (not shown) are not. Matched training and deployment scales lie on the diagonal, with the Prop.~TC column (half-spread only) approximating the \$10M zero-impact limit. One-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses, from the same seeded machinery as Table~9 of the main paper, unadjusted across the sixteen cells of each panel. The total effect is positive in every cell and nominally significant at the $5\%$ level in {n_sig_txt} of sixteen ({n_bonf_txt} of sixteen survive a Bonferroni correction at the same level); no training effect is individually significant even before adjustment (the smallest $p$, ${min_train_p:.3f}$, is the unadjusted minimum over the grid), and Panel~A is read as a pattern of point estimates, not as cell-level inference, as in Table~12 of the main paper. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Training-scale sensitivity of the decomposition.}} Net annualised training effect ($2A-1A$, Panel~A) and total effect ($2B-1A$, Panel~B) of Equation~(15) of the main paper for the capacity portfolio, in annualised net Sharpe-ratio units, as the scale $A$ at which the training weight of Equation~(7) of the main paper is computed (rows) varies over the fitted grid of Section~3.4 of the main paper and the capital at which the portfolio is charged costs (columns) varies over the capital grid of Table~9 of the main paper; the main text reports the \$500M row. Each row is a self-contained pipeline---the row's weight enters the training loss, the portfolio tilt, and the deployment-weighted evaluation---so effects are comparable across rows, while the underlying cell Sharpe ratios (not shown) are not. Matched training and deployment scales lie on the diagonal, with the Prop.~TC column (half-spread only) approximating the \$10M zero-impact limit. One-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses, from the same seeded machinery as Table~9 of the main paper, unadjusted across the sixteen cells of each panel. The total effect is positive in every cell and nominally significant at the $5\%$ level in {n_sig_txt} of sixteen ({n_bonf_txt} of sixteen survive a Bonferroni correction at the same level); no training effect is individually significant even before adjustment (the smallest $p$, ${min_train_p:.3f}$, is the unadjusted minimum over the grid), and Panel~A is read as a pattern of point estimates, not as cell-level inference, as in Table~12 of the main paper. 299 months, 2000--2024.}}
 \label{{tab:train_scale}}
 \end{{table}}
 """
