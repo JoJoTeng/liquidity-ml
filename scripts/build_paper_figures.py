@@ -188,22 +188,37 @@ def build_breakeven_cumret():
 
 
 def build_dw_error_diff():
-    """fig:dw_error_diff -- cumulative D_t by liquidity quintile (S4.1)."""
+    """fig:dw_error_diff -- cumulative D_t by liquidity quintile (S4.1).
+
+    Mirrors the pipeline figure (plot_quintile_error_differentials in
+    src/analysis/eval_realignment/deployment_weighted_metrics.py) line for
+    line; the ONLY intended difference is the dropped in-figure title (the
+    LaTeX caption carries it). Keep the two in sync if the pipeline changes.
+    """
     _paper_style()
     src = ROOT / ("outputs/eval_realignment/analysis/xgboost/tc_rank_lam3_500m/"
                   "liquidity_breakpoints/nyse/deployment_weighted_error_diff.csv")
     d = pd.read_csv(src)
-    quints = ["Q1", "Q2", "Q3", "Q4", "Q5"]
-    # sequential dark-to-light palette, Q1 (illiquid) darkest
-    cols = {"Q1": "#2d1e3e", "Q2": "#39568c", "Q3": "#1f948b", "Q4": "#5cc862", "Q5": "#e8d430"}
-    fig, ax = plt.subplots(figsize=(8.6, 4.6))
-    for q in quints:
-        g = d[d.universe == q].sort_values("yyyymm")
-        x = pd.to_datetime(g["yyyymm"].astype(int).astype(str), format="%Y%m")
-        ax.plot(x, g["cumulative_wmse_diff"], label=f"${q}$", color=cols[q], lw=1.4)
-    ax.axhline(0, color="0.3", lw=0.7, ls=":")
-    ax.set_ylabel(r"Cumulative $D_t$")
-    ax.legend(frameon=False, fontsize=10, ncols=5, loc="upper left", title=None)
+    fig, ax = plt.subplots(figsize=(8, 8))
+    months = sorted(d["yyyymm"].unique())
+    pos = {m: i for i, m in enumerate(months)}
+    cmap = plt.get_cmap("viridis")
+    for i, q in enumerate(range(1, 6)):
+        sub = d[d["universe"] == f"Q{q}"]
+        ax.plot(
+            sub["yyyymm"].map(pos).to_numpy(),
+            sub["cumulative_wmse_diff"].to_numpy(),
+            label=f"Q{q}",
+            color=cmap(i / 4),
+            lw=1.3,
+        )
+    ax.axhline(0, color="black", ls="--", lw=0.5)
+    ax.set_ylabel(r"Cumulative $\tilde{w}$MSE($M_{std}$) $-$ $\tilde{w}$MSE($M_w$)")
+    ax.legend(title="Liquidity quintile", ncol=5, fontsize=8)
+    tick_every = max(len(months) // 10, 1)
+    ticks = range(0, len(months), tick_every)
+    ax.set_xticks(list(ticks))
+    ax.set_xticklabels([str(months[i]) for i in ticks], rotation=45, fontsize=8)
     fig.tight_layout()
     path = OUT / "deployment_weighted_error_diff.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
