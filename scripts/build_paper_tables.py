@@ -516,8 +516,9 @@ Universe & {sub} \\
 
 
 def build_capacity_portfolio():
-    def metrics(tag, aum):
-        f = EVAL / f"capacity_portfolio{tag}_metrics_{aum}.csv"
+    def metrics(tag, aum, spec="tc_rank_lam3_500m"):
+        f = (ROOT / f"outputs/eval_realignment/analysis/xgboost/{spec}/"
+             f"capacity_portfolio{tag}_metrics_{aum}.csv")
         df = pd.read_csv(f)
         s = df[df.row_type == "standard"].iloc[0]
         w = df[df.row_type == "weighted"].iloc[0]
@@ -525,14 +526,20 @@ def build_capacity_portfolio():
         return s, w, d
 
     rows_a = []
-    for aum, lab in AUM_GRID:
-        s, w, d = metrics("", aum)
-        delta_ann = w["net_sr_annual"] - s["net_sr_annual"]
+    for spec, slab in SEC4_SPECS:
+        s0, w0, _ = metrics("", "500M", spec)
         rows_a.append(
-            f"\\quad {lab} & {num(s['net_sr_annual'])} & {num(w['net_sr_annual'])} & "
-            f"{num(delta_ann, plus=True)} & {d['net_sr_diff_pval']:.2f} \\\\"
+            rf"\multicolumn{{7}}{{l}}{{\emph{{{slab}; gross SR ${num(s0['gross_sr_annual'])}$ "
+            rf"standard, ${num(w0['gross_sr_annual'])}$ weighted}}}} \\"
         )
-    s0, w0, _ = metrics("", "500M")
+        for aum, lab in AUM_GRID:
+            s, w, d = metrics("", aum, spec)
+            delta_ann = w["net_sr_annual"] - s["net_sr_annual"]
+            tail = r" \\[2pt]" if aum == AUM_GRID[-1][0] and spec != SEC4_SPECS[-1][0] else r" \\"
+            rows_a.append(
+                f"\\quad {lab} & {num(s['net_sr_annual'])} & {num(w['net_sr_annual'])} & "
+                f"{num(delta_ann, plus=True)} & {_pfmt(d['net_sr_diff_pval'])}" + tail
+            )
     rows_b = []
     for tag, lab in [("", "Signal ($\\tilde w$)"), ("_equal", "Equal"), ("_value", "Value")]:
         s, w, d = metrics(tag, "500M")
@@ -561,7 +568,7 @@ Capacity weight & Std & Wt & Std & Wt & $\Delta$SR & $p$ \\
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds the signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the capital grid; the gross Sharpe ratio does not depend on $A$ (${num(s0['gross_sr_annual'])}$ standard, ${num(w0['gross_sr_annual'])}$ weighted). Panel~B holds $A=\$500$M fixed and replaces the capacity weight in the portfolio construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No training-stage difference is statistically significant. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds each specification's signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the capital grid, one block per Section-4 specification, each trained, evaluated, and costed under its own weight; the gross Sharpe ratio does not depend on $A$ and is reported in each block header. Panel~B holds $A=\$500$M fixed for the primary specification and replaces the capacity weight in the portfolio construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No primary-specification training difference is statistically significant at any capital level, the volume-rank difference is significant only at \$1B, and the plain tilt's is significant at every capital level and read against its base in Section~\ref{{subsec:twobytwo_results}}. 299 months, 2000--2024.}}
 \label{{tab:capacity}}
 \end{{table}}
 """
@@ -601,7 +608,7 @@ def build_capacity_two_by_two():
             adopt_cell = f"{num(adopt, plus=True)}"
             if p_adopt is not None:
                 adopt_cell += f" ({_pfmt(p_adopt)})"
-            tail = r" \\[2pt]" if aum == AUM_GRID[-1][0] and spec != SEC4_SPECS[-1][0] else r" \\"
+            tail = r" \\"
             rows_b.append(
                 f"\\quad {lab} & "
                 f"{num(t['Net training effect annualized'], plus=True)} ({_pfmt(t['LW p-val (training, net)'])}) & "
@@ -612,24 +619,30 @@ def build_capacity_two_by_two():
     body_b = "\n".join(rows_b)
 
     rows_c = []
-    for key, lab in [("capm", "CAPM"), ("ff3", "FF3"), ("ff5", "FF5"), ("ff5_mom", "FF5+Mom")]:
-        cells = []
-        for c in ["1A", "1B", "2A", "2B"]:
-            a = t5[f"alpha_{key}({c})_annual"] * 100
-            tt = t5[f"alpha_{key}({c})_tstat"]
+    for spec, slab in SEC4_SPECS:
+        tsp = _two_by_two("500M", spec)
+        rows_c.append(rf"\multicolumn{{8}}{{l}}{{\emph{{{slab}}}}} \\")
+        for key, lab in [("capm", "CAPM"), ("ff3", "FF3"), ("ff5", "FF5"), ("ff5_mom", "FF5+Mom")]:
+            cells = []
+            for c in ["1A", "1B", "2A", "2B"]:
+                a = tsp[f"alpha_{key}({c})_annual"] * 100
+                tt = tsp[f"alpha_{key}({c})_tstat"]
             # A third decimal when two would round onto the 1.96 boundary,
             # so the reader can resolve which side the statistic falls on.
-            if f"{abs(tt):.2f}" == "1.96":
-                ts = f"({tt:.3f})" if tt >= 0 else f"($-${abs(tt):.3f})"
-            else:
-                ts = tstat(tt)
-            cells.append(f"{num(a)} {ts}")
-        rows_c.append(f"\\quad {lab} & " + " & ".join(cells) + r" \\")
+                if f"{abs(tt):.2f}" == "1.96":
+                    ts = f"({tt:.3f})" if tt >= 0 else f"($-${abs(tt):.3f})"
+                else:
+                    ts = tstat(tt)
+                cells.append(f"{num(a)} {ts}")
+            tail = r" \\"
+            rows_c.append(f"\\quad {lab} & " + " & ".join(cells) + tail)
     body_c = "\n".join(rows_c)
 
     return rf"""\begin{{table}}[t!]
 \centering
 \footnotesize
+\renewcommand{{\arraystretch}}{{0.85}}
+\setlength{{\abovecaptionskip}}{{4pt}}
 \setlength{{\tabcolsep}}{{3.5pt}}
 \begin{{tabular}}{{lccccccc}}
 \toprule
@@ -638,7 +651,7 @@ def build_capacity_two_by_two():
 \midrule
 \multicolumn{{8}}{{l}}{{\emph{{Full rebalance ($A$)}}}} \\
 \quad Standard training ($1A$) & {cell('1A')} & & & \\
-\quad Weighted training ($2A$) & {cell('2A')} & & & \\[2pt]
+\quad Weighted training ($2A$) & {cell('2A')} & & & \\
 \multicolumn{{8}}{{l}}{{\emph{{Breakeven gate ($B$)}}}} \\
 \quad Standard training ($1B$) & {cell('1B')} & & & \\
 \quad Weighted training ($2B$) & {cell('2B')} & & & \\
@@ -654,7 +667,7 @@ def build_capacity_two_by_two():
 {body_c}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Cost-aware execution and the training $\times$ execution decomposition.}} Panel~A reports the four cells of the two-by-two design at the primary \$500M scale: net and gross annualised Sharpe ratios, the mean monthly transaction-cost drag in basis points, and monthly one-sided turnover. Rows vary the training loss (standard vs.\ implementability-weighted); blocks vary execution (full monthly rebalancing vs.\ the breakeven gate of Equation~\eqref{{eq:gate}}). Panel~B decomposes the net gain of Equation~\eqref{{eq:decomp}} at each level of deployed capital, for each of the three Section-4 specifications---each trained, evaluated, and costed under its own weight; Panels~A and~C report the primary specification. One-sided $p$-values in parentheses are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap: the training, total, execution ($1B$ vs.\ $1A$), and adoption ($2B$ vs.\ $1B$, what weighted training adds on top of the gate) contrasts are all tested with the same seeded machinery (the pairwise execution and adoption tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. Turnover and gate composition do not vary with $A$ because the gate triggers on the half-spread alone, so the execution effect grows with capital purely through the price of the avoided trades. Panel~C reports annualised factor alphas of the four net return series at \$500M with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Cost-aware execution and the training $\times$ execution decomposition.}} Panel~A reports the four cells of the two-by-two design at the primary \$500M scale---training loss (standard vs.\ implementability-weighted) crossed with execution (full monthly rebalancing vs.\ the breakeven gate of Equation~\eqref{{eq:gate}}): net and gross annualised Sharpe ratios, mean monthly cost drag in basis points, and monthly one-sided turnover. Panels~B and~C span the three Section-4 specifications, each trained, evaluated, and costed under its own weight; Panel~B decomposes the net gain of Equation~\eqref{{eq:decomp}} at each level of deployed capital. One-sided $p$-values in parentheses are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap; the training, total, execution ($1B$ vs.\ $1A$), and adoption ($2B$ vs.\ $1B$, what weighted training adds on top of the gate) contrasts share the same seeded machinery, with the pairwise tests computed in the inference supplement of Appendix~\ref{{app:bootstrap}}. Effects are computed on unrounded values, so the printed identities can differ in the last digit. Turnover and gate composition do not vary with $A$ (the gate triggers on the half-spread alone), so the execution effect grows with capital purely through the price of the avoided trades. Panel~C reports annualised factor alphas of the four net return series at \$500M, per specification, with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
 \label{{tab:capacity_2x2}}
 \end{{table}}
 """
@@ -676,29 +689,34 @@ def build_longonly_two_by_two():
             return f"{p:.3f}"
         return f"{p:.2f}"
 
-    sup = _supplement_pvals("long_only")
     rows_b = []
-    for aum, lab in AUM_GRID:
-        t = pd.read_csv(EVAL / f"longonly_two_by_two_{aum}.csv").set_index("metric")["value"].to_dict()
-        inter = t.get("Net interaction annualized",
-                      t["Net total effect annualized"] - t["Net training effect annualized"]
-                      - t["Net portfolio effect annualized"])
-        p_exec = sup.get((aum, "execution_1B_vs_1A"))
-        adopt = t["SR_net_annualized(2B)"] - t["SR_net_annualized(1B)"]
-        p_adopt = sup.get((aum, "adoption_2B_vs_1B"))
-        exec_cell = f"{num(t['Net portfolio effect annualized'], plus=True)}"
-        if p_exec is not None:
-            exec_cell += f" ({pfmt_lo(p_exec)})"
-        adopt_cell = f"{num(adopt, plus=True)}"
-        if p_adopt is not None:
-            adopt_cell += f" ({pfmt_lo(p_adopt)})"
-        rows_b.append(
-            f"\\quad {lab} & "
-            f"{num(t['Net training effect annualized'], plus=True)} ({pfmt_lo(t['LW p-val (training, net)'])}) & "
-            f"{exec_cell} & {adopt_cell} & "
-            f"{num(t['Net total effect annualized'], plus=True)} ({pfmt_lo(t['LW p-val (total, net)'])}) & "
-            f"{num(inter, plus=True)} \\\\"
-        )
+    for spec, slab in SEC4_SPECS:
+        sup = _supplement_pvals("long_only", spec)
+        rows_b.append(rf"\multicolumn{{8}}{{l}}{{\emph{{{slab}}}}} \\")
+        for aum, lab in AUM_GRID:
+            t = pd.read_csv(
+                ROOT / f"outputs/eval_realignment/analysis/xgboost/{spec}/longonly_two_by_two_{aum}.csv"
+            ).set_index("metric")["value"].to_dict()
+            inter = t.get("Net interaction annualized",
+                          t["Net total effect annualized"] - t["Net training effect annualized"]
+                          - t["Net portfolio effect annualized"])
+            p_exec = sup.get((aum, "execution_1B_vs_1A"))
+            adopt = t["SR_net_annualized(2B)"] - t["SR_net_annualized(1B)"]
+            p_adopt = sup.get((aum, "adoption_2B_vs_1B"))
+            exec_cell = f"{num(t['Net portfolio effect annualized'], plus=True)}"
+            if p_exec is not None:
+                exec_cell += f" ({pfmt_lo(p_exec)})"
+            adopt_cell = f"{num(adopt, plus=True)}"
+            if p_adopt is not None:
+                adopt_cell += f" ({pfmt_lo(p_adopt)})"
+            tail = r" \\[2pt]" if aum == AUM_GRID[-1][0] and spec != SEC4_SPECS[-1][0] else r" \\"
+            rows_b.append(
+                f"\\quad {lab} & "
+                f"{num(t['Net training effect annualized'], plus=True)} ({pfmt_lo(t['LW p-val (training, net)'])}) & "
+                f"{exec_cell} & {adopt_cell} & "
+                f"{num(t['Net total effect annualized'], plus=True)} ({pfmt_lo(t['LW p-val (total, net)'])}) & "
+                f"{num(inter, plus=True)}" + tail
+            )
     body_b = "\n".join(rows_b)
     return rf"""\begin{{table}}[t!]
 \centering
@@ -718,7 +736,7 @@ def build_longonly_two_by_two():
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The long-only capacity portfolio.}} The two-by-two design applied to the long-only portfolio of Equation~\eqref{{eq:longonly}}: rows vary the training loss, columns vary execution between plain monthly membership refresh and the cost-scaled membership-hysteresis band. Panel~A reports net annualised Sharpe ratios, mean monthly cost drag (bps), and monthly one-sided turnover at \$500M; Panel~B decomposes the net gain at each level of deployed capital; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses cover the training, execution ($1B$ vs.\ $1A$), adoption ($2B$ vs.\ $1B$), and total contrasts (the execution and adoption tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The long-only capacity portfolio.}} The two-by-two design applied to the long-only portfolio of Equation~\eqref{{eq:longonly}}: rows vary the training loss, columns vary execution between plain monthly membership refresh and the cost-scaled membership-hysteresis band. Panel~A reports net annualised Sharpe ratios, mean monthly cost drag (bps), and monthly one-sided turnover at \$500M for the primary specification; Panel~B decomposes the net gain at each level of deployed capital, one block per Section-4 specification, each trained, evaluated, and costed under its own weight; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses cover the training, execution ($1B$ vs.\ $1A$), adoption ($2B$ vs.\ $1B$), and total contrasts (the execution and adoption tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. 299 months, 2000--2024.}}
 \label{{tab:longonly_2x2}}
 \end{{table}}
 """
@@ -855,7 +873,7 @@ def build_capacity_ce():
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Mean net returns, turnover, and certainty equivalents of the capacity portfolios.}} Companion to Table~8 of the main paper: annualised mean net returns (\%), mean monthly one-sided turnover, and the annualised certainty-equivalent return $\mathrm{{CE}}(\gamma)$ of Equation~\eqref{{eq:ce}} (\%) evaluated on the monthly net series, for the full-rebalance capacity portfolio of Equations~(11)--(12) of the main paper under standard and implementability-weighted training. Panel~A sweeps deployed capital under the signal capacity weight $\tilde w$; turnover does not vary with $A$. Panel~B replaces the capacity weight with equal and value weights at \$500M. Within Panel~A, the certainty-equivalent comparison of the two training losses reproduces the net-Sharpe comparison of Table~8 of the main paper: the standard portfolio dominates under proportional costs, the two portfolios are within a few basis points of one another at \$100M, and the weighted portfolio dominates at \$500M and \$1B at every $\gamma$. In Panel~B the two criteria diverge for the equal-weighted portfolio: under weighted training it carries the higher mean net return and the higher certainty equivalent at every $\gamma$ although its net Sharpe ratio is lower---both means are negative, so the Sharpe ordering there is the familiar negative-mean pathology. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Mean net returns, turnover, and certainty equivalents of the capacity portfolios.}} Companion to the primary (TC-rank, \$500M) block of Table~8 of the main paper: annualised mean net returns (\%), mean monthly one-sided turnover, and the annualised certainty-equivalent return $\mathrm{{CE}}(\gamma)$ of Equation~\eqref{{eq:ce}} (\%) evaluated on the monthly net series, for the full-rebalance capacity portfolio of Equations~(11)--(12) of the main paper under standard and implementability-weighted training. Panel~A sweeps deployed capital under the signal capacity weight $\tilde w$; turnover does not vary with $A$. Panel~B replaces the capacity weight with equal and value weights at \$500M. Within Panel~A, the certainty-equivalent comparison of the two training losses reproduces the net-Sharpe comparison of Table~8's primary block in the main paper: the standard portfolio dominates under proportional costs, the two portfolios are within a few basis points of one another at \$100M, and the weighted portfolio dominates at \$500M and \$1B at every $\gamma$. In Panel~B the two criteria diverge for the equal-weighted portfolio: under weighted training it carries the higher mean net return and the higher certainty equivalent at every $\gamma$ although its net Sharpe ratio is lower---both means are negative, so the Sharpe ordering there is the familiar negative-mean pathology. 299 months, 2000--2024.}}
 \label{{tab:capacity_ce}}
 \end{{table}}
 """

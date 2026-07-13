@@ -157,29 +157,37 @@ def build_importance_vs_liquid_r2():
 
 
 def build_breakeven_cumret():
-    """S5.3 exhibit — cumulative net returns of the four 2x2 cells at $500m."""
+    """fig:capacity_cumret — cumulative net returns of the four 2x2 cells at
+    $500m, one panel per Section-4 spec (author decision 2026-07-13).
+
+    Panels SHARE the y-axis: unlike fig:dw_error_diff, the unit (net return
+    per dollar of gross capital) is identical across specs.
+    """
     _paper_style()
-    base = ROOT / "outputs/eval_realignment/analysis/xgboost/tc_rank_lam3_500m"
-    fullr = pd.read_csv(base / "capacity_portfolio_monthly_500M.csv")
-    gated = pd.read_csv(base / "capacity_breakeven_monthly_500M.csv")
+    fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.4), sharey=True)
+    for ax, (spec, title) in zip(axes, DW_SPECS):
+        base = ROOT / f"outputs/eval_realignment/analysis/xgboost/{spec}"
+        fullr = pd.read_csv(base / "capacity_portfolio_monthly_500M.csv")
+        gated = pd.read_csv(base / "capacity_breakeven_monthly_500M.csv")
 
-    def series(df, rt):
-        s = df[df.row_type == rt].set_index("yyyymm")["ret_net"].sort_index()
-        s.index = pd.to_datetime(s.index.astype(str), format="%Y%m")
-        return s.cumsum()
+        def series(df, rt):
+            s = df[df.row_type == rt].set_index("yyyymm")["ret_net"].sort_index()
+            s.index = pd.to_datetime(s.index.astype(str), format="%Y%m")
+            return s.cumsum()
 
-    SPECS = [
-        (series(fullr, "standard"), "Standard, full rebalance ($1A$)", "#2c6b9c", (0, (4, 2)), 1.2),
-        (series(fullr, "weighted"), "Weighted, full rebalance ($2A$)", "#b0533b", (0, (4, 2)), 1.2),
-        (series(gated, "standard"), "Standard, breakeven gate ($1B$)", "#2c6b9c", "solid", 1.6),
-        (series(gated, "weighted"), "Weighted, breakeven gate ($2B$)", "#b0533b", "solid", 1.6),
-    ]
-    fig, ax = plt.subplots(figsize=(8.6, 4.4))
-    for s, lab, col, ls, lw in SPECS:
-        ax.plot(s.index, s.values, label=lab, color=col, linestyle=ls, linewidth=lw)
-    ax.axhline(0, color="0.3", lw=0.7, ls=":")
-    ax.set_ylabel("Cumulative net return")
-    ax.legend(frameon=False, fontsize=9.5, loc="upper left", ncols=2)
+        LINES = [
+            (series(fullr, "standard"), "Standard, full rebalance ($1A$)", "#2c6b9c", (0, (4, 2)), 1.0),
+            (series(fullr, "weighted"), "Weighted, full rebalance ($2A$)", "#b0533b", (0, (4, 2)), 1.0),
+            (series(gated, "standard"), "Standard, breakeven gate ($1B$)", "#2c6b9c", "solid", 1.4),
+            (series(gated, "weighted"), "Weighted, breakeven gate ($2B$)", "#b0533b", "solid", 1.4),
+        ]
+        for s, lab, col, ls, lw in LINES:
+            ax.plot(s.index, s.values, label=lab, color=col, linestyle=ls, linewidth=lw)
+        ax.axhline(0, color="0.3", lw=0.7, ls=":")
+        ax.set_title(title, fontsize=11)
+        ax.tick_params(axis="both", labelsize=8)
+    axes[0].set_ylabel("Cumulative net return")
+    axes[0].legend(frameon=False, fontsize=7.5, loc="upper left", ncols=1)
     fig.tight_layout()
     path = OUT / "capacity_breakeven_net_cumret_500M.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
