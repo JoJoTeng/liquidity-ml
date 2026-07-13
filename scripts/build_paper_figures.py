@@ -187,38 +187,51 @@ def build_breakeven_cumret():
     print(f"  wrote {path}")
 
 
-def build_dw_error_diff():
-    """fig:dw_error_diff -- cumulative D_t by liquidity quintile (S4.1).
+DW_SPECS = [
+    ("tc_rank_lam3_500m", r"TC-rank $\beta{=}3$, \$500M (primary)"),
+    ("tc_500m", r"TC level, \$500M"),
+    ("softmax_rank_lam2", r"Softmax rank $\beta{=}2$"),
+]
 
-    Mirrors the pipeline figure (plot_quintile_error_differentials in
-    src/analysis/eval_realignment/deployment_weighted_metrics.py) line for
-    line; the ONLY intended difference is the dropped in-figure title (the
-    LaTeX caption carries it). Keep the two in sync if the pipeline changes.
+
+def build_dw_error_diff():
+    """fig:dw_error_diff -- cumulative D_t by liquidity quintile (S4.1),
+    one panel per Section-4 weighting spec (author decision 2026-07-13).
+
+    Each panel mirrors the pipeline figure (plot_quintile_error_differentials
+    in src/analysis/eval_realignment/deployment_weighted_metrics.py) minus
+    the in-figure title; panel headers name the spec. Y-scales are
+    per-panel: D_t is in weighted-MSE units under each spec's own weight,
+    so levels are not comparable across panels.
     """
     _paper_style()
-    src = ROOT / ("outputs/eval_realignment/analysis/xgboost/tc_rank_lam3_500m/"
-                  "liquidity_breakpoints/nyse/deployment_weighted_error_diff.csv")
-    d = pd.read_csv(src)
-    fig, ax = plt.subplots(figsize=(8, 8))
-    months = sorted(d["yyyymm"].unique())
-    pos = {m: i for i, m in enumerate(months)}
+    fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.4))
     cmap = plt.get_cmap("viridis")
-    for i, q in enumerate(range(1, 6)):
-        sub = d[d["universe"] == f"Q{q}"]
-        ax.plot(
-            sub["yyyymm"].map(pos).to_numpy(),
-            sub["cumulative_wmse_diff"].to_numpy(),
-            label=f"Q{q}",
-            color=cmap(i / 4),
-            lw=1.3,
-        )
-    ax.axhline(0, color="black", ls="--", lw=0.5)
-    ax.set_ylabel(r"Cumulative $\tilde{w}$MSE($M_{std}$) $-$ $\tilde{w}$MSE($M_w$)")
-    ax.legend(title="Liquidity quintile", ncol=5, fontsize=8)
-    tick_every = max(len(months) // 10, 1)
-    ticks = range(0, len(months), tick_every)
-    ax.set_xticks(list(ticks))
-    ax.set_xticklabels([str(months[i]) for i in ticks], rotation=45, fontsize=8)
+    for ax, (spec, title) in zip(axes, DW_SPECS):
+        src = ROOT / (f"outputs/eval_realignment/analysis/xgboost/{spec}/"
+                      "liquidity_breakpoints/nyse/deployment_weighted_error_diff.csv")
+        d = pd.read_csv(src)
+        months = sorted(d["yyyymm"].unique())
+        pos = {m: i for i, m in enumerate(months)}
+        for i, q in enumerate(range(1, 6)):
+            sub = d[d["universe"] == f"Q{q}"]
+            ax.plot(
+                sub["yyyymm"].map(pos).to_numpy(),
+                sub["cumulative_wmse_diff"].to_numpy(),
+                label=f"Q{q}",
+                color=cmap(i / 4),
+                lw=1.1,
+            )
+        ax.axhline(0, color="black", ls="--", lw=0.5)
+        ax.set_title(title, fontsize=11)
+        tick_every = max(len(months) // 5, 1)
+        ticks = range(0, len(months), tick_every)
+        ax.set_xticks(list(ticks))
+        ax.set_xticklabels([str(months[i]) for i in ticks], rotation=45, fontsize=7)
+        ax.tick_params(axis="y", labelsize=8)
+    axes[0].set_ylabel(r"Cumulative $\tilde{w}$MSE($M_{std}$) $-$ $\tilde{w}$MSE($M_w$)")
+    axes[0].legend(title="Liquidity quintile", ncol=2, fontsize=7,
+                   title_fontsize=8, loc="upper left")
     fig.tight_layout()
     path = OUT / "deployment_weighted_error_diff.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")

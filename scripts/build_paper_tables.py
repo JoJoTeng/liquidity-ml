@@ -451,41 +451,65 @@ FORMAL_EXP = ROOT / "outputs/formalanalysis/experiment/xgboost"
 AUM_GRID = [("PropTC", "Prop.\\ TC"), ("100M", "\\$100M"),
             ("500M", "\\$500M"), ("1B", "\\$1B")]
 
+# The three specifications reported side by side in Section 4 (author
+# decision 2026-07-13). Labels match the WeightFamilySweep rows; the paper
+# symbol for the softmax tilt is beta (lambda is the impact coefficient).
+SEC4_SPECS = [
+    ("tc_rank_lam3_500m", "TC-rank $\\beta{=}3$, \\$500M (primary)"),
+    ("tc_500m", "TC level, \\$500M"),
+    ("softmax_rank_lam2", "Softmax rank $\\beta{=}2$"),
+]
 
-def _two_by_two(aum):
-    t = pd.read_csv(EVAL / f"two_by_two_{aum}.csv").set_index("metric")["value"]
+
+def _two_by_two(aum, spec="tc_rank_lam3_500m"):
+    f = ROOT / f"outputs/eval_realignment/analysis/xgboost/{spec}/two_by_two_{aum}.csv"
+    t = pd.read_csv(f).set_index("metric")["value"]
     return t.to_dict()
 
 
 def build_deployment_weighted_r2():
-    r2 = pd.read_csv(EVAL / "liquidity_breakpoints/nyse/deployment_weighted_r2.csv")
-    st = pd.read_csv(EVAL / "liquidity_breakpoints/nyse/deployment_weighted_error_diff_stats.csv")
-    m = r2.merge(st[["universe", "t_stat"]], on="universe")
     LAB = {"Q1": "Q1 (Illiquid)", "Q2": "Q2", "Q3": "Q3", "Q4": "Q4",
            "Q5": "Q5 (Liquid)", "liquid_q4q5": "Liquid (Q4--Q5)", "full": "Full cross-section"}
     ORDER = ["Q1", "Q2", "Q3", "Q4", "Q5", "liquid_q4q5", "full"]
-    m = m.set_index("universe").loc[ORDER].reset_index()
-    rows = []
-    for _, r in m.iterrows():
-        pre = r"\midrule" + "\n" if r["universe"] == "liquid_q4q5" else ""
-        rows.append(
-            pre + f"{LAB[r['universe']]} & {mnum(r['r2_weighted_std_pct'])} & "
-            f"{mnum(r['r2_weighted_wt_pct'])} & {num(r['delta_pct'], plus=True)} & "
-            f"{mnum(r['t_stat'])} \\\\"
+    blocks = []
+    for spec, _ in SEC4_SPECS:
+        base = ROOT / f"outputs/eval_realignment/analysis/xgboost/{spec}/liquidity_breakpoints/nyse"
+        r2 = pd.read_csv(base / "deployment_weighted_r2.csv")
+        st = pd.read_csv(base / "deployment_weighted_error_diff_stats.csv")
+        blocks.append(
+            r2.merge(st[["universe", "t_stat"]], on="universe").set_index("universe").loc[ORDER]
         )
+    tmax = max(b["t_stat"].abs().max() for b in blocks)
+    assert tmax < 1.96, "caption claims no differential is significant"
+    rows = []
+    for u in ORDER:
+        pre = r"\midrule" + "\n" if u == "liquid_q4q5" else ""
+        cells = []
+        for b in blocks:
+            r = b.loc[u]
+            cells.append(
+                f"{mnum(r['r2_weighted_std_pct'])} & {mnum(r['r2_weighted_wt_pct'])} & "
+                f"{num(r['delta_pct'], plus=True)} & {mnum(r['t_stat'])}"
+            )
+        rows.append(pre + f"{LAB[u]} & " + " & ".join(cells) + r" \\")
     body = "\n".join(rows)
+    heads = " & ".join(rf"\multicolumn{{4}}{{c}}{{{lab}}}" for _, lab in SEC4_SPECS)
+    sub = " & ".join([r"\multicolumn{1}{c}{Std} & \multicolumn{1}{c}{Wt} & "
+                      r"\multicolumn{1}{c}{$\Delta$} & \multicolumn{1}{c}{$t(D_t)$}"] * len(SEC4_SPECS))
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{l rrrr}}
+\footnotesize
+\setlength{{\tabcolsep}}{{3pt}}
+\begin{{tabular}}{{l rrrr rrrr rrrr}}
 \toprule
- & \multicolumn{{2}}{{c}}{{$R^2_{{\tilde w}}$ (\%)}} & & \\
-\cmidrule(lr){{2-3}}
-Universe & \multicolumn{{1}}{{c}}{{Standard}} & \multicolumn{{1}}{{c}}{{Weighted}} & \multicolumn{{1}}{{c}}{{$\Delta R^2_{{\tilde w}}$ (pp)}} & \multicolumn{{1}}{{c}}{{$t(D_t)$}} \\
+ & {heads} \\
+\cmidrule(lr){{2-5}} \cmidrule(lr){{6-9}} \cmidrule(lr){{10-13}}
+Universe & {sub} \\
 \midrule
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Deployment-weighted out-of-sample $R^2$.}} The deployment-weighted $R^2$ of Equation~\eqref{{eq:dw_r2}} for the standard and implementability-weighted models, within NYSE-breakpoint dollar-volume quintiles of the prediction universe ($Q1$ = least liquid), on the pooled liquid set, and on the full cross-section; the primary specification's weight ($\tilde w^{{\mathrm{{tcr}}}}$ at \$500M) prices the errors throughout, with the global mean-one normalisation held fixed across subsets. $\Delta R^2_{{\tilde w}}$ is weighted minus standard in percentage points. The last column reports the Newey--West $t$-statistic (6 lags) on the monthly weighted mean-squared-error differential $D_t$ (Appendix~\ref{{app:capacity}}); no individual differential is statistically significant. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Deployment-weighted out-of-sample $R^2$.}} The deployment-weighted $R^2$ of Equation~\eqref{{eq:dw_r2}} for the standard and implementability-weighted models under the three Section-4 specifications, within NYSE-breakpoint dollar-volume quintiles of the prediction universe ($Q1$ = least liquid), on the pooled liquid set, and on the full cross-section. Each block prices errors under its own specification's weight, so the blocks are three different metrics rather than one metric on three models: the standard model is the same in every block, and its measured accuracy varies only because the weight does. Within each block the global mean-one normalisation is held fixed across subsets. Std and Wt report $R^2_{{\tilde w}}$ in per cent; $\Delta$ is weighted minus standard in percentage points; $t(D_t)$ is the Newey--West $t$-statistic (6 lags) on the monthly weighted mean-squared-error differential $D_t$ (Appendix~\ref{{app:capacity}}). No individual differential is statistically significant in any block (the largest $|t|$ in the table is ${tmax:.2f}$). 299 months, 2000--2024.}}
 \label{{tab:dw_r2}}
 \end{{table}}
 """
@@ -543,9 +567,9 @@ Capacity weight & Std & Wt & Std & Wt & $\Delta$SR & $p$ \\
 """
 
 
-def _supplement_pvals(book):
+def _supplement_pvals(book, spec="tc_rank_lam3_500m"):
     """Pairwise p-values from the inference supplement (script 46), by AUM."""
-    f = EVAL / "inference_supplement.csv"
+    f = ROOT / f"outputs/eval_realignment/analysis/xgboost/{spec}/inference_supplement.csv"
     out = {}
     if f.exists():
         d = pd.read_csv(f)
@@ -562,26 +586,29 @@ def build_capacity_two_by_two():
         return (f"{num(t5[f'SR_net_annualized({c})'])} & ({num(t5[f'SR_gross_annualized({c})'])}) & "
                 f"{t5[f'TC mean monthly ({c})'] * 1e4:.0f} & {t5[f'Turnover ({c})']:.2f}")
 
-    sup = _supplement_pvals("long_short")
     rows_b = []
-    for aum, lab in AUM_GRID:
-        t = _two_by_two(aum)
-        p_exec = sup.get((aum, "execution_1B_vs_1A"))
-        adopt = t["SR_net_annualized(2B)"] - t["SR_net_annualized(1B)"]
-        p_adopt = sup.get((aum, "adoption_2B_vs_1B"))
-        exec_cell = f"{num(t['Net portfolio effect annualized'], plus=True)}"
-        if p_exec is not None:
-            exec_cell += f" ({_pfmt(p_exec)})"
-        adopt_cell = f"{num(adopt, plus=True)}"
-        if p_adopt is not None:
-            adopt_cell += f" ({_pfmt(p_adopt)})"
-        rows_b.append(
-            f"\\quad {lab} & "
-            f"{num(t['Net training effect annualized'], plus=True)} ({_pfmt(t['LW p-val (training, net)'])}) & "
-            f"{exec_cell} & {adopt_cell} & "
-            f"{num(t['Net total effect annualized'], plus=True)} ({_pfmt(t['LW p-val (total, net)'])}) & "
-            f"{num(t['Net interaction annualized'], plus=True)} \\\\"
-        )
+    for spec, slab in SEC4_SPECS:
+        sup = _supplement_pvals("long_short", spec)
+        rows_b.append(rf"\multicolumn{{8}}{{l}}{{\emph{{{slab}}}}} \\")
+        for aum, lab in AUM_GRID:
+            t = _two_by_two(aum, spec)
+            p_exec = sup.get((aum, "execution_1B_vs_1A"))
+            adopt = t["SR_net_annualized(2B)"] - t["SR_net_annualized(1B)"]
+            p_adopt = sup.get((aum, "adoption_2B_vs_1B"))
+            exec_cell = f"{num(t['Net portfolio effect annualized'], plus=True)}"
+            if p_exec is not None:
+                exec_cell += f" ({_pfmt(p_exec)})"
+            adopt_cell = f"{num(adopt, plus=True)}"
+            if p_adopt is not None:
+                adopt_cell += f" ({_pfmt(p_adopt)})"
+            tail = r" \\[2pt]" if aum == AUM_GRID[-1][0] and spec != SEC4_SPECS[-1][0] else r" \\"
+            rows_b.append(
+                f"\\quad {lab} & "
+                f"{num(t['Net training effect annualized'], plus=True)} ({_pfmt(t['LW p-val (training, net)'])}) & "
+                f"{exec_cell} & {adopt_cell} & "
+                f"{num(t['Net total effect annualized'], plus=True)} ({_pfmt(t['LW p-val (total, net)'])}) & "
+                f"{num(t['Net interaction annualized'], plus=True)}" + tail
+            )
     body_b = "\n".join(rows_b)
 
     rows_c = []
@@ -627,7 +654,7 @@ def build_capacity_two_by_two():
 {body_c}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Cost-aware execution and the training $\times$ execution decomposition.}} Panel~A reports the four cells of the two-by-two design at the primary \$500M scale: net and gross annualised Sharpe ratios, the mean monthly transaction-cost drag in basis points, and monthly one-sided turnover. Rows vary the training loss (standard vs.\ implementability-weighted); blocks vary execution (full monthly rebalancing vs.\ the breakeven gate of Equation~\eqref{{eq:gate}}). Panel~B decomposes the net gain of Equation~\eqref{{eq:decomp}} at each level of deployed capital; one-sided $p$-values in parentheses are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap: the training, total, execution ($1B$ vs.\ $1A$), and adoption ($2B$ vs.\ $1B$, what weighted training adds on top of the gate) contrasts are all tested with the same seeded machinery (the pairwise execution and adoption tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. Turnover and gate composition do not vary with $A$ because the gate triggers on the half-spread alone, so the execution effect grows with capital purely through the price of the avoided trades. Panel~C reports annualised factor alphas of the four net return series at \$500M with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Cost-aware execution and the training $\times$ execution decomposition.}} Panel~A reports the four cells of the two-by-two design at the primary \$500M scale: net and gross annualised Sharpe ratios, the mean monthly transaction-cost drag in basis points, and monthly one-sided turnover. Rows vary the training loss (standard vs.\ implementability-weighted); blocks vary execution (full monthly rebalancing vs.\ the breakeven gate of Equation~\eqref{{eq:gate}}). Panel~B decomposes the net gain of Equation~\eqref{{eq:decomp}} at each level of deployed capital, for each of the three Section-4 specifications---each trained, evaluated, and costed under its own weight; Panels~A and~C report the primary specification. One-sided $p$-values in parentheses are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap: the training, total, execution ($1B$ vs.\ $1A$), and adoption ($2B$ vs.\ $1B$, what weighted training adds on top of the gate) contrasts are all tested with the same seeded machinery (the pairwise execution and adoption tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). Effects are computed on unrounded values, so the printed decomposition identities can differ in the last digit. Turnover and gate composition do not vary with $A$ because the gate triggers on the half-spread alone, so the execution effect grows with capital purely through the price of the avoided trades. Panel~C reports annualised factor alphas of the four net return series at \$500M with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
 \label{{tab:capacity_2x2}}
 \end{{table}}
 """
