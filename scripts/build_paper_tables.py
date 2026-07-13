@@ -493,7 +493,15 @@ def build_deployment_weighted_r2():
             )
         rows.append(pre + f"{LAB[u]} & " + " & ".join(cells) + r" \\")
     body = "\n".join(rows)
-    heads = " & ".join(rf"\multicolumn{{4}}{{c}}{{{lab}}}" for _, lab in SEC4_SPECS)
+    # The primary header is stacked on two lines: a \multicolumn wider than
+    # its spanned columns dumps ALL excess width into the last spanned column
+    # (the primary block's t column), opening a large visual gap.
+    HEAD = {
+        "tc_rank_lam3_500m": "\\shortstack{TC-rank $\\beta{=}3$, \\$500M\\\\(primary)}",
+        "tc_500m": "TC level, \\$500M",
+        "softmax_rank_lam2": "Softmax rank $\\beta{=}2$",
+    }
+    heads = " & ".join(rf"\multicolumn{{4}}{{c}}{{{HEAD[spec]}}}" for spec, _ in SEC4_SPECS)
     sub = " & ".join([r"\multicolumn{1}{c}{Std} & \multicolumn{1}{c}{Wt} & "
                       r"\multicolumn{1}{c}{$\Delta$} & \multicolumn{1}{c}{$t(D_t)$}"] * len(SEC4_SPECS))
     return rf"""\begin{{table}}[t!]
@@ -1186,7 +1194,55 @@ BUILDERS["LinearBenchmark.tex"] = build_linear_benchmark
 BUILDERS["RegimeSplits.tex"] = build_regime_splits
 
 BUILDERS["CapacityCE.tex"] = build_capacity_ce
+def build_conventional_r2():
+    """IA.6: conventional equal-weighted R2 by quintile, all three S4 specs."""
+    LAB = {"1": "Q1 (Illiquid)", "2": "Q2", "3": "Q3", "4": "Q4",
+           "5": "Q5 (Liquid)", "Q4-Q5": "Liquid (Q4--Q5)", "Full": "Full cross-section"}
+    ORDER = ["1", "2", "3", "4", "5", "Q4-Q5", "Full"]
+    blocks = []
+    for spec, _ in SEC4_SPECS:
+        d = pd.read_csv(ROOT / f"outputs/formalanalysis/analysis/xgboost/{spec}/"
+                        "liquidity_breakpoints/nyse/r2_by_quintile.csv")
+        d["quintile"] = d["quintile"].astype(str)
+        blocks.append(d.set_index("quintile").loc[ORDER])
+    # one standard model, one metric: the Std column must be identical across specs
+    for b in blocks[1:]:
+        assert (b["r2_std_pct"] - blocks[0]["r2_std_pct"]).abs().max() < 1e-9
+    full = {spec: b.loc["Full", "delta_pct"] for (spec, _), b in zip(SEC4_SPECS, blocks)}
+    assert full["tc_500m"] < full["tc_rank_lam3_500m"] < full["softmax_rank_lam2"] < 0.005
+    rows = []
+    for u in ORDER:
+        pre = r"\midrule" + "\n" if u == "Q4-Q5" else ""
+        cells = [mnum(blocks[0].loc[u, "r2_std_pct"])]
+        for b in blocks:
+            cells.append(f"{mnum(b.loc[u, 'r2_wt_pct'])} & {num(b.loc[u, 'delta_pct'], plus=True)}")
+        rows.append(pre + f"{LAB[u]} & " + " & ".join(cells) + r" \\")
+    body = "\n".join(rows)
+    heads = " & ".join(
+        rf"\multicolumn{{2}}{{c}}{{{lab}}}"
+        for lab in ["TC-rank $\\beta{=}3$ (primary)", "TC level, \\$500M", "Softmax rank $\\beta{=}2$"]
+    )
+    return rf"""\begin{{table}}[t!]
+\centering
+\footnotesize
+\setlength{{\tabcolsep}}{{4pt}}
+\begin{{tabular}}{{l r rr rr rr}}
+\toprule
+ & & {heads} \\
+\cmidrule(lr){{3-4}} \cmidrule(lr){{5-6}} \cmidrule(lr){{7-8}}
+Universe & \multicolumn{{1}}{{c}}{{Std}} & \multicolumn{{1}}{{c}}{{Wt}} & \multicolumn{{1}}{{c}}{{$\Delta$}} & \multicolumn{{1}}{{c}}{{Wt}} & \multicolumn{{1}}{{c}}{{$\Delta$}} & \multicolumn{{1}}{{c}}{{Wt}} & \multicolumn{{1}}{{c}}{{$\Delta$}} \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Conventional equal-weighted out-of-sample $R^2$ by liquidity quintile.}} Companion to Table~7 of the main paper: the conventional equal-weighted zero-benchmark $R^2$ of Equation~(3) of the main paper, in per cent, within the same NYSE-breakpoint dollar-volume quintiles, for the standard model and for each of the three weighted specifications of Section~4 of the main paper. The metric and the standard model are identical across specifications, so the Std column is common; Wt and $\Delta$ (weighted minus standard, percentage points) vary only through the training weight. The ordering of the conventional concessions matches the ordering of the deployment-weighted gains in Table~7 of the main paper: the plain transaction-cost tilt concedes ${abs(full['tc_500m']):.2f}$ percentage points on the full cross-section, the primary rank weight ${abs(full['tc_rank_lam3_500m']):.2f}$, and the volume-rank tilt essentially nothing (${abs(full['softmax_rank_lam2']):.2f}$). 299 months, 2000--2024.}}
+\label{{tab:conventional_r2}}
+\end{{table}}
+"""
+
+
 BUILDERS["DeploymentWeightedR2.tex"] = build_deployment_weighted_r2
+BUILDERS["ConventionalR2.tex"] = build_conventional_r2
 BUILDERS["CapacityPortfolio.tex"] = build_capacity_portfolio
 BUILDERS["CapacityTwoByTwo.tex"] = build_capacity_two_by_two
 BUILDERS["LongOnlyTwoByTwo.tex"] = build_longonly_two_by_two
