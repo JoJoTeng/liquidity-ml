@@ -7,6 +7,11 @@ because the paper needs a different convention or styling than the pipeline
 default.
 
 Figures produced:
+    deployment_weighted_error_diff.png  fig:dw_error_diff (S4.1)
+        Cumulative monthly deployment-weighted MSE differential D_t by
+        NYSE-breakpoint liquidity quintile, paper-styled (the pipeline PNG
+        carries an in-figure title and non-serif fonts).
+
     importance_reallocation.png  fig:reallocation (S5.5)
         Per-window importance-share shifts, the SAME convention as
         tab:reallocation (mean over rolling windows of each feature's share
@@ -182,8 +187,33 @@ def build_breakeven_cumret():
     print(f"  wrote {path}")
 
 
+def build_dw_error_diff():
+    """fig:dw_error_diff -- cumulative D_t by liquidity quintile (S4.1)."""
+    _paper_style()
+    src = ROOT / ("outputs/eval_realignment/analysis/xgboost/tc_rank_lam3_500m/"
+                  "liquidity_breakpoints/nyse/deployment_weighted_error_diff.csv")
+    d = pd.read_csv(src)
+    quints = ["Q1", "Q2", "Q3", "Q4", "Q5"]
+    # sequential dark-to-light palette, Q1 (illiquid) darkest
+    cols = {"Q1": "#2d1e3e", "Q2": "#39568c", "Q3": "#1f948b", "Q4": "#5cc862", "Q5": "#e8d430"}
+    fig, ax = plt.subplots(figsize=(8.6, 4.6))
+    for q in quints:
+        g = d[d.universe == q].sort_values("yyyymm")
+        x = pd.to_datetime(g["yyyymm"].astype(int).astype(str), format="%Y%m")
+        ax.plot(x, g["cumulative_wmse_diff"], label=f"${q}$", color=cols[q], lw=1.4)
+    ax.axhline(0, color="0.3", lw=0.7, ls=":")
+    ax.set_ylabel(r"Cumulative $D_t$")
+    ax.legend(frameon=False, fontsize=10, ncols=5, loc="upper left", title=None)
+    fig.tight_layout()
+    path = OUT / "deployment_weighted_error_diff.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {path}")
+
+
 if __name__ == "__main__":
     print("Building curated paper figures:")
+    build_dw_error_diff()
     build_importance_reallocation()
     build_importance_vs_liquid_r2()
     build_breakeven_cumret()
