@@ -1,11 +1,11 @@
 #!/bin/bash
-# Clean full compile of the paper (and optionally the Internet Appendix).
+# Clean full compile of the paper (single document since 2026-07-14: the
+# former Internet Appendix is merged into the main appendices).
 # Always deletes auxiliary files first: a compile interrupted mid-write
 # leaves a truncated .aux/.lot that makes every later pass fail with
 # "File ended while scanning" / "invalid character" errors.
 #
 #   bash scripts/compile_paper.sh       # Main.pdf
-#   bash scripts/compile_paper.sh ia    # Main.pdf + InternetAppendix.pdf
 set -euo pipefail
 cd "$(dirname "$0")/../paper"
 
@@ -25,6 +25,3 @@ build () {
 }
 
 build Main
-if [ "${1:-}" = "ia" ]; then
-    build InternetAppendix
-fi
