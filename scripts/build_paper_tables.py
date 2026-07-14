@@ -83,7 +83,7 @@ Category & Avg.\ $|\bar d_j|$ & \# Significant ($|t|>2$) & \# Characteristics \\
 All & & {tot_sig} & {tot_n} \\
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Distributional divergence by characteristic category.}} For each characteristic $j$ (rank-transformed to $[0,1]$ within month), $\bar d_j$ is the time-series average difference between the dollar-volume-weighted and equal-weighted cross-sectional means, $\bar d_j = T^{{-1}}\sum_t (\bar x^{{\mathrm{{deploy}}}}_{{j,t}} - \bar x^{{\mathrm{{train}}}}_{{j,t}})$. Characteristics are grouped into the economic categories of \citet{{chen2022open}}; the table reports the category average of $|\bar d_j|$ and the number of characteristics whose divergence is significant at $|t|>2$ with Newey--West standard errors (6 lags). The sample is the full CRSP cross-section, 1989--2024.}}
+\caption{{\footnotesize \textbf{{Distributional divergence by characteristic category.}} For each characteristic $j$ (rank-transformed to $[0,1]$ within month), $\bar d_j$ is the time-series average difference between the dollar-volume-weighted and equal-weighted cross-sectional means, $\bar d_j = T^{{-1}}\sum_t (\bar x^{{\mathrm{{deploy}}}}_{{j,t}} - \bar x^{{\mathrm{{train}}}}_{{j,t}})$. Characteristics are grouped into the economic categories of \citet{{chen2022open}}; the table reports the category average of $|\bar d_j|$ and the number of characteristics whose divergence is significant at $|t|>2$ with Newey--West standard errors (6 lags). The sample is all NYSE, AMEX, and NASDAQ stock-months, 1989--2024.}}
 \label{{tab:divergence_by_category}}
 \end{{table}}
 """
@@ -177,7 +177,7 @@ Quintile & \multicolumn{{1}}{{c}}{{$R^2_{{\mathrm{{zero}}}}$ (\%)}} & \multicolu
 {rows}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Out-of-sample $R^2$ by liquidity quintile.}} Pooled out-of-sample $R^2$ of the standard-loss model within NYSE-breakpoint dollar-volume quintiles ($Q1$ = least liquid), over the 2000--2024 test period. The three columns benchmark squared prediction errors against zero \citep{{gu2020empirical}}, the within-month cross-sectional mean return, and each stock's rolling historical mean over the preceding $132$ months (the model's own training lookback). $Q1$ is the only quintile with a positive $R^2_{{\mathrm{{zero}}}}$. The cross-sectional benchmark is harsher in every quintile; the $Q1$-specific fact is the change of sign from positive to negative, indicating that the positive zero-benchmark figure partly reflects return levels rather than cross-sectional ranking. The historical-mean column is largest at the liquid end because the benchmark, not the model, varies with it: forecasting each stock's own historical mean is worse than forecasting zero in every quintile, and the penalty is largest for the least volatile names, whose smaller squared returns make a non-zero historical mean proportionally more costly. The model's own sum of squared errors stays within $0.6\%$ of the zero-benchmark denominator in every quintile, so no column should be read as evidence that the model predicts liquid stocks well.}}
+\caption{{\footnotesize \textbf{{Out-of-sample $R^2$ by liquidity quintile.}} Pooled out-of-sample $R^2$ of the standard-loss model within NYSE-breakpoint dollar-volume quintiles ($Q1$ = least liquid), over the 2000--2024 test period. The three columns benchmark squared prediction errors against zero \citep{{gu2020empirical}}, the within-month cross-sectional mean return, and each stock's rolling historical mean over the preceding $132$ months (the model's own training lookback). $Q1$ is the only quintile with a positive $R^2_{{\mathrm{{zero}}}}$. The cross-sectional benchmark is harsher in every quintile; the $Q1$-specific fact is the change of sign from positive to negative, indicating that the positive zero-benchmark figure partly reflects return levels rather than cross-sectional ranking. The historical-mean column is largest at the liquid end because the benchmark, not the model, varies with it: forecasting each stock's own historical mean is worse than forecasting zero in every quintile, and the penalty is largest for the least volatile names, whose smaller squared returns make a non-zero historical mean proportionally more costly. The model's own sum of squared errors stays within $0.61\%$ of the zero-benchmark denominator in every quintile, so no column should be read as evidence that the model predicts liquid stocks well.}}
 \label{{tab:r2_by_quintile}}
 \end{{table}}
 """
@@ -358,7 +358,7 @@ def build_data_descriptives():
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Liquidity and cost inputs: cross-sectional descriptives.}} Pooled percentiles across all stock-months, 1989--2024. Daily dollar volume is the 21-day trailing average of daily price times share volume from the CRSP daily file; the half-spread is one half of the \citet{{chen2022open}} \texttt{{BidAskSpread}} series (a \citet{{corwin2012simple}} high--low effective-spread estimate scaled by price); $\sigma$ is the 12-month rolling standard deviation of monthly excess returns rescaled to a daily horizon by $1/\sqrt{{21}}$. The one-way cost $\tau$ applies Equation~\eqref{{eq:tc_primitive}} with $\lambda=0.1$ and equal-breadth participation $Q_t = A/N_t$, where $N_t$ is the full cross-section in month $t$; missing spread, volatility, or volume inputs are imputed at within-month medians, as in the weight construction. The last column reports the ratio of the 99th percentile to the median.}}
+\caption{{\footnotesize \textbf{{Liquidity and cost inputs: cross-sectional descriptives.}} Pooled percentiles across all stock-months, 1989--2024. Daily dollar volume is the 21-day trailing average of daily price times share volume from the CRSP daily file; the half-spread is one half of the \citet{{chen2022open}} \texttt{{BidAskSpread}} series (a \citet{{corwin2012simple}} high--low effective-spread estimate scaled by price); $\sigma$ is the 12-month rolling standard deviation of monthly excess returns rescaled to a daily horizon by $1/\sqrt{{21}}$. The one-way cost $\tau$ applies Equation~\eqref{{eq:tc_primitive}} with $\lambda=0.1$ and equal-breadth participation $Q_t = A/N_t$, where $A$ is the deployed capital and $N_t$ is the full cross-section in month $t$; missing spread, volatility, or volume inputs are imputed at within-month medians, matching the training-weight construction of Section~3.3. The last column reports the ratio of the 99th percentile to the median, computed from unrounded percentiles.}}
 \label{{tab:data_descriptives}}
 \end{{table}}
 """
@@ -517,7 +517,7 @@ Universe & {sub} \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Deployment-weighted out-of-sample $R^2$.}} The deployment-weighted $R^2$ of Equation~\eqref{{eq:dw_r2}} for the standard and implementability-weighted models under the three Section-4 specifications, within NYSE-breakpoint dollar-volume quintiles of the prediction universe ($Q1$ = least liquid), on the pooled liquid set, and on the full cross-section. Each block prices errors under its own specification's weight, so the blocks are three different metrics rather than one metric on three models: the standard model is the same in every block, and its measured accuracy varies only because the weight does. Within each block the global mean-one normalisation is held fixed across subsets. Std and Wt report $R^2_{{\tilde w}}$ in per cent; $\Delta$ is weighted minus standard in percentage points; $t(D_t)$ is the Newey--West $t$-statistic (6 lags) on the monthly weighted mean-squared-error differential $D_t$ (Appendix~\ref{{app:capacity}}). No individual differential is statistically significant in any block (the largest $|t|$ in the table is ${tmax:.2f}$). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Deployment-weighted out-of-sample $R^2$.}} The deployment-weighted $R^2$ of Equation~\eqref{{eq:dw_r2}} for the standard and implementability-weighted models under the three Section-4 specifications, within NYSE-breakpoint dollar-volume quintiles of the prediction universe ($Q1$ = least liquid), on the pooled liquid set, and on the full cross-section. Each block prices errors under its own specification's weight, so the blocks are three different metrics rather than one metric on three models: the standard model is the same in every block, and its measured accuracy varies only because the weight does. Within each block the global mean-one normalisation is held fixed across subsets. Std and Wt report $R^2_{{\tilde w}}$ in per cent; $\Delta$ is weighted minus standard in percentage points; $\Delta$ is computed on unrounded values, so it can differ from the printed cells in the last digit; $t(D_t)$ is the Newey--West $t$-statistic (6 lags) on the monthly weighted mean-squared-error differential $D_t$ (Appendix~\ref{{app:capacity}}). No individual differential is statistically significant in any block (the largest $|t|$ in the table is ${tmax:.2f}$). 299 months, 2000--2024.}}
 \label{{tab:dw_r2}}
 \end{{table}}
 """
@@ -576,7 +576,7 @@ Capacity weight & Std & Wt & Std & Wt & $\Delta$SR & $p$ \\
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds each specification's signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the capital grid, one block per Section-4 specification, each trained, evaluated, and costed under its own weight; the gross Sharpe ratio does not depend on $A$ and is reported in each block header. Panel~B holds $A=\$500$M fixed for the primary specification and replaces the capacity weight in the portfolio construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No primary-specification training difference is statistically significant at any capital level, the volume-rank difference is significant only at \$1B, and the plain tilt's is significant at every capital level and read against its base in Section~\ref{{subsec:twobytwo_results}}. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds each specification's signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the capital grid, one block per Section-4 specification, each trained, evaluated, and costed under its own weight; the gross Sharpe ratio does not depend on $A$ and is reported in each block header. Panel~B holds $A=\$500$M fixed for the primary specification and replaces the capacity weight in the portfolio construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No primary-specification training difference is statistically significant at any capital level, the softmax-rank ($\beta{{=}}2$) difference is significant only at \$1B, and the TC-level difference is significant at every capital level and read against its base in Section~\ref{{subsec:twobytwo_results}}. 299 months, 2000--2024.}}
 \label{{tab:capacity}}
 \end{{table}}
 """
@@ -939,7 +939,7 @@ Leg weighting & Full & NYSE & Top-60\% \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted portfolio.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted portfolio) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at \$500M; one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; the NYSE universe and the deployment-weighted legs (within-leg positions proportional to $\tilde w$; the forecast determines membership only) bring the object into alignment with the trained objective, while the top-$60\%$ universe pre-screens away the illiquid margin the weighting corrects, so the substitutes logic of Section~\ref{{subsec:cost_sensitive}} predicts the attenuation toward zero observed in that column. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-portfolio counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The dose--response of consistency on the sorted portfolio.}} Net annualised training effect ($2A-1A$, weighted minus standard training on the plain sorted portfolio) for the prediction-quantile long--short portfolio of Section~\ref{{subsec:formal_2x2}}, across leg-weighting schemes (rows) and stock universes (columns), at the primary specification and \$500M (XGBoost); one-sided \citet{{ledoit2008robust}} bootstrap $p$-values in parentheses. The equal-legs/full-universe cell is the conventional scoreboard of the machine-learning asset-pricing literature; the NYSE universe and the deployment-weighted legs (within-leg positions proportional to $\tilde w$; the forecast determines membership only) bring the object into alignment with the trained objective, while the top-$60\%$ universe pre-screens away the illiquid margin the weighting corrects, so the substitutes logic of Section~\ref{{subsec:cost_sensitive}} predicts the attenuation toward zero observed in that column. The execution (hysteresis) effect is large in every cell (between ${ex_lo:+.2f}$ and ${ex_hi:+.2f}$), and the total effect is statistically significant in every cell ($p\le {p_bound}$); no individual training effect is significant, and the table is read as a pattern of point estimates, not as cell-level inference. The capacity-portfolio counterpart of the training effect at the same specification is $+0.09$ (Section~\ref{{sec:results}}). 299 months, 2000--2024.}}
 \label{{tab:dose_response}}
 \end{{table}}
 """
@@ -968,7 +968,7 @@ def build_weight_family_sweep():
     cfg2 = copy.deepcopy(cfg); cfg2["weighting"]["softmax_rank_lambda"] = 2.0
     cfg3 = copy.deepcopy(cfg); cfg3["weighting"]["softmax_rank_lambda"] = 3.0
     SPECS = [
-        ("tc_rank_lam3_500m", "TC-rank $\\beta{=}3$ (\\$500M)", "tc_rank", cfg, 500e6),
+        ("tc_rank_lam3_500m", "TC-rank $\\beta{=}3$ (primary)", "tc_rank", cfg, 500e6),
         ("tc_500m", "TC level (\\$500M)", "tc", cfg, 500e6),
         ("softmax_rank_lam2", "Softmax rank $\\beta{=}2$", "softmax_rank", cfg2, None),
         ("softmax_rank_lam3", "Softmax rank $\\beta{=}3$", "softmax_rank", cfg3, None),
@@ -1014,7 +1014,7 @@ def build_weight_family_sweep():
     return rf"""\begin{{table}}[t!]
 \centering
 \footnotesize
-\setlength{{\tabcolsep}}{{3pt}}
+\setlength{{\tabcolsep}}{{2.7pt}}
 \begin{{tabular}}{{lcccccc}}
 \toprule
  & \multicolumn{{2}}{{c}}{{Weight concentration}} & & \multicolumn{{3}}{{c}}{{Two-by-two at \$500M (net)}} \\
@@ -1024,7 +1024,7 @@ Weight family & ESS (\%) & Top-10 (\%) & $\Delta R^2_{{\tilde w}}$ (pp) & Traini
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Across weighting families.}} Each row re-estimates the weighted model and the full evaluation pipeline under a different implementability-weight family (Section~\ref{{subsec:weighting_schemes}}). ESS is the mean monthly Kish effective sample size $(\sum_i w_i)^2/\sum_i w_i^2$ as a percentage of the cross-section; Top-10 is the mean share of total weight carried by the ten largest names. $\Delta R^2_{{\tilde w}}$ is the deployment-weighted $R^2$ gain of Equation~\eqref{{eq:dw_r2}} on the liquid $Q4$--$Q5$ set, each family evaluated under its own weight. The two-by-two columns report the net annualised training, execution ($1B$ vs.\ $1A$), and total effects of Equation~\eqref{{eq:decomp}} at \$500M, with one-sided \citet{{ledoit2008robust}} bootstrap $p$-values for each contrast (the execution tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Across weighting families.}} Each row re-estimates the weighted model and the full evaluation pipeline under a different implementability-weight family (Section~\ref{{subsec:weighting_schemes}}). All rows use XGBoost; the first row is the primary specification of Section~\ref{{sec:results}}. ESS is the mean monthly Kish effective sample size $(\sum_i w_i)^2/\sum_i w_i^2$ as a percentage of the cross-section; Top-10 is the mean share of total weight carried by the ten largest names. $\Delta R^2_{{\tilde w}}$ is the deployment-weighted $R^2$ gain of Equation~\eqref{{eq:dw_r2}} on the liquid $Q4$--$Q5$ set, each family evaluated under its own weight. The two-by-two columns report the net annualised training, execution ($1B$ vs.\ $1A$), and total effects of Equation~\eqref{{eq:decomp}} at \$500M, with one-sided \citet{{ledoit2008robust}} bootstrap $p$-values for each contrast (the execution tests are computed in the inference supplement of Appendix~\ref{{app:bootstrap}}). The training and execution effects need not sum to the total; the remainder is the interaction of Equation~\eqref{{eq:decomp}}, reported for the three Section-4 specifications in Table~\ref{{tab:capacity_2x2}}, Panel~B ($-0.03$, $-0.18$, and $+0.16$ at \$500M) and equal to $+0.08$ and $+0.06$ for the softmax $\beta{{=}}3$ and dollar-volume rows. The concentration diagnostics are computed over the full 1989--2024 training panel (431 months); the $\Delta R^2_{{\tilde w}}$ and two-by-two columns cover the 299 test months, 2000--2024.}}
 \label{{tab:weight_sweep}}
 \end{{table}}
 """
@@ -1116,7 +1116,7 @@ Regime & Months & $1A$ net SR & Training & Execution & Total \\
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The decomposition across market regimes.}} Net annualised Sharpe ratios and the training, execution, and total effects of Equation~\eqref{{eq:decomp}} for the \$500M capacity portfolio, computed within subsamples of the 299 test months: months with VIX above and below its sample median (${med:.1f}$), and NBER recession versus expansion months. The subsample effects are descriptive point estimates---no subsample bootstrap is run---and the recession sample contains only ${n_rec}$ months. VIX is the CBOE volatility index and recession months are NBER business-cycle dates (both from FRED).}}
+\caption{{\footnotesize \textbf{{The decomposition across market regimes.}} Net annualised Sharpe ratios and the training, execution, and total effects of Equation~\eqref{{eq:decomp}} for the XGBoost capacity portfolio at the primary specification and \$500M, computed within subsamples of the 299 test months: months with VIX above and below its sample median (${med:.1f}$), and NBER recession versus expansion months. The subsample effects are descriptive point estimates---no subsample bootstrap is run---and the recession sample contains only ${n_rec}$ months. VIX is the CBOE volatility index and recession months are NBER business-cycle dates (both from FRED).}}
 \label{{tab:regimes}}
 \end{{table}}
 """
@@ -1210,17 +1210,23 @@ def build_conventional_r2():
         assert (b["r2_std_pct"] - blocks[0]["r2_std_pct"]).abs().max() < 1e-9
     full = {spec: b.loc["Full", "delta_pct"] for (spec, _), b in zip(SEC4_SPECS, blocks)}
     assert full["tc_500m"] < full["tc_rank_lam3_500m"] < full["softmax_rank_lam2"] < 0.005
+    # Table-local delta formatter: snap deltas that round to zero at two
+    # decimals to an unsigned $0.00$ (a signed -0.00 cell would contradict the
+    # caption, which quotes the same quantity unsigned via abs()).
+    def dnum(v):
+        return "$0.00$" if abs(round(v, 2)) == 0 else num(v, plus=True)
+
     rows = []
     for u in ORDER:
         pre = r"\midrule" + "\n" if u == "Q4-Q5" else ""
         cells = [mnum(blocks[0].loc[u, "r2_std_pct"])]
         for b in blocks:
-            cells.append(f"{mnum(b.loc[u, 'r2_wt_pct'])} & {num(b.loc[u, 'delta_pct'], plus=True)}")
+            cells.append(f"{mnum(b.loc[u, 'r2_wt_pct'])} & {dnum(b.loc[u, 'delta_pct'])}")
         rows.append(pre + f"{LAB[u]} & " + " & ".join(cells) + r" \\")
     body = "\n".join(rows)
     heads = " & ".join(
         rf"\multicolumn{{2}}{{c}}{{{lab}}}"
-        for lab in ["TC-rank $\\beta{=}3$ (primary)", "TC level, \\$500M", "Softmax rank $\\beta{=}2$"]
+        for lab in ["TC-rank $\\beta{=}3$, \\$500M (primary)", "TC level, \\$500M", "Softmax rank $\\beta{=}2$"]
     )
     return rf"""\begin{{table}}[t!]
 \centering
@@ -1235,7 +1241,7 @@ Universe & \multicolumn{{1}}{{c}}{{Std}} & \multicolumn{{1}}{{c}}{{Wt}} & \multi
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Conventional equal-weighted out-of-sample $R^2$ by liquidity quintile.}} Companion to Table~7 of the main paper: the conventional equal-weighted zero-benchmark $R^2$ of Equation~(3) of the main paper, in per cent, within the same NYSE-breakpoint dollar-volume quintiles, for the standard model and for each of the three weighted specifications of Section~4 of the main paper. The metric and the standard model are identical across specifications, so the Std column is common; Wt and $\Delta$ (weighted minus standard, percentage points) vary only through the training weight. The ordering of the conventional concessions matches the ordering of the deployment-weighted gains in Table~7 of the main paper: the plain transaction-cost tilt concedes ${abs(full['tc_500m']):.2f}$ percentage points on the full cross-section, the primary rank weight ${abs(full['tc_rank_lam3_500m']):.2f}$, and the volume-rank tilt essentially nothing (${abs(full['softmax_rank_lam2']):.2f}$). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Conventional equal-weighted out-of-sample $R^2$ by liquidity quintile.}} Companion to Table~7 of the main paper: the conventional equal-weighted zero-benchmark $R^2$ of Equation~(3) of the main paper, in per cent, within the same NYSE-breakpoint dollar-volume quintiles, for the standard model and for each of the three weighted specifications of Section~4 of the main paper. The metric and the standard model are identical across specifications, so the Std column is common; Wt and $\Delta$ (weighted minus standard, percentage points) vary only through the training weight. The conventional concession scales with the strength of the tilt: the plain transaction-cost tilt concedes ${abs(full['tc_500m']):.2f}$ percentage points on the full cross-section, the primary rank weight ${abs(full['tc_rank_lam3_500m']):.2f}$, and the mild volume-rank tilt essentially nothing (${abs(full['softmax_rank_lam2']):.2f}$). The deltas are read as a pattern of point estimates, under the same discipline as the dose--response grid of Table~12 of the main paper; no cell-level inference is attached. 299 months, 2000--2024.}}
 \label{{tab:conventional_r2}}
 \end{{table}}
 """
