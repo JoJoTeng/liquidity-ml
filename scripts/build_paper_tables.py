@@ -582,7 +582,7 @@ def build_capacity_two_by_two():
     t5 = _two_by_two("500M")
 
     def cell(c):
-        return (f"{num(t5[f'SR_net_annualized({c})'])} & ({num(t5[f'SR_gross_annualized({c})'])}) & "
+        return (f"{num(t5[f'SR_net_annualized({c})'])} & {num(t5[f'SR_gross_annualized({c})'])} & "
                 f"{t5[f'TC mean monthly ({c})'] * 1e4:.0f} & {t5[f'Turnover ({c})']:.2f}")
 
     rows_b = []
@@ -638,8 +638,8 @@ def build_capacity_two_by_two():
 \setlength{{\tabcolsep}}{{3.5pt}}
 \begin{{tabular}}{{lccccccc}}
 \toprule
-\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M}}}} \\[2pt]
- & Net SR & (Gross SR) & Cost (bps/mo) & Turnover & & & \\
+\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M (primary specification)}}}} \\[2pt]
+ & Net SR & Gross SR & Cost (bps/mo) & Turnover & & & \\
 \midrule
 \multicolumn{{8}}{{l}}{{\emph{{Full rebalance ($A$)}}}} \\
 \quad Standard training ($1A$) & {cell('1A')} & & & \\
@@ -714,7 +714,7 @@ def build_longonly_two_by_two():
 \centering
 \begin{{tabular}}{{lccccccc}}
 \toprule
-\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M}}}} \\[2pt]
+\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M (primary specification)}}}} \\[2pt]
  & \multicolumn{{3}}{{c}}{{Plain membership ($A$)}} & \multicolumn{{3}}{{c}}{{Hysteresis band ($B$)}} & \\
 \cmidrule(lr){{2-4}} \cmidrule(lr){{5-7}}
  & Net SR & Cost (bps/mo) & Turnover & Net SR & Cost (bps/mo) & Turnover & \\
