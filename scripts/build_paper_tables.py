@@ -533,50 +533,34 @@ def build_capacity_portfolio():
         d = df[df.row_type == "difference"].iloc[0]
         return s, w, d
 
-    rows_a = []
+    rows = []
     for spec, slab in SEC4_SPECS:
         s0, w0, _ = metrics("", "500M", spec)
-        rows_a.append(
-            rf"\multicolumn{{7}}{{l}}{{\emph{{{slab}; gross SR ${num(s0['gross_sr_annual'])}$ "
-            rf"standard, ${num(w0['gross_sr_annual'])}$ weighted}}}} \\"
+        p_gross = _two_by_two("500M", spec)["LW p-val (training, gross)"]
+        rows.append(rf"\multicolumn{{5}}{{l}}{{\emph{{{slab}}}}} \\")
+        rows.append(
+            f"\\quad Gross (any $A$) & {num(s0['gross_sr_annual'])} & {num(w0['gross_sr_annual'])} & "
+            f"{num(w0['gross_sr_annual'] - s0['gross_sr_annual'], plus=True)} & {_pfmt(p_gross)} \\\\"
         )
         for aum, lab in AUM_GRID:
             s, w, d = metrics("", aum, spec)
             delta_ann = w["net_sr_annual"] - s["net_sr_annual"]
-            tail = r" \\[2pt]" if aum == AUM_GRID[-1][0] and spec != SEC4_SPECS[-1][0] else r" \\"
-            rows_a.append(
+            tail = " \\\\[2pt]" if aum == AUM_GRID[-1][0] and spec != SEC4_SPECS[-1][0] else " \\\\"
+            rows.append(
                 f"\\quad {lab} & {num(s['net_sr_annual'])} & {num(w['net_sr_annual'])} & "
                 f"{num(delta_ann, plus=True)} & {_pfmt(d['net_sr_diff_pval'])}" + tail
             )
-    rows_b = []
-    for tag, lab in [("", "Signal ($\\tilde w$)"), ("_equal", "Equal"), ("_value", "Value")]:
-        s, w, d = metrics(tag, "500M")
-        delta_ann = w["net_sr_annual"] - s["net_sr_annual"]
-        rows_b.append(
-            f"\\quad {lab} & {num(s['gross_sr_annual'])} & {num(w['gross_sr_annual'])} & "
-            f"{num(s['net_sr_annual'])} & {num(w['net_sr_annual'])} & "
-            f"{num(delta_ann, plus=True)} & {d['net_sr_diff_pval']:.2f} \\\\"
-        )
-    body_a = "\n".join(rows_a)
-    body_b = "\n".join(rows_b)
+    body = "\n".join(rows)
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{lcccccc}}
+\begin{{tabular}}{{lcccc}}
 \toprule
-\multicolumn{{7}}{{l}}{{\textit{{Panel A: Signal-weighted portfolio across deployed capital (net Sharpe ratios)}}}} \\[2pt]
- & Standard & Weighted & $\Delta$SR & $p$ & & \\
+ & Standard & Weighted & $\Delta$SR & $p$ \\
 \midrule
-{body_a}
-\midrule
-\multicolumn{{7}}{{l}}{{\textit{{Panel B: Capacity-weight benchmarks at \$500M}}}} \\[2pt]
- & \multicolumn{{2}}{{c}}{{Gross SR}} & \multicolumn{{2}}{{c}}{{Net SR}} & & \\
-\cmidrule(lr){{2-3}} \cmidrule(lr){{4-5}}
-Capacity weight & Std & Wt & Std & Wt & $\Delta$SR & $p$ \\
-\midrule
-{body_b}
+{body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A holds each specification's signal capacity weight $\tilde w$ fixed and sweeps deployed capital $A$ over the capital grid, one block per Section-4 specification, each trained, evaluated, and costed under its own weight; the gross Sharpe ratio does not depend on $A$ and is reported in each block header. Panel~B holds $A=\$500$M fixed for the primary specification and replaces the capacity weight in the portfolio construction with equal and value weights, isolating the deployment stage. $\Delta$SR is weighted minus standard on the net series; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No primary-specification training difference is statistically significant at any capital level, the softmax-rank ($\beta{{=}}2$) difference is significant only at \$1B, and the TC-level difference is significant at every capital level and read against its base in Section~\ref{{subsec:twobytwo_results}}. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}}, one block per Section-4 specification, each trained, evaluated, and costed under its own weight. Within each block the first row reports the gross Sharpe ratio, which does not depend on deployed capital; the remaining rows report net Sharpe ratios as deployed capital $A$ sweeps the capital grid, with Prop.~TC the half-spread-only scenario, in which impact is off and net returns do not depend on $A$. $\Delta$SR is weighted minus standard; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference, on the gross series for the gross row and the net series otherwise. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No primary-specification training difference is statistically significant at any capital level, the softmax-rank ($\beta{{=}}2$) difference is significant only at \$1B, and the TC-level difference is significant at every capital level and read against its base in Section~\ref{{subsec:twobytwo_results}}. The equal- and value-weight capacity benchmarks for the primary specification are tabulated with the certainty-equivalent companion in Appendix~\ref{{ia:capacity}} (Table~\ref{{tab:capacity_ce}}). 299 months, 2000--2024.}}
 \label{{tab:capacity}}
 \end{{table}}
 """
@@ -847,7 +831,8 @@ def build_capacity_ce():
         for rt, rlab in [("standard", "standard"), ("weighted", "weighted")]:
             r = df[df.row_type == rt].iloc[0]
             out.append(
-                f"\\quad {lab}, {rlab} & {num(r['net_mean_annual']*100)} & "
+                f"\\quad {lab}, {rlab} & {num(r['gross_sr_annual'])} & {num(r['net_sr_annual'])} & "
+                f"{num(r['net_mean_annual']*100)} & "
                 f"{r['turnover_mean']:.2f} & {num(r['net_ce_annual_g1']*100)} & "
                 f"{num(r['net_ce_annual_g5']*100)} & {num(r['net_ce_annual_g10']*100)} \\\\"
             )
@@ -870,18 +855,20 @@ def build_capacity_ce():
     body_b = "\n".join(rows_b)
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{lccccc}}
+\footnotesize
+\setlength{{\tabcolsep}}{{4pt}}
+\begin{{tabular}}{{lccccccc}}
 \toprule
- & Net mean (\%) & Turnover & $\mathrm{{CE}}(1)$ & $\mathrm{{CE}}(5)$ & $\mathrm{{CE}}(10)$ \\
+ & Gross SR & Net SR & Net mean (\%) & Turnover & $\mathrm{{CE}}(1)$ & $\mathrm{{CE}}(5)$ & $\mathrm{{CE}}(10)$ \\
 \midrule
-\multicolumn{{6}}{{l}}{{\textit{{Panel A: Signal-weighted portfolio across deployed capital}}}} \\[2pt]
+\multicolumn{{8}}{{l}}{{\textit{{Panel A: Signal-weighted portfolio across deployed capital}}}} \\[2pt]
 {body_a}
 \midrule
-\multicolumn{{6}}{{l}}{{\textit{{Panel B: Capacity-weight benchmarks at \$500M}}}} \\[2pt]
+\multicolumn{{8}}{{l}}{{\textit{{Panel B: Capacity-weight benchmarks at \$500M}}}} \\[2pt]
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Mean net returns, turnover, and certainty equivalents of the capacity portfolios.}} Companion to the primary (TC-rank, \$500M) block of Table~\ref{{tab:capacity}}: annualised mean net returns (\%), mean monthly one-sided turnover, and the annualised certainty-equivalent return $\mathrm{{CE}}(\gamma)$ of Equation~\eqref{{eq:ce}} (\%) evaluated on the monthly net series, for the full-rebalance capacity portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A sweeps deployed capital under the signal capacity weight $\tilde w$; turnover does not vary with $A$. Panel~B replaces the capacity weight with equal and value weights at \$500M. Within Panel~A, the certainty-equivalent comparison of the two training losses reproduces the net-Sharpe comparison of Table~\ref{{tab:capacity}}'s primary block: the standard portfolio dominates under proportional costs, the two portfolios are within a few basis points of one another at \$100M, and the weighted portfolio dominates at \$500M and \$1B at every $\gamma$. In Panel~B the two criteria diverge for the equal-weighted portfolio: under weighted training it carries the higher mean net return and the higher certainty equivalent at every $\gamma$ although its net Sharpe ratio is lower---both means are negative, so the Sharpe ordering there is the familiar negative-mean pathology. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Mean net returns, turnover, and certainty equivalents of the capacity portfolios.}} Companion to the primary (TC-rank, \$500M) block of Table~\ref{{tab:capacity}}: gross and net annualised Sharpe ratios, annualised mean net returns (\%), mean monthly one-sided turnover, and the annualised certainty-equivalent return $\mathrm{{CE}}(\gamma)$ of Equation~\eqref{{eq:ce}} (\%) evaluated on the monthly net series, for the full-rebalance capacity portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}} under standard and implementability-weighted training. Panel~A sweeps deployed capital under the signal capacity weight $\tilde w$; turnover does not vary with $A$. Panel~B replaces the capacity weight with equal and value weights at \$500M, the benchmarks that isolate the deployment stage in Section~\ref{{subsec:capacity_results}}. Within Panel~A, the certainty-equivalent comparison of the two training losses reproduces the net-Sharpe comparison of Table~\ref{{tab:capacity}}'s primary block: the standard portfolio dominates under proportional costs, the two portfolios are within a few basis points of one another at \$100M, and the weighted portfolio dominates at \$500M and \$1B at every $\gamma$. In Panel~B the two criteria diverge for the equal-weighted portfolio: under weighted training it carries the higher mean net return and the higher certainty equivalent at every $\gamma$ although its net Sharpe ratio is lower---both means are negative, so the Sharpe ordering there is the familiar negative-mean pathology. 299 months, 2000--2024.}}
 \label{{tab:capacity_ce}}
 \end{{table}}
 """
