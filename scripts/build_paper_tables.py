@@ -547,7 +547,7 @@ def build_capacity_portfolio():
             delta_ann = w["net_sr_annual"] - s["net_sr_annual"]
             tail = " \\\\[2pt]" if aum == AUM_GRID[-1][0] and spec != SEC4_SPECS[-1][0] else " \\\\"
             rows.append(
-                f"\\quad {lab} & {num(s['net_sr_annual'])} & {num(w['net_sr_annual'])} & "
+                f"\\quad Net at {lab} & {num(s['net_sr_annual'])} & {num(w['net_sr_annual'])} & "
                 f"{num(delta_ann, plus=True)} & {_pfmt(d['net_sr_diff_pval'])}" + tail
             )
     body = "\n".join(rows)
