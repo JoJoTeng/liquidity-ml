@@ -539,7 +539,7 @@ def build_capacity_portfolio():
         p_gross = _two_by_two("500M", spec)["LW p-val (training, gross)"]
         rows.append(rf"\multicolumn{{5}}{{l}}{{\emph{{{slab}}}}} \\")
         rows.append(
-            f"\\quad Gross (any $A$) & {num(s0['gross_sr_annual'])} & {num(w0['gross_sr_annual'])} & "
+            f"\\quad Gross (invariant to $A$) & {num(s0['gross_sr_annual'])} & {num(w0['gross_sr_annual'])} & "
             f"{num(w0['gross_sr_annual'] - s0['gross_sr_annual'], plus=True)} & {_pfmt(p_gross)} \\\\"
         )
         for aum, lab in AUM_GRID:
@@ -553,9 +553,9 @@ def build_capacity_portfolio():
     body = "\n".join(rows)
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{lcccc}}
+\begin{{tabular}}{{l rrrr}}
 \toprule
- & Standard & Weighted & $\Delta$SR & $p$ \\
+ & \multicolumn{{1}}{{c}}{{Standard}} & \multicolumn{{1}}{{c}}{{Weighted}} & \multicolumn{{1}}{{c}}{{$\Delta$SR}} & \multicolumn{{1}}{{c}}{{$p$}} \\
 \midrule
 {body}
 \bottomrule
@@ -857,9 +857,9 @@ def build_capacity_ce():
 \centering
 \footnotesize
 \setlength{{\tabcolsep}}{{4pt}}
-\begin{{tabular}}{{lccccccc}}
+\begin{{tabular}}{{l rrrrrrr}}
 \toprule
- & Gross SR & Net SR & Net mean (\%) & Turnover & $\mathrm{{CE}}(1)$ & $\mathrm{{CE}}(5)$ & $\mathrm{{CE}}(10)$ \\
+ & \multicolumn{{1}}{{c}}{{Gross SR}} & \multicolumn{{1}}{{c}}{{Net SR}} & \multicolumn{{1}}{{c}}{{Net mean (\%)}} & \multicolumn{{1}}{{c}}{{Turnover}} & \multicolumn{{1}}{{c}}{{$\mathrm{{CE}}(1)$}} & \multicolumn{{1}}{{c}}{{$\mathrm{{CE}}(5)$}} & \multicolumn{{1}}{{c}}{{$\mathrm{{CE}}(10)$}} \\
 \midrule
 \multicolumn{{8}}{{l}}{{\textit{{Panel A: Signal-weighted portfolio across deployed capital}}}} \\[2pt]
 {body_a}
