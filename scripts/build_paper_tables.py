@@ -1226,7 +1226,7 @@ def build_conventional_r2():
     body = "\n".join(rows)
     heads = " & ".join(
         rf"\multicolumn{{2}}{{c}}{{{lab}}}"
-        for lab in ["TC-rank $\\beta{=}3$, \\$500M (primary)", "TC level, \\$500M", "Softmax rank $\\beta{=}2$"]
+        for lab in ["\\shortstack{TC-rank $\\beta{=}3$\\\\(primary)}", "TC level, \\$500M", "Softmax rank $\\beta{=}2$"]
     )
     return rf"""\begin{{table}}[t!]
 \centering
@@ -1241,7 +1241,7 @@ Universe & \multicolumn{{1}}{{c}}{{Std}} & \multicolumn{{1}}{{c}}{{Wt}} & \multi
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Conventional equal-weighted out-of-sample $R^2$ by liquidity quintile.}} Companion to Table~\ref{{tab:dw_r2}}: the conventional equal-weighted zero-benchmark $R^2$ of Equation~\eqref{{eq:oos_r2}}, in per cent, within the same NYSE-breakpoint dollar-volume quintiles, for the standard model and for each of the three weighted specifications of Section~\ref{{sec:results}}. The metric and the standard model are identical across specifications, so the Std column is common; Wt and $\Delta$ (weighted minus standard, percentage points) vary only through the training weight. The conventional concession scales with the strength of the tilt: the plain transaction-cost tilt concedes ${abs(full['tc_500m']):.2f}$ percentage points on the full cross-section, the primary rank weight ${abs(full['tc_rank_lam3_500m']):.2f}$, and the mild volume-rank tilt essentially nothing (${abs(full['softmax_rank_lam2']):.2f}$). The deltas are read as a pattern of point estimates, under the same discipline as the dose--response grid of Table~\ref{{tab:dose_response}}; no cell-level inference is attached. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Conventional equal-weighted out-of-sample $R^2$ by liquidity quintile.}} Companion to Table~\ref{{tab:dw_r2}}: the conventional equal-weighted zero-benchmark $R^2$ of Equation~\eqref{{eq:oos_r2}}, in per cent, within the same NYSE-breakpoint dollar-volume quintiles, for the standard model and for each of the three weighted specifications of Section~\ref{{sec:results}} (both cost-based specifications at \$500M). The metric and the standard model are identical across specifications, so the Std column is common; Wt and $\Delta$ (weighted minus standard, percentage points) vary only through the training weight. The conventional concession scales with the strength of the tilt: the plain transaction-cost tilt concedes ${abs(full['tc_500m']):.2f}$ percentage points on the full cross-section, the primary rank weight ${abs(full['tc_rank_lam3_500m']):.2f}$, and the mild volume-rank tilt essentially nothing (${abs(full['softmax_rank_lam2']):.2f}$). The deltas are read as a pattern of point estimates, under the same discipline as the dose--response grid of Table~\ref{{tab:dose_response}}; no cell-level inference is attached. 299 months, 2000--2024.}}
 \label{{tab:conventional_r2}}
 \end{{table}}
 """
