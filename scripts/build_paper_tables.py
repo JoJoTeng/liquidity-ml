@@ -24,6 +24,7 @@ Run:
 """
 
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -1330,8 +1331,189 @@ def build_gross_effects():
 \end{{table}}
 """
 
+def _formal_two_by_two(aum, spec="tc_rank_lam3_500m", var=""):
+    """Formal-track (21e) sorted-book two-by-two, EW legs unless var overrides."""
+    f = (ROOT / f"outputs/formalanalysis/analysis/xgboost/{spec}/"
+         f"prediction_quantile{var}/stock_universe/full/two_by_two_{aum}.csv")
+    return pd.read_csv(f).set_index("metric")["value"].to_dict()
+
+
+def build_conventional_ladder():
+    """S4.4 Table A: per-quintile ladder + long-short, primary spec, EW, $500M."""
+    ts = pd.read_csv(
+        ROOT / "outputs/formalanalysis/analysis/xgboost/tc_rank_lam3_500m/"
+        "prediction_quantile/stock_universe/full/prediction_quantile_timeseries_500M.csv"
+    )
+    t5 = _formal_two_by_two("500M")
+
+    def qstats(cell, q):
+        s = ts[(ts.cell == cell) & (ts.prediction_quantile == q)].sort_values("yyyymm")
+        return (s.gross_return.mean() * 12 * 100, s.net_return.mean() * 12 * 100,
+                s.net_return.mean() / s.net_return.std() * math.sqrt(12))
+
+    # Prose-tied invariants: gross ladder monotone at the ends, only Q5
+    # survives net at $500M, and the L-S rows match the 21e summary file.
+    g1a = [qstats("1A", q) for q in range(1, 6)]
+    g2a = [qstats("2A", q) for q in range(1, 6)]
+    assert g1a[0][0] < 0 < g1a[4][0] and g2a[0][0] < 0 < g2a[4][0]
+    assert all(v[1] < 0 for v in g1a[:4]) and g1a[4][1] > 0
+    assert all(v[1] < 0 for v in g2a[:4]) and g2a[4][1] > 0
+    assert abs(t5["SR_gross_annualized(1A)"] - 1.656) < 5e-3
+    assert abs(t5["SR_net_annualized(1A)"] + 0.507) < 5e-3
+
+    rows = []
+    for q in range(1, 6):
+        lab = {1: "Q1 (lowest forecast)", 5: "Q5 (highest forecast)"}.get(q, f"Q{q}")
+        a, b = g1a[q - 1], g2a[q - 1]
+        rows.append(f"\\quad {lab} & {mnum(a[0], 1)} & {mnum(a[1], 1)} & {num(a[2])} & "
+                    f"{mnum(b[0], 1)} & {mnum(b[1], 1)} & {num(b[2])} \\\\")
+    ls = (f"\\quad Long--short ($Q5{{-}}Q1$) & "
+          f"{mnum(t5['Gross return annualized (1A)'] * 100, 1)} & {mnum(t5['Net return annualized (1A)'] * 100, 1)} & {num(t5['SR_net_annualized(1A)'])} & "
+          f"{mnum(t5['Gross return annualized (2A)'] * 100, 1)} & {mnum(t5['Net return annualized (2A)'] * 100, 1)} & {num(t5['SR_net_annualized(2A)'])} \\\\")
+    body = "\n".join(rows)
+    return rf"""\begin{{table}}[t!]
+\centering
+\footnotesize
+\setlength{{\tabcolsep}}{{4pt}}
+\begin{{tabular}}{{l rrr rrr}}
+\toprule
+ & \multicolumn{{3}}{{c}}{{Standard}} & \multicolumn{{3}}{{c}}{{Weighted}} \\
+\cmidrule(lr){{2-4}} \cmidrule(lr){{5-7}}
+ & \multicolumn{{1}}{{c}}{{Gross}} & \multicolumn{{1}}{{c}}{{Net}} & \multicolumn{{1}}{{c}}{{Net SR}} & \multicolumn{{1}}{{c}}{{Gross}} & \multicolumn{{1}}{{c}}{{Net}} & \multicolumn{{1}}{{c}}{{Net SR}} \\
+\midrule
+{body}
+\midrule
+{ls}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{The conventional prediction-sorted portfolio.}} Monthly-refreshed portfolios sorted into quintiles of the return forecast on the full cross-section, equal-weighted within quintile, for the standard model and the primary weighted specification. Gross and Net are annualised mean returns in per cent; Net SR is the annualised net Sharpe ratio. Net returns charge the cost primitive of Equation~\eqref{{eq:tc_primitive}} at the \$500M deployment scale: each quintile row is a standalone long-only book deploying the full \$500M, and the long--short row is the dollar-neutral $Q5{{-}}Q1$ book with \$250M per leg, so the rows are separate portfolios rather than an additive decomposition. The gross ladder is monotone for both models, but at deployment scale the net premium survives only in the top quintile, and the long--short book---gross annualised Sharpe ratio $1.66$ standard, $1.39$ weighted---is unprofitable net of costs for both. 299 months, 2000--2024.}}
+\label{{tab:conv_ladder}}
+\end{{table}}
+"""
+
+
+def build_conventional_two_by_two():
+    """S4.4 Table B: sorted-book training x execution 2x2, mirroring tab:capacity_2x2."""
+    t5 = _formal_two_by_two("500M")
+
+    def cell(c):
+        return (f"{num(t5[f'SR_net_annualized({c})'])} & {num(t5[f'SR_gross_annualized({c})'])} & "
+                f"{t5[f'TC mean monthly ({c})'] * 1e4:.0f} & {t5[f'Turnover ({c})']:.2f}")
+
+    # Prose-tied invariants for S4.4.
+    assert t5["LW p-val (portfolio, net)"] <= 0.0002 + 1e-9
+    assert abs(t5["Net portfolio effect annualized"] - 0.867) < 5e-3
+    assert abs(t5["Net training effect annualized"] + 0.086) < 5e-3
+    assert t5["Gross training effect annualized"] < 0 and t5["Gross total effect annualized"] < 0
+
+    rows_b = []
+    for spec, slab in SEC4_SPECS:
+        rows_b.append(rf"\multicolumn{{8}}{{l}}{{\emph{{{slab}}}}} \\")
+        for aum, lab in AUM_GRID:
+            t = _formal_two_by_two(aum, spec)
+            adopt = t["SR_net_annualized(2B)"] - t["SR_net_annualized(1B)"]
+            rows_b.append(
+                f"\\quad {lab} & "
+                f"{num(t['Net training effect annualized'], plus=True)} ({_pfmt(t['LW p-val (training, net)'])}) & "
+                f"{num(t['Net portfolio effect annualized'], plus=True)} ({_pfmt(t['LW p-val (portfolio, net)'])}) & "
+                f"{num(adopt, plus=True)} & "
+                f"{num(t['Net total effect annualized'], plus=True)} ({_pfmt(t['LW p-val (total, net)'])}) & "
+                f"{num(t['Net interaction annualized'], plus=True)} \\\\"
+            )
+    body_b = "\n".join(rows_b)
+
+    rows_c = []
+    for spec, slab in SEC4_SPECS:
+        tsp = _formal_two_by_two("500M", spec)
+        rows_c.append(rf"\multicolumn{{8}}{{l}}{{\emph{{{slab}}}}} \\")
+        for key, lab in [("capm", "CAPM"), ("ff3", "FF3"), ("ff5", "FF5"), ("ff5_mom", "FF5+Mom")]:
+            cells = []
+            for c in ["1A", "1B", "2A", "2B"]:
+                a = tsp[f"alpha_{key}({c})_annual"] * 100
+                tt = tsp[f"alpha_{key}({c})_tstat"]
+                if f"{abs(tt):.2f}" == "1.96":
+                    ts = f"({tt:.3f})" if tt >= 0 else f"($-${abs(tt):.3f})"
+                else:
+                    ts = tstat(tt)
+                cells.append(f"{num(a)} {ts}")
+            rows_c.append(f"\\quad {lab} & " + " & ".join(cells) + r" \\")
+    body_c = "\n".join(rows_c)
+
+    return rf"""\begin{{table}}[t!]
+\centering
+\footnotesize
+\renewcommand{{\arraystretch}}{{0.85}}
+\setlength{{\abovecaptionskip}}{{4pt}}
+\setlength{{\tabcolsep}}{{3.5pt}}
+\begin{{tabular}}{{lccccccc}}
+\toprule
+\multicolumn{{8}}{{l}}{{\textit{{Panel A: The four cells at \$500M (primary specification)}}}} \\[2pt]
+ & Net SR & Gross SR & Cost (bps/mo) & Turnover & & & \\
+\midrule
+\multicolumn{{8}}{{l}}{{\emph{{Monthly refresh ($A$)}}}} \\
+\quad Standard training ($1A$) & {cell('1A')} & & & \\
+\quad Weighted training ($2A$) & {cell('2A')} & & & \\
+\multicolumn{{8}}{{l}}{{\emph{{Hysteresis band ($B$)}}}} \\
+\quad Standard training ($1B$) & {cell('1B')} & & & \\
+\quad Weighted training ($2B$) & {cell('2B')} & & & \\
+\midrule
+\multicolumn{{8}}{{l}}{{\textit{{Panel B: Decomposition across deployed capital (net, annualised)}}}} \\[2pt]
+ & Training ($p$) & Execution ($p$) & $2B{{-}}1B$ & Total ($p$) & Interaction & & \\
+\midrule
+{body_b}
+\midrule
+\multicolumn{{8}}{{l}}{{\textit{{Panel C: Annualised factor alphas at \$500M (\%, $t$-statistics in parentheses)}}}} \\[2pt]
+ & $1A$ & $1B$ & $2A$ & $2B$ & & & \\
+\midrule
+{body_c}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Training $\times$ execution on the conventional sorted portfolio.}} The two-by-two design of Section~\ref{{subsec:twobytwo_results}} applied to the equal-weighted quintile long--short book of Table~\ref{{tab:conv_ladder}}: training loss (standard vs.\ implementability-weighted) crossed with execution (plain monthly membership refresh vs.\ the cost-scaled membership-hysteresis band of Equation~\eqref{{eq:hysteresis}}). Panel~A reports the four cells at the primary \$500M scale: net and gross annualised Sharpe ratios, mean monthly cost drag in basis points, and monthly one-sided turnover. Panels~B and~C span the three Section-4 specifications; because the legs are equal-weighted, the standard cells ($1A$, $1B$) are identical across specifications and only the weighted rows vary. Panel~B decomposes the net gain at each level of deployed capital; one-sided $p$-values in parentheses are from the in-file \citet{{ledoit2008robust}} studentised circular-block bootstrap (training $2A$ vs.\ $1A$, execution $1B$ vs.\ $1A$, total $2B$ vs.\ $1A$); the $2B{{-}}1B$ adoption contrast is reported without a $p$-value, as the pairwise machinery of the inference supplement covers the capacity books only. Effects are computed on unrounded values, so the printed identities can differ in the last digit. Panel~C reports annualised factor alphas of the four net return series at \$500M with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
+\label{{tab:conv_2x2}}
+\end{{table}}
+"""
+
+
+def build_conventional_vw():
+    """Appendix companion: value-weighted sorted book, three specs, $500M."""
+    t0 = _formal_two_by_two("500M", var="_value_weight")
+    assert abs(t0["SR_gross_annualized(1A)"] - 0.529) < 5e-3
+    rows = []
+    for spec, slab in SEC4_SPECS:
+        t = _formal_two_by_two("500M", spec, var="_value_weight")
+        rows.append(
+            f"\\quad {slab} & "
+            f"{num(t['SR_net_annualized(1A)'])} & {num(t['SR_net_annualized(1B)'])} & "
+            f"{num(t['SR_net_annualized(2A)'])} & {num(t['SR_net_annualized(2B)'])} & "
+            f"{num(t['Net training effect annualized'], plus=True)} ({_pfmt(t['LW p-val (training, net)'])}) & "
+            f"{num(t['Net portfolio effect annualized'], plus=True)} ({_pfmt(t['LW p-val (portfolio, net)'])}) & "
+            f"{num(t['Net total effect annualized'], plus=True)} ({_pfmt(t['LW p-val (total, net)'])}) \\\\"
+        )
+    body = "\n".join(rows)
+    return rf"""\begin{{table}}[t!]
+\centering
+\footnotesize
+\setlength{{\tabcolsep}}{{3pt}}
+\begin{{tabular}}{{l rrrr rrr}}
+\toprule
+ & \multicolumn{{4}}{{c}}{{Net SR by cell}} & \multicolumn{{3}}{{c}}{{Decomposition (net, annualised)}} \\
+\cmidrule(lr){{2-5}} \cmidrule(lr){{6-8}}
+ & \multicolumn{{1}}{{c}}{{$1A$}} & \multicolumn{{1}}{{c}}{{$1B$}} & \multicolumn{{1}}{{c}}{{$2A$}} & \multicolumn{{1}}{{c}}{{$2B$}} & \multicolumn{{1}}{{c}}{{Training ($p$)}} & \multicolumn{{1}}{{c}}{{Execution ($p$)}} & \multicolumn{{1}}{{c}}{{Total ($p$)}} \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Value-weighted companion to the conventional sorted portfolio.}} The quintile long--short design of Table~\ref{{tab:conv_2x2}} with market-capitalisation weights within each leg, at the \$500M deployment scale. The value-weighted sort starts from a far weaker gross base than the equal-weighted sort (gross annualised Sharpe ratio $0.53$ against $1.66$ for the standard model), and the same hierarchy holds: the hysteresis band is the significant lever in every specification, the training effect stays within noise, and the total effect is positive and significant throughout. The standard cells ($1A$, $1B$) are identical across specifications because the value weights do not depend on the training specification. One-sided $p$-values in parentheses are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap. 299 months, 2000--2024.}}
+\label{{tab:conv_vw}}
+\end{{table}}
+"""
+
+
 BUILDERS["GateGrossDiagnostics.tex"] = build_gate_gross_diagnostics
 BUILDERS["GrossEffects.tex"] = build_gross_effects
+BUILDERS["ConventionalLadder.tex"] = build_conventional_ladder
+BUILDERS["ConventionalTwoByTwo.tex"] = build_conventional_two_by_two
+BUILDERS["ConventionalVW.tex"] = build_conventional_vw
 BUILDERS["ConventionalR2.tex"] = build_conventional_r2
 BUILDERS["CapacityPortfolio.tex"] = build_capacity_portfolio
 BUILDERS["CapacityTwoByTwo.tex"] = build_capacity_two_by_two
