@@ -1281,20 +1281,21 @@ def build_gate_gross_diagnostics():
 \begin{{tabular}}{{l rrr}}
 \toprule
 \multicolumn{{4}}{{l}}{{\textit{{Panel A: Forecast scale and the gate (primary specification, \$500M deployment scale)}}}} \\[2pt]
- & \multicolumn{{1}}{{c}}{{Standard}} & \multicolumn{{1}}{{c}}{{Weighted}} & \\
+ & \multicolumn{{1}}{{r}}{{Standard}} & \multicolumn{{1}}{{r}}{{Weighted}} & \\
 \midrule
 \quad Median centred signal (bps per month) & {sig_s:.0f} & {sig_w:.0f} & \\
-\quad Median half-spread (bps per month) & \multicolumn{{2}}{{c}}{{{hs:.0f}}} & \\
-\quad Share of names clearing the gate (\%) & {pf_s*100:.1f} & {pf_w*100:.1f} & \\
-\quad Rank correlation of centred signals & \multicolumn{{2}}{{c}}{{{corr:.2f}}} & \\
-\quad Dispersion ratio (weighted/standard) & \multicolumn{{2}}{{c}}{{{disp:.3f}}} & \\[2pt]
+\quad Share of names clearing the gate (\%) & {pf_s*100:.1f} & {pf_w*100:.1f} & \\[2pt]
+\multicolumn{{4}}{{l}}{{\emph{{Joint statistics of the two forecast panels}}}} \\
+\quad Median half-spread (bps per month) & {hs:.0f} & & \\
+\quad Rank correlation of centred signals & {corr:.2f} & & \\
+\quad Dispersion ratio (weighted/standard) & {disp:.3f} & & \\[2pt]
 \multicolumn{{4}}{{l}}{{\emph{{Counterfactual gates (net annualised Sharpe ratios)}}}} \\
- & \multicolumn{{1}}{{c}}{{SR}} & \multicolumn{{2}}{{c}}{{$\Delta$ ($p$)}} \\
+ & \multicolumn{{1}}{{r}}{{SR}} & \multicolumn{{2}}{{r}}{{$\Delta$ ($p$)}} \\
 \quad Gated standard ($1B$) & {v1['sr_1B']:.3f} & & \\
 \quad Dispersion-matched standard, gated (passes {pf_m*100:.1f}\%) & {v1['sr_1B_matched']:.3f} & & \\
-\quad Weighted-gated ($2B$); $\Delta=2B$ minus matched & {v1['sr_2B']:.3f} & \multicolumn{{2}}{{c}}{{${v1['d_2B_minus_matched']:+.3f}$ ({pg(v1['p_2B_vs_matched'])})}} \\
-\quad Top-$k$ standard at $k={k_lo*100:.1f}\%$; $\Delta=$ weighted minus standard & {v2.loc[k_lo,'sr_1B_k']:.3f} & \multicolumn{{2}}{{c}}{{${v2.loc[k_lo,'d_annualised']:+.3f}$ ({pg(v2.loc[k_lo,'p_one_sided'])})}} \\
-\quad Top-$k$ standard at $k={k_hi*100:.1f}\%$ & {v2.loc[k_hi,'sr_1B_k']:.3f} & \multicolumn{{2}}{{c}}{{${v2.loc[k_hi,'d_annualised']:+.3f}$ ({pg(v2.loc[k_hi,'p_one_sided'])})}} \\
+\quad Weighted-gated ($2B$); $\Delta=2B$ minus matched & {v1['sr_2B']:.3f} & \multicolumn{{2}}{{r}}{{${v1['d_2B_minus_matched']:+.3f}$ ({pg(v1['p_2B_vs_matched'])})}} \\
+\quad Top-$k$ standard at $k={k_lo*100:.1f}\%$; $\Delta=$ weighted minus standard & {v2.loc[k_lo,'sr_1B_k']:.3f} & \multicolumn{{2}}{{r}}{{${v2.loc[k_lo,'d_annualised']:+.3f}$ ({pg(v2.loc[k_lo,'p_one_sided'])})}} \\
+\quad Top-$k$ standard at $k={k_hi*100:.1f}\%$ & {v2.loc[k_hi,'sr_1B_k']:.3f} & \multicolumn{{2}}{{r}}{{${v2.loc[k_hi,'d_annualised']:+.3f}$ ({pg(v2.loc[k_hi,'p_one_sided'])})}} \\
 \midrule
 \multicolumn{{4}}{{l}}{{\textit{{Panel B: Gross-of-costs effects at the \$500M deployment scale}}}} \\[2pt]
  & \multicolumn{{1}}{{c}}{{Training ($p$)}} & \multicolumn{{1}}{{c}}{{Execution}} & \multicolumn{{1}}{{c}}{{Total ($p$)}} \\
@@ -1302,7 +1303,7 @@ def build_gate_gross_diagnostics():
 {body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Diagnostics behind the decomposition.}} Two independent checks on the decomposition of Table~\ref{{tab:capacity_2x2}}: Panel~A asks whether the weighted model's margin at the gate is forecast scale rather than ranking information; Panel~B asks whether any of the net gains is bought with gross alpha. Panel~A tabulates the forecast-scale and gate diagnostics of the primary specification at the \$500M deployment scale: the gate medians and pass rates (time-series means of within-month statistics), the scale statistics of the two forecast panels, and the two counterfactual gates; values spanning the two model columns are joint statistics---the half-spread is a property of the shared trading universe, and the rank correlation and dispersion ratio compare the two forecast panels---dispersion-matched and scale-invariant top-$k$---read against the gated cells of Table~\ref{{tab:capacity_2x2}}; the constructions are given in Appendix~\ref{{ia:capacity}}. Panel~B reports the decomposition of Equation~\eqref{{eq:decomp}} computed on gross rather than net Sharpe ratios, one row per Section-4 specification. One-sided $p$-values in parentheses are from the same seeded \citet{{ledoit2008robust}} bootstrap; because it tests the positive tail, the primary gross total's $p=0.997$ is a rejection under the mirrored negative-tail test, and no gross effect is significantly positive anywhere in the design. Gross execution carries no separate pairwise test. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Diagnostics behind the decomposition.}} Two independent checks on the decomposition of Table~\ref{{tab:capacity_2x2}}: Panel~A asks whether the weighted model's margin at the gate is forecast scale rather than ranking information; Panel~B asks whether any of the net gains is bought with gross alpha. Panel~A tabulates the forecast-scale and gate diagnostics of the primary specification at the \$500M deployment scale: the gate medians and pass rates (time-series means of within-month statistics), the scale statistics of the two forecast panels, and the two counterfactual gates; the joint-statistics rows are single-valued by construction---the half-spread is a property of the shared trading universe, and the rank correlation and dispersion ratio compare the two forecast panels---dispersion-matched and scale-invariant top-$k$---read against the gated cells of Table~\ref{{tab:capacity_2x2}}; the constructions are given in Appendix~\ref{{ia:capacity}}. Panel~B reports the decomposition of Equation~\eqref{{eq:decomp}} computed on gross rather than net Sharpe ratios, one row per Section-4 specification. One-sided $p$-values in parentheses are from the same seeded \citet{{ledoit2008robust}} bootstrap; because it tests the positive tail, the primary gross total's $p=0.997$ is a rejection under the mirrored negative-tail test, and no gross effect is significantly positive anywhere in the design. Gross execution carries no separate pairwise test. 299 months, 2000--2024.}}
 \label{{tab:gate_gross}}
 \end{{table}}
 """
