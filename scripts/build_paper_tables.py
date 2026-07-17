@@ -1285,7 +1285,7 @@ def build_gate_gross_diagnostics():
 \midrule
 \quad Median centred signal (bps per month) & {sig_s:.0f} & {sig_w:.0f} & \\
 \quad Median half-spread (bps per month) & \multicolumn{{2}}{{c}}{{{hs:.0f}}} & \\
-\quad Share of names clearing the gate & {pf_s*100:.1f}\% & {pf_w*100:.1f}\% & \\
+\quad Share of names clearing the gate (\%) & {pf_s*100:.1f} & {pf_w*100:.1f} & \\
 \quad Rank correlation of centred signals & \multicolumn{{2}}{{c}}{{{corr:.2f}}} & \\
 \quad Dispersion ratio (weighted/standard) & \multicolumn{{2}}{{c}}{{{disp:.3f}}} & \\[2pt]
 \multicolumn{{4}}{{l}}{{\emph{{Counterfactual gates (net annualised Sharpe ratios)}}}} \\
