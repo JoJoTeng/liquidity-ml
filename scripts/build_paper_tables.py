@@ -1268,27 +1268,26 @@ def build_gate_gross_diagnostics():
     return rf"""\begin{{table}}[t!]
 \centering
 \footnotesize
-\setlength{{\tabcolsep}}{{4pt}}
-\begin{{tabular}}{{l rrr}}
+\begin{{tabular}}{{l rr}}
 \toprule
-\multicolumn{{4}}{{l}}{{\textit{{Panel A: Forecast-panel and gate statistics (primary specification, \$500M deployment scale)}}}} \\[2pt]
- & \multicolumn{{1}}{{r}}{{Standard}} & \multicolumn{{1}}{{r}}{{Weighted}} & \\
+\multicolumn{{3}}{{l}}{{\textit{{Panel A: Forecast-panel and gate statistics (primary specification, \$500M deployment scale)}}}} \\[2pt]
+ & \multicolumn{{1}}{{r}}{{Standard}} & \multicolumn{{1}}{{r}}{{Weighted}} \\
 \midrule
-\quad Median centred signal (bps per month) & {sig_s:.0f} & {sig_w:.0f} & \\
-\quad Share of names clearing the gate (\%) & {pf_s*100:.1f} & {pf_w*100:.1f} & \\[2pt]
-\multicolumn{{4}}{{l}}{{\emph{{Joint statistics of the two forecast panels}}}} \\
-\quad Median half-spread (bps per month) & {hs:.0f} & & \\
-\quad Rank correlation of centred signals & {corr:.2f} & & \\
-\quad Dispersion ratio (weighted/standard) & {disp:.3f} & & \\
+\quad Median centred signal (bps per month) & {sig_s:.0f} & {sig_w:.0f} \\
+\quad Share of names clearing the gate (\%) & {pf_s*100:.1f} & {pf_w*100:.1f} \\[2pt]
+\multicolumn{{3}}{{l}}{{\emph{{Joint statistics of the two forecast panels}}}} \\
+\quad Median half-spread (bps per month) & {hs:.0f} & \\
+\quad Rank correlation of centred signals & {corr:.2f} & \\
+\quad Dispersion ratio (weighted/standard) & {disp:.3f} & \\
 \midrule
-\multicolumn{{4}}{{l}}{{\textit{{Panel B: Counterfactual gates (net annualised Sharpe ratios)}}}} \\[2pt]
- & \multicolumn{{1}}{{r}}{{SR}} & \multicolumn{{2}}{{r}}{{$\Delta$ ($p$)}} \\
+\multicolumn{{3}}{{l}}{{\textit{{Panel B: Counterfactual gates (net annualised Sharpe ratios)}}}} \\[2pt]
+ & \multicolumn{{1}}{{r}}{{SR}} & \multicolumn{{1}}{{r}}{{$\Delta$ ($p$)}} \\
 \midrule
-\quad Gated standard ($1B$) & {v1['sr_1B']:.3f} & & \\
-\quad Dispersion-matched standard, gated (passes {pf_m*100:.1f}\%) & {v1['sr_1B_matched']:.3f} & & \\
-\quad Weighted-gated ($2B$); $\Delta=2B$ minus matched & {v1['sr_2B']:.3f} & \multicolumn{{2}}{{r}}{{${v1['d_2B_minus_matched']:+.3f}$ ({pg(v1['p_2B_vs_matched'])})}} \\
-\quad Top-$k$ standard at $k={k_lo*100:.1f}\%$; $\Delta=$ weighted minus standard & {v2.loc[k_lo,'sr_1B_k']:.3f} & \multicolumn{{2}}{{r}}{{${v2.loc[k_lo,'d_annualised']:+.3f}$ ({pg(v2.loc[k_lo,'p_one_sided'])})}} \\
-\quad Top-$k$ standard at $k={k_hi*100:.1f}\%$ & {v2.loc[k_hi,'sr_1B_k']:.3f} & \multicolumn{{2}}{{r}}{{${v2.loc[k_hi,'d_annualised']:+.3f}$ ({pg(v2.loc[k_hi,'p_one_sided'])})}} \\
+\quad Gated standard ($1B$) & {v1['sr_1B']:.3f} & \\
+\quad Dispersion-matched standard, gated (passes {pf_m*100:.1f}\%) & {v1['sr_1B_matched']:.3f} & \\
+\quad Weighted-gated ($2B$); $\Delta=2B$ minus matched & {v1['sr_2B']:.3f} & ${v1['d_2B_minus_matched']:+.3f}$ ({pg(v1['p_2B_vs_matched'])}) \\
+\quad Top-$k$ standard at $k={k_lo*100:.1f}\%$; $\Delta=$ weighted minus standard & {v2.loc[k_lo,'sr_1B_k']:.3f} & ${v2.loc[k_lo,'d_annualised']:+.3f}$ ({pg(v2.loc[k_lo,'p_one_sided'])}) \\
+\quad Top-$k$ standard at $k={k_hi*100:.1f}\%$ & {v2.loc[k_hi,'sr_1B_k']:.3f} & ${v2.loc[k_hi,'d_annualised']:+.3f}$ ({pg(v2.loc[k_hi,'p_one_sided'])}) \\
 \bottomrule
 \end{{tabular}}
 \caption{{\footnotesize \textbf{{Forecast scale and the gate.}} Diagnostics for whether the weighted model's margin at the gate of Equation~\eqref{{eq:gate}} is forecast scale rather than ranking information, for the primary specification at the \$500M deployment scale. Panel~A reports the gate medians and pass rates (time-series means of within-month statistics) and the scale statistics of the two forecast panels; the joint-statistics rows are single-valued by construction---the half-spread is a property of the shared trading universe, and the rank correlation and dispersion ratio compare the two forecast panels. Panel~B reports the two counterfactual gates---dispersion-matched and scale-invariant top-$k$---read against the gated cells of Table~\ref{{tab:capacity_2x2}}; one-sided $p$-values in parentheses are from the same seeded \citet{{ledoit2008robust}} bootstrap, and the constructions are given in Appendix~\ref{{ia:capacity}}. 299 months, 2000--2024.}}
