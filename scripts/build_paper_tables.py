@@ -1265,22 +1265,13 @@ def build_gate_gross_diagnostics():
         return f"{p:.2f}"
 
     k_lo, k_hi = sorted(v2.index)
-    rows_b = []
-    for spec, slab in SEC4_SPECS:
-        t = _two_by_two("500M", spec)
-        rows_b.append(
-            f"\\quad {slab} & {num(t['Gross training effect annualized'], plus=True)} ({pg(t['LW p-val (training, gross)'])}) & "
-            f"{num(t['Gross portfolio effect annualized'], plus=True)} & "
-            f"{num(t['Gross total effect annualized'], plus=True)} ({pg(t['LW p-val (total, gross)'])}) \\\\"
-        )
-    body_b = "\n".join(rows_b)
     return rf"""\begin{{table}}[t!]
 \centering
 \footnotesize
 \setlength{{\tabcolsep}}{{4pt}}
 \begin{{tabular}}{{l rrr}}
 \toprule
-\multicolumn{{4}}{{l}}{{\textit{{Panel A: Forecast scale and the gate (primary specification, \$500M deployment scale)}}}} \\[2pt]
+\multicolumn{{4}}{{l}}{{\textit{{Panel A: Forecast-panel and gate statistics (primary specification, \$500M deployment scale)}}}} \\[2pt]
  & \multicolumn{{1}}{{r}}{{Standard}} & \multicolumn{{1}}{{r}}{{Weighted}} & \\
 \midrule
 \quad Median centred signal (bps per month) & {sig_s:.0f} & {sig_w:.0f} & \\
@@ -1288,29 +1279,60 @@ def build_gate_gross_diagnostics():
 \multicolumn{{4}}{{l}}{{\emph{{Joint statistics of the two forecast panels}}}} \\
 \quad Median half-spread (bps per month) & {hs:.0f} & & \\
 \quad Rank correlation of centred signals & {corr:.2f} & & \\
-\quad Dispersion ratio (weighted/standard) & {disp:.3f} & & \\[2pt]
-\multicolumn{{4}}{{l}}{{\emph{{Counterfactual gates (net annualised Sharpe ratios)}}}} \\
+\quad Dispersion ratio (weighted/standard) & {disp:.3f} & & \\
+\midrule
+\multicolumn{{4}}{{l}}{{\textit{{Panel B: Counterfactual gates (net annualised Sharpe ratios)}}}} \\[2pt]
  & \multicolumn{{1}}{{r}}{{SR}} & \multicolumn{{2}}{{r}}{{$\Delta$ ($p$)}} \\
+\midrule
 \quad Gated standard ($1B$) & {v1['sr_1B']:.3f} & & \\
 \quad Dispersion-matched standard, gated (passes {pf_m*100:.1f}\%) & {v1['sr_1B_matched']:.3f} & & \\
 \quad Weighted-gated ($2B$); $\Delta=2B$ minus matched & {v1['sr_2B']:.3f} & \multicolumn{{2}}{{r}}{{${v1['d_2B_minus_matched']:+.3f}$ ({pg(v1['p_2B_vs_matched'])})}} \\
 \quad Top-$k$ standard at $k={k_lo*100:.1f}\%$; $\Delta=$ weighted minus standard & {v2.loc[k_lo,'sr_1B_k']:.3f} & \multicolumn{{2}}{{r}}{{${v2.loc[k_lo,'d_annualised']:+.3f}$ ({pg(v2.loc[k_lo,'p_one_sided'])})}} \\
 \quad Top-$k$ standard at $k={k_hi*100:.1f}\%$ & {v2.loc[k_hi,'sr_1B_k']:.3f} & \multicolumn{{2}}{{r}}{{${v2.loc[k_hi,'d_annualised']:+.3f}$ ({pg(v2.loc[k_hi,'p_one_sided'])})}} \\
-\midrule
-\multicolumn{{4}}{{l}}{{\textit{{Panel B: Gross-of-costs effects at the \$500M deployment scale}}}} \\[2pt]
- & \multicolumn{{1}}{{c}}{{Training ($p$)}} & \multicolumn{{1}}{{c}}{{Execution}} & \multicolumn{{1}}{{c}}{{Total ($p$)}} \\
-\midrule
-{body_b}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Diagnostics behind the decomposition.}} Two independent checks on the decomposition of Table~\ref{{tab:capacity_2x2}}: Panel~A asks whether the weighted model's margin at the gate is forecast scale rather than ranking information; Panel~B asks whether any of the net gains is bought with gross alpha. Panel~A tabulates the forecast-scale and gate diagnostics of the primary specification at the \$500M deployment scale: the gate medians and pass rates (time-series means of within-month statistics), the scale statistics of the two forecast panels, and the two counterfactual gates; the joint-statistics rows are single-valued by construction---the half-spread is a property of the shared trading universe, and the rank correlation and dispersion ratio compare the two forecast panels---dispersion-matched and scale-invariant top-$k$---read against the gated cells of Table~\ref{{tab:capacity_2x2}}; the constructions are given in Appendix~\ref{{ia:capacity}}. Panel~B reports the decomposition of Equation~\eqref{{eq:decomp}} computed on gross rather than net Sharpe ratios, one row per Section-4 specification. One-sided $p$-values in parentheses are from the same seeded \citet{{ledoit2008robust}} bootstrap; because it tests the positive tail, the primary gross total's $p=0.997$ is a rejection under the mirrored negative-tail test, and no gross effect is significantly positive anywhere in the design. Gross execution carries no separate pairwise test. 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Forecast scale and the gate.}} Diagnostics for whether the weighted model's margin at the gate of Equation~\eqref{{eq:gate}} is forecast scale rather than ranking information, for the primary specification at the \$500M deployment scale. Panel~A reports the gate medians and pass rates (time-series means of within-month statistics) and the scale statistics of the two forecast panels; the joint-statistics rows are single-valued by construction---the half-spread is a property of the shared trading universe, and the rank correlation and dispersion ratio compare the two forecast panels. Panel~B reports the two counterfactual gates---dispersion-matched and scale-invariant top-$k$---read against the gated cells of Table~\ref{{tab:capacity_2x2}}; one-sided $p$-values in parentheses are from the same seeded \citet{{ledoit2008robust}} bootstrap, and the constructions are given in Appendix~\ref{{ia:capacity}}. 299 months, 2000--2024.}}
 \label{{tab:gate_gross}}
 \end{{table}}
 """
 
 
-BUILDERS["DeploymentWeightedR2.tex"] = build_deployment_weighted_r2
+def build_gross_effects():
+    """Appendix H table: gross-of-costs decomposition, three S4 specs."""
+
+    def pg(p):
+        if p < 0.01:
+            return f"{p:.4f}"
+        if p > 0.985:
+            return f"{p:.3f}"
+        return f"{p:.2f}"
+
+    rows = []
+    for spec, slab in SEC4_SPECS:
+        t = _two_by_two("500M", spec)
+        rows.append(
+            f"\\quad {slab} & {num(t['Gross training effect annualized'], plus=True)} ({pg(t['LW p-val (training, gross)'])}) & "
+            f"{num(t['Gross portfolio effect annualized'], plus=True)} & "
+            f"{num(t['Gross total effect annualized'], plus=True)} ({pg(t['LW p-val (total, gross)'])}) \\\\"
+        )
+    body = "\n".join(rows)
+    return rf"""\begin{{table}}[t!]
+\centering
+\footnotesize
+\begin{{tabular}}{{l rrr}}
+\toprule
+ & \multicolumn{{1}}{{r}}{{Training ($p$)}} & \multicolumn{{1}}{{r}}{{Execution}} & \multicolumn{{1}}{{r}}{{Total ($p$)}} \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Gross-of-costs effects at the \$500M deployment scale.}} The decomposition of Equation~\eqref{{eq:decomp}} computed on gross rather than net Sharpe ratios, one row per Section-4 specification, supporting the gross-side reading of Section~\ref{{subsec:twobytwo_results}}. One-sided $p$-values in parentheses are from the same seeded \citet{{ledoit2008robust}} bootstrap; because it tests the positive tail, the primary gross total's $p=0.997$ is a rejection under the mirrored negative-tail test, and no gross effect is significantly positive anywhere in the design. Gross execution carries no separate pairwise test. 299 months, 2000--2024.}}
+\label{{tab:gross_effects}}
+\end{{table}}
+"""
+
 BUILDERS["GateGrossDiagnostics.tex"] = build_gate_gross_diagnostics
+BUILDERS["GrossEffects.tex"] = build_gross_effects
 BUILDERS["ConventionalR2.tex"] = build_conventional_r2
 BUILDERS["CapacityPortfolio.tex"] = build_capacity_portfolio
 BUILDERS["CapacityTwoByTwo.tex"] = build_capacity_two_by_two
