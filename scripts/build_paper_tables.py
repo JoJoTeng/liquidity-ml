@@ -1234,7 +1234,82 @@ Universe & \multicolumn{{1}}{{c}}{{Std}} & \multicolumn{{1}}{{c}}{{Wt}} & \multi
 """
 
 
+def build_gate_gross_diagnostics():
+    """S4.3 Table tab:gate_gross: forecast-scale/gate diagnostics + gross effects."""
+    base = ROOT / "outputs/eval_realignment/analysis/xgboost/tc_rank_lam3_500m"
+    g = pd.read_csv(base / "gate_scale_diagnostics.csv")
+
+    def stat(name):
+        return g.loc[g.statistic == name, "mean"].iloc[0]
+
+    disp = stat("dispersion_ratio_wt_over_std")
+    corr = stat("alpha_rank_correlation")
+    pf_s, pf_w = stat("pass_frac_standard"), stat("pass_frac_weighted")
+    pf_m = stat("pass_frac_matched_standard")
+    v1 = g[g.part == "V1_matched"].dropna(subset=["sr_1B"]).iloc[0]
+    v2 = g[g.part == "V2_topk_gate"].dropna(subset=["k"]).set_index("k")
+    med = pd.read_csv(base / "capacity_breakeven_gate_diag.csv")
+    sig_s = med[med.row_type == "standard"]["median_abs_alpha"].mean() * 1e4
+    sig_w = med[med.row_type == "weighted"]["median_abs_alpha"].mean() * 1e4
+    hs = med[med.row_type == "standard"]["median_half_spread"].mean() * 1e4
+    # guards: the S4.3 prose quotes 49/31/45 bps, 0.70, 0.685, 44.8/28.1/24.4%
+    assert abs(sig_s - 49) < 1.5 and abs(sig_w - 31) < 1.5 and abs(hs - 45) < 1.5
+    assert abs(disp - 0.685) < 0.002 and abs(corr - 0.701) < 0.002
+    assert abs(pf_s - 0.448) < 0.002 and abs(pf_w - 0.281) < 0.002
+
+    def pg(p):
+        if p < 0.01:
+            return f"{p:.4f}"
+        if p > 0.985:
+            return f"{p:.3f}"
+        return f"{p:.2f}"
+
+    k_lo, k_hi = sorted(v2.index)
+    rows_b = []
+    for spec, slab in SEC4_SPECS:
+        t = _two_by_two("500M", spec)
+        rows_b.append(
+            f"\\quad {slab} & {num(t['Gross training effect annualized'], plus=True)} ({pg(t['LW p-val (training, gross)'])}) & "
+            f"{num(t['Gross portfolio effect annualized'], plus=True)} & "
+            f"{num(t['Gross total effect annualized'], plus=True)} ({pg(t['LW p-val (total, gross)'])}) \\\\"
+        )
+    body_b = "\n".join(rows_b)
+    return rf"""\begin{{table}}[t!]
+\centering
+\footnotesize
+\setlength{{\tabcolsep}}{{4pt}}
+\begin{{tabular}}{{l rrr}}
+\toprule
+\multicolumn{{4}}{{l}}{{\textit{{Panel A: Forecast scale and the gate (primary specification, \$500M deployment scale)}}}} \\[2pt]
+ & \multicolumn{{1}}{{c}}{{Standard}} & \multicolumn{{1}}{{c}}{{Weighted}} & \\
+\midrule
+\quad Median centred signal (bps per month) & {sig_s:.0f} & {sig_w:.0f} & \\
+\quad Median half-spread (bps per month) & \multicolumn{{2}}{{c}}{{{hs:.0f}}} & \\
+\quad Share of names clearing the gate & {pf_s*100:.1f}\% & {pf_w*100:.1f}\% & \\
+\quad Rank correlation of centred signals & \multicolumn{{2}}{{c}}{{{corr:.2f}}} & \\
+\quad Dispersion ratio (weighted/standard) & \multicolumn{{2}}{{c}}{{{disp:.3f}}} & \\[2pt]
+\multicolumn{{4}}{{l}}{{\emph{{Counterfactual gates (net annualised Sharpe ratios)}}}} \\
+ & \multicolumn{{1}}{{c}}{{SR}} & \multicolumn{{2}}{{c}}{{$\Delta$ ($p$)}} \\
+\quad Gated standard ($1B$) & {v1['sr_1B']:.3f} & & \\
+\quad Dispersion-matched standard, gated (passes {pf_m*100:.1f}\%) & {v1['sr_1B_matched']:.3f} & & \\
+\quad Weighted-gated ($2B$); $\Delta=2B$ minus matched & {v1['sr_2B']:.3f} & \multicolumn{{2}}{{c}}{{${v1['d_2B_minus_matched']:+.3f}$ ({pg(v1['p_2B_vs_matched'])})}} \\
+\quad Top-$k$ standard at $k={k_lo*100:.1f}\%$; $\Delta=$ weighted minus standard & {v2.loc[k_lo,'sr_1B_k']:.3f} & \multicolumn{{2}}{{c}}{{${v2.loc[k_lo,'d_annualised']:+.3f}$ ({pg(v2.loc[k_lo,'p_one_sided'])})}} \\
+\quad Top-$k$ standard at $k={k_hi*100:.1f}\%$ & {v2.loc[k_hi,'sr_1B_k']:.3f} & \multicolumn{{2}}{{c}}{{${v2.loc[k_hi,'d_annualised']:+.3f}$ ({pg(v2.loc[k_hi,'p_one_sided'])})}} \\
+\midrule
+\multicolumn{{4}}{{l}}{{\textit{{Panel B: Gross-of-costs effects at the \$500M deployment scale}}}} \\[2pt]
+ & \multicolumn{{1}}{{c}}{{Training ($p$)}} & \multicolumn{{1}}{{c}}{{Execution}} & \multicolumn{{1}}{{c}}{{Total ($p$)}} \\
+\midrule
+{body_b}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{Diagnostics behind the decomposition.}} Panel~A tabulates the forecast-scale and gate diagnostics of the primary specification at the \$500M deployment scale: the gate medians and pass rates (time-series means of within-month statistics), the scale statistics of the two forecast panels, and the two counterfactual gates---dispersion-matched and scale-invariant top-$k$---read against the gated cells of Table~\ref{{tab:capacity_2x2}}; the constructions are given in Appendix~\ref{{ia:capacity}}. Panel~B reports the decomposition of Equation~\eqref{{eq:decomp}} computed on gross rather than net Sharpe ratios, one row per Section-4 specification. One-sided $p$-values in parentheses are from the same seeded \citet{{ledoit2008robust}} bootstrap; because it tests the positive tail, the primary gross total's $p=0.997$ is a rejection under the mirrored negative-tail test, and no gross effect is significantly positive anywhere in the design. Gross execution carries no separate pairwise test. 299 months, 2000--2024.}}
+\label{{tab:gate_gross}}
+\end{{table}}
+"""
+
+
 BUILDERS["DeploymentWeightedR2.tex"] = build_deployment_weighted_r2
+BUILDERS["GateGrossDiagnostics.tex"] = build_gate_gross_diagnostics
 BUILDERS["ConventionalR2.tex"] = build_conventional_r2
 BUILDERS["CapacityPortfolio.tex"] = build_capacity_portfolio
 BUILDERS["CapacityTwoByTwo.tex"] = build_capacity_two_by_two
