@@ -150,8 +150,8 @@ def build_r2_by_quintile():
     # The display CSV rounds the zero-benchmark column to 3dp, which flips the
     # Q5 rounding boundary at 2dp (and would disagree with the same statistic
     # in tab:screening_splitting). Take the zero-benchmark quintile values from
-    # the full-precision comparison file; keep CS/hist/N and the full-sample
-    # row from the display table.
+    # the full-precision comparison file; keep CS/N and the full-sample
+    # row from the display table. (R2_hist column cut per AD-4, 2026-07-18.)
     rc = pd.read_csv(
         MOT / "step3_quintile/xgboost/dvol/global/baseline/r2_comparison.csv"
     )
@@ -165,20 +165,20 @@ def build_r2_by_quintile():
     # column carries a uniform number of decimals); see mnum.
     rows = "\n".join(
         f"{r['Quintile']} & {r2zero(r['Quintile'], r['R2_zero (%)'])} & "
-        f"{mnum(r['R2_CS (%)'])} & {mnum(r['R2_hist (%)'])} & {int(r['Avg N/month']):,} \\\\"
+        f"{mnum(r['R2_CS (%)'])} & {int(r['Avg N/month']):,} \\\\"
         for _, r in t3.iterrows()
     )
     rows = rows.replace("Full sample &", r"\midrule" + "\nFull sample &")
     return rf"""\begin{{table}}[t!]
 \centering
-\begin{{tabular}}{{l rrrr}}
+\begin{{tabular}}{{l rrr}}
 \toprule
-Quintile & \multicolumn{{1}}{{c}}{{$R^2_{{\mathrm{{zero}}}}$ (\%)}} & \multicolumn{{1}}{{c}}{{$R^2_{{\mathrm{{CS}}}}$ (\%)}} & \multicolumn{{1}}{{c}}{{$R^2_{{\mathrm{{hist}}}}$ (\%)}} & \multicolumn{{1}}{{c}}{{Avg.\ $N$/month}} \\
+Quintile & \multicolumn{{1}}{{c}}{{$R^2_{{\mathrm{{zero}}}}$ (\%)}} & \multicolumn{{1}}{{c}}{{$R^2_{{\mathrm{{CS}}}}$ (\%)}} & \multicolumn{{1}}{{c}}{{Avg.\ $N$/month}} \\
 \midrule
 {rows}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Out-of-sample $R^2$ by liquidity quintile.}} Pooled out-of-sample $R^2$ of the standard-loss model within NYSE-breakpoint dollar-volume quintiles ($Q1$ = least liquid), over the 2000--2024 test period. The three columns benchmark squared prediction errors against zero \citep{{gu2020empirical}}, the within-month cross-sectional mean return, and each stock's rolling historical mean over the preceding $132$ months (the model's own training lookback). $Q1$ is the only quintile with a positive $R^2_{{\mathrm{{zero}}}}$. The cross-sectional benchmark is harsher in every quintile; the $Q1$-specific fact is the change of sign from positive to negative, indicating that the positive zero-benchmark figure partly reflects return levels rather than cross-sectional ranking. The historical-mean column is largest at the liquid end because the benchmark, not the model, varies with it: forecasting each stock's own historical mean is worse than forecasting zero in every quintile, and the penalty is largest for the least volatile names, whose smaller squared returns make a non-zero historical mean proportionally more costly. The model's own sum of squared errors stays within $0.61\%$ of the zero-benchmark denominator in every quintile, so no column should be read as evidence that the model predicts liquid stocks well.}}
+\caption{{\footnotesize \textbf{{Out-of-sample $R^2$ by liquidity quintile.}} Pooled out-of-sample $R^2$ of the standard-loss model within NYSE-breakpoint dollar-volume quintiles ($Q1$ = least liquid), over the 2000--2024 test period. The two columns benchmark squared prediction errors against zero \citep{{gu2020empirical}} and the within-month cross-sectional mean return. $Q1$ is the only quintile with a positive $R^2_{{\mathrm{{zero}}}}$. The cross-sectional benchmark is harsher in every quintile; the $Q1$-specific fact is the change of sign from positive to negative, indicating that the positive zero-benchmark figure partly reflects return levels rather than cross-sectional ranking.}}
 \label{{tab:r2_by_quintile}}
 \end{{table}}
 """
@@ -524,6 +524,9 @@ Universe & {sub} \\
 """
 
 
+BUILDERS["DeploymentWeightedR2.tex"] = build_deployment_weighted_r2
+
+
 def build_capacity_portfolio():
     def metrics(tag, aum, spec="tc_rank_lam3_500m"):
         f = (ROOT / f"outputs/eval_realignment/analysis/xgboost/{spec}/"
@@ -561,7 +564,7 @@ def build_capacity_portfolio():
 {body}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}}, one block per Section-4 specification, each trained, evaluated, and costed under its own weight. Within each block the first row reports the gross Sharpe ratio, which does not depend on deployed capital; the remaining rows report net Sharpe ratios as deployed capital $A$ sweeps the capital grid, with Prop.~TC the half-spread-only scenario, in which impact is off and net returns do not depend on $A$. $\Delta$SR is weighted minus standard; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference, on the gross series for the gross row and the net series otherwise. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No primary-specification training difference is statistically significant at any capital level, the softmax-rank ($\beta{{=}}2$) difference is significant only at \$1B, and the TC-level difference is significant at every capital level and read against its base in Section~\ref{{subsec:twobytwo_results}}. The equal- and value-weight capacity benchmarks for the primary specification are tabulated with the certainty-equivalent companion in Appendix~\ref{{ia:capacity}} (Table~\ref{{tab:capacity_ce}}). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{The capacity portfolio.}} Annualised Sharpe ratios of the centred, dollar-neutral, unit-gross portfolio of Equations~\eqref{{eq:book_center}}--\eqref{{eq:book_norm}}, one block per Section-4 specification, each trained, evaluated, and costed under its own weight. Within each block the first row reports the gross Sharpe ratio, which does not depend on deployed capital; the remaining rows report net Sharpe ratios as deployed capital $A$ sweeps the capital grid, with Prop.~TC the half-spread-only scenario, in which impact is off and net returns do not depend on $A$. $\Delta$SR is weighted minus standard; one-sided $p$-values are from the \citet{{ledoit2008robust}} studentised circular-block bootstrap on the monthly Sharpe difference, on the gross series for the gross row and the net series otherwise. $\Delta$SR is computed on unrounded values, so it can differ from the printed cells in the last digit. No primary-specification training difference is statistically significant at any capital level, the softmax-rank ($\beta{{=}}2$) difference is significant only at \$1B, and the TC-level difference is significant at every capital level and read against its base in Section~\ref{{subsec:twobytwo_results}}. The equal- and value-weight capacity benchmarks and the certainty-equivalent companion for the primary specification are read in Appendix~\ref{{ia:capacity}}. 299 months, 2000--2024.}}
 \label{{tab:capacity}}
 \end{{table}}
 """
@@ -1468,7 +1471,7 @@ def build_conventional_two_by_two():
 {body_c}
 \bottomrule
 \end{{tabular}}
-\caption{{\footnotesize \textbf{{Training $\times$ execution on the conventional sorted portfolio.}} The two-by-two design of Section~\ref{{subsec:twobytwo_results}} applied to the equal-weighted quintile long--short book of Table~\ref{{tab:conv_ladder}}: training loss (standard vs.\ implementability-weighted) crossed with execution (plain monthly membership refresh vs.\ the cost-scaled membership-hysteresis band of Equation~\eqref{{eq:hysteresis}}). Panel~A reports the four cells at the primary \$500M scale: net and gross annualised Sharpe ratios, mean monthly cost drag in basis points, and monthly one-sided turnover. Panels~B and~C span the three Section-4 specifications; because the legs are equal-weighted, the standard cells ($1A$, $1B$) are identical across specifications and only the weighted rows vary. Panel~B decomposes the net gain at each level of deployed capital; one-sided $p$-values in parentheses are from the in-file \citet{{ledoit2008robust}} studentised circular-block bootstrap (training $2A$ vs.\ $1A$, execution $1B$ vs.\ $1A$, total $2B$ vs.\ $1A$); the $2B{{-}}1B$ adoption contrast is reported without a $p$-value, as the pairwise machinery of the inference supplement covers the capacity books only. Effects are computed on unrounded values, so the printed identities can differ in the last digit. Panel~C reports annualised factor alphas of the four net return series at \$500M with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
+\caption{{\footnotesize \textbf{{Training $\times$ execution on the conventional sorted portfolio.}} The two-by-two design of Section~\ref{{subsec:twobytwo_results}} applied to the equal-weighted quintile long--short book of Section~\ref{{subsec:conventional_results}}: training loss (standard vs.\ implementability-weighted) crossed with execution (plain monthly membership refresh vs.\ the cost-scaled membership-hysteresis band of Equation~\eqref{{eq:hysteresis}}). Panel~A reports the four cells at the primary \$500M scale: net and gross annualised Sharpe ratios, mean monthly cost drag in basis points, and monthly one-sided turnover. Panels~B and~C span the three Section-4 specifications; because the legs are equal-weighted, the standard cells ($1A$, $1B$) are identical across specifications and only the weighted rows vary. Panel~B decomposes the net gain at each level of deployed capital; one-sided $p$-values in parentheses are from the in-file \citet{{ledoit2008robust}} studentised circular-block bootstrap (training $2A$ vs.\ $1A$, execution $1B$ vs.\ $1A$, total $2B$ vs.\ $1A$); the $2B{{-}}1B$ adoption contrast is reported without a $p$-value, as the pairwise machinery of the inference supplement covers the capacity books only. Effects are computed on unrounded values, so the printed identities can differ in the last digit. Panel~C reports annualised factor alphas of the four net return series at \$500M with Newey--West $t$-statistics (6 lags). 299 months, 2000--2024.}}
 \label{{tab:conv_2x2}}
 \end{{table}}
 """
