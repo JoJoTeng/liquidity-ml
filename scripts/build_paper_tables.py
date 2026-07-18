@@ -1509,11 +1509,97 @@ def build_conventional_vw():
 """
 
 
+def build_two_sided_sort():
+    """Appendix I table: the two-sided cost-aware sort counterfactual.
+
+    Reads the script-22b workbooks (author-run 2026-07-18 with
+    --model xgboost --weight-spec tc_rank_lam3_500m,tc_500m,softmax_rank_lam2
+    --aum all --portfolio-weighting equal --liquidity-screen-pct 0
+    --leg-capital half, i.e. the Table-12 conventions: EW legs, full
+    universe, $A/2 per leg). 22b rebuilds the two-sided books from the
+    cached predictions; no 21e output is involved.
+    """
+    book = ROOT / ("outputs/formalanalysis/tables/xgboost/full_sample/"
+                   "table12_two_sided_halfleg_equal.xlsx")
+    d = pd.read_excel(book, sheet_name="tc_rank_lam3_500m", header=None)
+    col0 = d[0].astype(str)
+
+    ORDER = ["PropTC", "100M", "500M", "1B"]
+    blocks = {}
+    panel_rows = [i for i in range(len(d)) if col0[i] == "Panel A: Net Sharpe Ratios"]
+    assert len(panel_rows) == 4
+    for aum, i in zip(ORDER, panel_rows):
+        cells = {}
+        for r, row_cells in [(i + 1, ("1A", "1B")), (i + 2, ("2A", "2B"))]:
+            for c, name in zip((1, 2), row_cells):
+                tag, val = str(d.iloc[r, c]).split(":")
+                assert tag.strip() == name
+                cells[name] = float(val)
+        j = i + 3  # "Panel B: 2x2 Decomposition"
+        assert col0[j].startswith("Panel B")
+        cells["train"] = float(d.iloc[j + 1, 1])
+        cells["sort_std"] = float(d.iloc[j + 2, 1])   # 1B - 1A
+        cells["total"] = float(d.iloc[j + 3, 1])
+        cells["sort_wt"] = cells["total"] - cells["train"]  # 2B - 2A
+        blocks[aum] = cells
+
+    # Cross-pipeline guard: 22b's plain cells must equal the 21e two-by-two
+    # (same EW/full/half-leg conventions), and the mechanism claims must hold.
+    for aum in ORDER:
+        t = _formal_two_by_two(aum)
+        assert abs(blocks[aum]["1A"] - t["SR_net_annualized(1A)"]) < 6e-4, aum
+        assert abs(blocks[aum]["2A"] - t["SR_net_annualized(2A)"]) < 6e-4, aum
+    band500 = _formal_two_by_two("500M")["Net portfolio effect annualized"]
+    ratio = blocks["500M"]["sort_std"] / band500
+    assert 0.10 < ratio < 0.17, "prose says roughly a seventh"
+
+    legs = pd.read_excel(
+        ROOT / ("outputs/formalanalysis/tables/xgboost/full_sample/"
+                "table13_legs_two_sided_halfleg_equal.xlsx"),
+        sheet_name="tc_rank_lam3_500m", header=None)
+    hdr = [i for i in range(len(legs)) if str(legs.iloc[i, 0]) == "Cell"]
+    b500 = legs.iloc[hdr[2] + 1: hdr[2] + 19]
+    ls = b500[(b500[3] == "Long-Short")].set_index(0)
+    assert ls.loc["1B", 9] > 0.9, "prose says turnover unchanged"
+    assert ls.loc["1B", 4] < ls.loc["1A", 4], "prose says gross falls"
+    sh = b500[(b500[3] == "Short (Q1)")].set_index(0)
+    assert sh.loc["1B", 4] < 0 < sh.loc["1A", 4], "prose short-leg signs"
+
+    rows = []
+    for aum, lab in AUM_GRID:
+        b = blocks[aum]
+        band = _formal_two_by_two(aum)["Net portfolio effect annualized"]
+        rows.append(
+            f"\\quad {lab} & {num(b['1A'])} & {num(b['1B'])} & {num(b['sort_std'], plus=True)} & "
+            f"{num(b['2A'])} & {num(b['2B'])} & {num(b['sort_wt'], plus=True)} & "
+            f"{num(band, plus=True)} \\\\"
+        )
+    body = "\n".join(rows)
+    return rf"""\begin{{table}}[t!]
+\centering
+\footnotesize
+\setlength{{\tabcolsep}}{{4pt}}
+\begin{{tabular}}{{l rrr rrr r}}
+\toprule
+ & \multicolumn{{3}}{{c}}{{Standard training}} & \multicolumn{{3}}{{c}}{{Weighted training (primary)}} & \multicolumn{{1}}{{c}}{{Band}} \\
+\cmidrule(lr){{2-4}} \cmidrule(lr){{5-7}} \cmidrule(lr){{8-8}}
+ & \multicolumn{{1}}{{c}}{{Plain}} & \multicolumn{{1}}{{c}}{{Two-sided}} & \multicolumn{{1}}{{c}}{{$\Delta$}} & \multicolumn{{1}}{{c}}{{Plain}} & \multicolumn{{1}}{{c}}{{Two-sided}} & \multicolumn{{1}}{{c}}{{$\Delta$}} & \multicolumn{{1}}{{c}}{{$\Delta$}} \\
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}
+\caption{{\footnotesize \textbf{{The two-sided cost-aware sort.}} Net annualised Sharpe ratios of the equal-weighted quintile long--short portfolio of Table~\ref{{tab:conv_2x2}} when the monthly sort itself is made cost-aware: buy candidates ranked by $\hat r_{{i,t}}-\tfrac12\mathrm{{Spread}}_{{i,t}}$ and sell candidates by $\hat r_{{i,t}}+\tfrac12\mathrm{{Spread}}_{{i,t}}$---the same half-spread that triggers the gate of Equation~\eqref{{eq:gate}}, charged to the signal rather than the trade---with membership still refreshed every month. Plain repeats the $A$-column cells of Table~\ref{{tab:conv_2x2}}; $\Delta$ is two-sided minus plain; the final column repeats the hysteresis execution effect of Table~\ref{{tab:conv_2x2}} for comparison. The standard cells do not vary across specifications; the weighted cells are the primary specification, and at the \$500M deployment scale the two-sided gain under the comparison tilts is $+0.06$ (TC level) and $+0.12$ (softmax rank). All entries are point estimates: the two-sided series are outside the seeded inference supplement of Appendix~\ref{{app:bootstrap}}. 299 months, 2000--2024.}}
+\label{{tab:two_sided}}
+\end{{table}}
+"""
+
+
 BUILDERS["GateGrossDiagnostics.tex"] = build_gate_gross_diagnostics
 BUILDERS["GrossEffects.tex"] = build_gross_effects
 BUILDERS["ConventionalLadder.tex"] = build_conventional_ladder
 BUILDERS["ConventionalTwoByTwo.tex"] = build_conventional_two_by_two
 BUILDERS["ConventionalVW.tex"] = build_conventional_vw
+BUILDERS["TwoSidedSort.tex"] = build_two_sided_sort
 BUILDERS["ConventionalR2.tex"] = build_conventional_r2
 BUILDERS["CapacityPortfolio.tex"] = build_capacity_portfolio
 BUILDERS["CapacityTwoByTwo.tex"] = build_capacity_two_by_two
