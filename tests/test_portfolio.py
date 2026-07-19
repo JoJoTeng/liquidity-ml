@@ -809,3 +809,54 @@ def test_apply_quantile_hysteresis_sticky():
         mp, "_quantile_score", "_q", prev, pd.Series(0.0, index=mp.index), 5
     )
     assert int(out_zero.loc[7]) == 4  # band vanishes -> fresh Q4
+
+
+class TestHysteresisLegDisjointness:
+    """Regression test for the 2026-07-19 fix: a former long that lands in the
+    fresh bottom quantile must not be retained on the long leg (fresh-membership
+    precedence); legs must be disjoint every month."""
+
+    def test_former_long_in_fresh_short_leg_is_not_retained_long(self):
+        from src.portfolio.construction import _apply_hysteresis_bands
+
+        # Ten names; permno 1 was long last month but now has the WORST signal
+        # (lands in the fresh short leg) and a huge half-spread, so the old
+        # buggy band would have retained it long while it sat in short_df.
+        work = pd.DataFrame(
+            {
+                "permno": np.arange(1, 11),
+                "signal": [-0.90, 0.50, 0.60, 0.70, 0.80, -0.10, -0.20, 0.05, 0.10, 0.15],
+            },
+            index=pd.RangeIndex(10),
+        )
+        long_df = work[work["signal"] >= 0.50]     # fresh top: permnos 2-5
+        short_df = work[work["signal"] <= -0.10]   # fresh bottom: permnos 1,6,7
+        hs = pd.Series(5.0, index=work.index)      # band wide enough to span everything
+        new_long, new_short = _apply_hysteresis_bands(
+            work, long_df, short_df, "signal",
+            prev_long={1}, prev_short=set(), tc_half_spread=hs,
+        )
+        assert 1 not in set(new_long["permno"])
+        assert 1 in set(new_short["permno"])
+        assert not set(new_long["permno"]) & set(new_short["permno"])
+
+    def test_former_short_in_fresh_long_leg_is_not_retained_short(self):
+        from src.portfolio.construction import _apply_hysteresis_bands
+
+        work = pd.DataFrame(
+            {
+                "permno": np.arange(1, 11),
+                "signal": [0.90, 0.50, 0.60, 0.70, 0.80, -0.10, -0.20, 0.05, 0.10, 0.15],
+            },
+            index=pd.RangeIndex(10),
+        )
+        long_df = work[work["signal"] >= 0.50]     # fresh top includes permno 1
+        short_df = work[work["signal"] <= -0.10]
+        hs = pd.Series(5.0, index=work.index)
+        new_long, new_short = _apply_hysteresis_bands(
+            work, long_df, short_df, "signal",
+            prev_long=set(), prev_short={1}, tc_half_spread=hs,
+        )
+        assert 1 in set(new_long["permno"])
+        assert 1 not in set(new_short["permno"])
+        assert not set(new_long["permno"]) & set(new_short["permno"])

@@ -205,6 +205,13 @@ def _apply_hysteresis_bands(
     parameter-free and vanishes as half-spreads -> 0 (it then coincides with the
     plain book). Held names absent from ``work`` (left the universe/screen) are
     not retained, i.e. force-sold.
+
+    Conflict rule (fresh-membership precedence, symmetric in both directions):
+    a name selected for the fresh opposite leg is never retained on its old
+    leg -- the membership swap executes. Legs are disjoint by construction and
+    asserted below (fix 2026-07-19: previously the long-retention filter did
+    not exclude fresh-short members, so a former long landing in the bottom
+    quantile was held on both legs).
     """
     if tc_half_spread is not None:
         hs = tc_half_spread.reindex(work.index).abs()
@@ -217,7 +224,11 @@ def _apply_hysteresis_bands(
     if len(long_df):
         b_hi = float(long_df[signal_col].min())
         cm_hi = float(hs.reindex(long_df.index).median())
-        held = work[permno.isin(prev_long) & ~work.index.isin(long_df.index)]
+        held = work[
+            permno.isin(prev_long)
+            & ~work.index.isin(long_df.index)
+            & ~work.index.isin(short_df.index)  # never hold a name on both legs
+        ]
         if len(held):
             thr = b_hi - (hs.reindex(held.index) + cm_hi)
             keep = held[sig.reindex(held.index) >= thr]
@@ -236,6 +247,10 @@ def _apply_hysteresis_bands(
             keep = held[sig.reindex(held.index) <= thr]
             short_df = pd.concat([short_df, keep])
 
+    overlap = set(long_df["permno"]) & set(short_df["permno"])
+    assert not overlap, (
+        f"hysteresis produced {len(overlap)} names held on both legs"
+    )
     return long_df, short_df
 
 
