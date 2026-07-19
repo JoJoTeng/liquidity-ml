@@ -103,7 +103,7 @@ For the primary 1A book, the cached monthly gross/cost/net values are 176.085 / 
 - net return: **-23.607 bps/month**;
 - one-way turnover: **0.4810**.
 
-The same one-half correction applies to all conventional long--short mean-return, cost, turnover, certainty-equivalent, and alpha **levels**, including the banded rows. It does not apply to the standalone full-$A$ quantile portfolios. A common one-half rescaling leaves Sharpe ratios, Sharpe differences, bootstrap p-values, signs, and alpha t-statistics unchanged. Thus the quoted “SR 1.66 to -0.51” anatomy survives, while “223 against 176,” the cost/turnover ladder, and Panel C alpha magnitudes do not.
+The same one-half correction applies to all conventional long--short mean-return, cost, turnover, and alpha **levels**, including the banded rows. Certainty equivalents must be recomputed from the rescaled series because their variance term scales quadratically. The correction does not apply to the standalone full-$A$ quantile portfolios. A common one-half rescaling leaves Sharpe ratios, Sharpe differences, bootstrap p-values, signs, and alpha t-statistics unchanged. Thus the quoted “SR 1.66 to -0.51” anatomy survives, while “223 against 176,” the cost/turnover ladder, Panel C alpha magnitudes, and certainty-equivalent levels do not.
 
 #### [SHOULD-FIX] N2. “Significant at every capital level” is needlessly ambiguous
 

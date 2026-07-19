@@ -25,7 +25,7 @@ For each spec it writes, under outputs/eval_realignment/analysis/{model}/{weight
   * longonly_hysteresis_diag.csv       -- per-month hysteresis diagnostics (AUM-free)
   * longonly_net_cumret_{aum}.png      -- unless --no-figures
 and per model: outputs/eval_realignment/tables/{model}/longonly_two_by_two_tables.xlsx
-(Panel C = hysteresis diagnostics).
+(Panel C hysteresis diagnostics available; disabled by default via include_panel_c=False).
 
 Predictions are READ from outputs/formalanalysis/experiment/...; scripts 42-44 and
 capacity_portfolio.py are reused read-only and not modified.

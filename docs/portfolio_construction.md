@@ -8,7 +8,7 @@ the prior month; reported performance is net of transaction costs computed
 from realized turnover. Relative to a textbook quantile sort, the current
 construction adds three design axes. First, the *stock universe* on which
 quantiles are formed is itself a treatment: the full cross-section, the
-NYSE subsample, or the top 40% of the dollar-volume distribution under a
+NYSE subsample, or the top 60% of the dollar-volume distribution under a
 config-driven screen. Second, *within-leg weights* are a treatment: equal,
 value, dollar-volume, or — the default — the spec's own deployment weight
 $\tilde w_{i,t}$, so that the book holds names in the same proportion the
@@ -86,7 +86,7 @@ $$
 \mathrm{pctrank}_t\!\bigl(\mathrm{DolVol}^{21d}_{i,t}\bigr) \;\ge\; 0.60,
 $$
 
-i.e., the book trades only the **top 40%** of the month's dollar-volume
+i.e., the portfolio trades only the **top 60%** of the month's dollar-volume
 distribution (screen column `portfolio.dolvol_col = liq_dvol_21d`). The
 screen is enforced identically in the long–short book and in the standalone
 prediction-quantile books. A held name that falls out of the screen is
@@ -94,7 +94,7 @@ force-sold — the hysteresis bands of Section 4.3 never resurrect a name the
 screen has removed. The same config knob drives the long-only capacity book
 of the eval-realignment track
 (`scripts/eval_realignment/45_longonly_capacity_q5.py`), which also derives
-its top-quantile selection from `n_quantiles`, so the formal top-40%
+its top-quantile selection from `n_quantiles`, so the formal top-60%
 universe and the eval-realignment top-quantile screen are aligned by
 construction.
 
@@ -665,7 +665,7 @@ outputs/formalanalysis/analysis/{model}/{weight_spec}/
 
 The earlier `prediction_quantile_dolvol_weight_liq60` namespace is
 superseded for 21e outputs: the liquidity screen moved onto the universe
-axis, and the current screen keeps the top 40%
+axis, and the current screen keeps the top 60% (liquidity_screen_pct: 0.40 = keep dvol percentile >= 0.40)
 (`liquidity_screen_pct: 0.60`), superseding the top-60% screen of the
 earlier iteration. Script `22` still defaults to the liq60 run name (see
 below).

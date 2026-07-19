@@ -205,7 +205,7 @@ full-sample outputs.
 It also writes `prediction_quantile_timeseries_{AUM}.csv/xlsx`. The 2x3
 long-short cells are derived from Q5 minus Q1 after first computing standalone
 Q1-Q5 prediction-quantile portfolios. Each prediction quantile uses
-`AUM / portfolio.n_quantiles` for transaction-cost sizing.
+the full scenario AUM for transaction-cost sizing (each standalone quantile row is its own full-AUM portfolio; the long--short row uses AUM/2 per leg).
 
 Formatted Excel report tables from `22_prepare_portfolio_excel_tables.py` and
 `22b_table12_two_sided.py` write to model- and stock-universe-specific
