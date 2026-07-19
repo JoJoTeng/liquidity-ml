@@ -126,6 +126,21 @@ run, never spliced with the old:
 
 ### Tier 0 — must fix (correctness / rerun safety)
 
+Tuning identification (Codex audit IC1, adversarially verified 2026-07-19):
+- Persist ONE realized 150-candidate manifest (seed 42, the 1,944-combination
+  grid) and give exactly that menu to BOTH training arms; refit the standard
+  XGBoost benchmark under it (weighted arms already share this menu and need
+  no refit in v1 terms; under shrcd 10/11 everything refits anyway, so the
+  requirement is simply: both arms consume the same persisted manifest).
+  Verified v1 facts: realized menus overlap 3/150; 0/25 winners cross-arm;
+  8/25 standard winners outside the 1,944 support. The v1 asymmetry is an
+  INTENDED design choice (author 2026-07-19) — benchmark given at least the
+  weighted arms' search freedom — but v2 must deliver the common-menu
+  comparison so "weighting is the only treatment" is literally identified.
+- Cache provenance manifest per fitted dir (data hash, feature-list hash,
+  candidate-manifest hash, code rev); consumers fail closed on mismatch
+  (Codex M10).
+
 Data construction:
 - Calendar-aware target join + month-t universe enforcement + shrcd filter
   (Section 1, items 1–3) with the gap assertion.
