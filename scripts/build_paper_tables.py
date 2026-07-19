@@ -1412,7 +1412,7 @@ def build_conventional_two_by_two():
 
     # Prose-tied invariants for S4.4.
     assert t5["LW p-val (portfolio, net)"] <= 0.0002 + 1e-9
-    assert abs(t5["Net portfolio effect annualized"] - 0.867) < 5e-3
+    assert abs(t5["Net portfolio effect annualized"] - 0.938) < 5e-3  # post-M1-fix 2026-07-19
     assert abs(t5["Net training effect annualized"] + 0.086) < 5e-3
     assert t5["Gross training effect annualized"] < 0 and t5["Gross total effect annualized"] < 0
 
@@ -1561,7 +1561,7 @@ def build_two_sided_sort():
         assert abs(blocks[aum]["2A"] - t["SR_net_annualized(2A)"]) < 6e-4, aum
     band500 = _formal_two_by_two("500M")["Net portfolio effect annualized"]
     ratio = blocks["500M"]["sort_std"] / band500
-    assert 0.10 < ratio < 0.17, "prose says roughly a seventh"
+    assert 0.10 < ratio < 0.17, "prose says roughly an eighth"
 
     legs = pd.read_excel(
         ROOT / ("outputs/formalanalysis/tables/xgboost/full_sample/"
