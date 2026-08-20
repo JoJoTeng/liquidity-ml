@@ -8,9 +8,13 @@ three branches:
 
 - Motivation analyses in scripts `02` through `07`.
 - Formal model training and analysis in scripts `20` and `21`.
-- Evaluation realignment in `scripts/eval_realignment/41`–`46`, which
+- Evaluation realignment in `scripts/eval_realignment/41`–`47`, which
   re-evaluates the formal predictions against the deployment-weighted training
   objective (see `docs/eval_realignment_pipeline.md`).
+
+The results layout is documented in `outputs/README.md`. Superseded or
+out-of-scope results are preserved under `Junk/` (gitignored) with mirrored
+paths; see `Junk/README.md` for the manifest.
 
 The main training data is `data/processed_panel.parquet`, produced by running
 `scripts/00_fetch_data.py` and `scripts/01_process_data.py`.
@@ -26,7 +30,6 @@ python scripts/03_motivation_step2_heterogeneity.py --liquidity dvol --full
 
 python scripts/04_motivation_step3_ml_diagnostics.py --model xgboost --liquidity dvol
 python scripts/04_motivation_step3_ml_diagnostics.py --model elastic_net --liquidity dvol
-python scripts/04_motivation_step3_ml_diagnostics.py --model neural_network --liquidity dvol
 
 python scripts/05_motivation_step3d_progressive_restriction.py --model xgboost --liquidity dvol --normalization global --use-baseline-params
 python scripts/06_motivation_step3e_quintile_specific_models.py --model xgboost --liquidity dvol --normalization global --use-baseline-params
@@ -37,8 +40,13 @@ python scripts/21a_formal_liquid_r2.py
 python scripts/21b_formal_importance_reallocation.py
 python scripts/21c_formal_restriction_curve.py
 python scripts/21d_formal_error_differential.py
-python scripts/21e_formal_portfolio_decomposition.py
+python scripts/21e_formal_portfolio_decomposition.py --portfolio-weighting all --universe all
 ```
+
+Script `21e` must run with `--portfolio-weighting all` (equal, value, and
+signal legs): the default (`signal` only) silently omits the equal- and
+value-weighted runs that script `46` Part C2 and the paper's dose-response
+table require.
 
 The eval_realignment track reads the formal prediction cache (no retraining)
 and writes under `outputs/eval_realignment/`. Run it after `20` has produced
@@ -51,11 +59,14 @@ python scripts/eval_realignment/42_signal_weighted_capacity_portfolio.py --model
 python scripts/eval_realignment/43_breakeven_capacity_portfolio.py --model xgboost --weight-spec dolvol
 python scripts/eval_realignment/44_capacity_two_by_two_tables.py --model xgboost --weight-spec dolvol
 python scripts/eval_realignment/45_longonly_capacity_q5.py --model xgboost --weight-spec dolvol
+python scripts/eval_realignment/47_gate_scale_diagnostics.py --model xgboost --weight-spec tc_rank_lam3_500m
 python scripts/eval_realignment/46_inference_supplement.py --model xgboost --weight-spec tc_rank_lam3_500m
 ```
 
-Script `46` computes the seeded bootstrap inference supplement from the cached
-monthly cell series of `42`--`45`; run it after them.
+Script `47` computes the gate-scale and forecast-scale diagnostics from the
+prediction cache. Script `46` computes the seeded bootstrap inference
+supplement from the cached monthly cell series of `42`--`45` and the `21e`
+two-by-two workbooks (Part C2); run it last.
 
 Omit `--weight-spec` to cover every fitted spec of a model; `--aum all` is the
 default grid. Full conventions, equations, and output layout are in
@@ -73,11 +84,11 @@ data files were uploaded to the cluster.
 
 ## Active Models
 
-The active model registry is:
-
-- `elastic_net`
-- `xgboost`
-- `neural_network`
+The code registry contains `elastic_net`, `xgboost`, and `neural_network`.
+The analysis and reporting scope is `elastic_net` and `xgboost` only
+(decision of 2026-06-18): `neural_network` remains available in code but is
+excluded from all analysis outputs, tables, and the paper. Its old result
+trees live under `Junk/`.
 
 Create models through:
 
@@ -155,6 +166,10 @@ Each fitted directory stores:
 The standard model cache is shared across all weight families for the same
 model. `scripts/04_motivation_step3_ml_diagnostics.py` can pre-populate this
 standard cache.
+
+`outputs/formalanalysis/experiment/xgboost/tc_target/` additionally holds the
+TC-adjusted-target training track: `scripts/22b_table12_two_sided.py` requires
+it to rebuild the two-sided-sort workbooks and skips a model without it.
 
 ## Current Normalization Contract
 
