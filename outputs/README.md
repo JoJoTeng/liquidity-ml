@@ -60,9 +60,11 @@ step3/xgboost numbers digit-for-digit.
 **Known caveats (as of 2026-08-20):**
 
 - `45` long-only outputs for every spec except `xgboost/tc_rank_lam3_500m`
-  are 2026-06-18 vintage — before the top-60% screen rework (R1a, 07-06/07).
-  The paper's LongOnlyTwoByTwo therefore mixes generations for `tc_500m` and
-  `softmax_rank_lam2`. Rerun 45 for those specs before submission.
+  are 2026-06-18 vintage; the hero was rerun 2026-07-07 after commit 6d7a29e
+  (R1a) gave script 45 its own `longonly_screen_pct` (top 60%). R1a was a
+  config-drift fix, not a method change — the rerun reproduced the hero
+  outputs byte-identically — so the 06-18 files are methodologically
+  identical to a fresh run. No rerun needed.
 - `tables/xgboost/longonly_two_by_two_tables.xlsx` was clobbered on 07-07 by a
   single-spec rerun (the all-spec version is in `Junk/`); rerun 45 without
   `--weight-spec` to rebuild it.
